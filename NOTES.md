@@ -123,6 +123,22 @@ Needs Postgres 11 or newer: `pg_constraint.conparentid` and `relispartition`.
 4. **The GIF left the tarball.** The README links to it on GitHub; 171 kB per
    install for a picture nobody sees locally was waste.
 
+## 0.1.5: token usage and the benchmark
+
+- `model.usage()` sums input and output tokens over every call, including
+  retries, and the summary prints them. It exists because "what does a run
+  cost" was a question nobody could answer from the outside.
+- `scripts/benchmark.ts` drives the tool's own extract, verify and verdict
+  with claims synthesized from the schema, every declared foreign key, every
+  table and every categorical text column, so the structural numbers need no
+  model and cost nothing. One model run per schema is added for time, tokens
+  and cost. `docs/benchmark.md` is its output over eight public schemas.
+- What the benchmark taught: curated sample databases are clean, which is a
+  sanity check rather than a finding; application schemas obtained from
+  migrations carry no rows, so the tool can count their tables, keys and
+  keyless tables but cannot measure a single join on them. The tool's claim
+  is only testable on a populated database, and none of the eight is one.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `isTextType` in `extract.ts` names the Postgres type families whose values

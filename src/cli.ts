@@ -96,6 +96,8 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
     }
     if (opts.json) opts.out(JSON.stringify(verified, null, 2));
     for (const line of summary(verified, Object.keys(files).length, db.budget().spentMs, modelMs)) opts.err(line);
+    const used = ai.usage();
+    if (used.inputTokens > 0) opts.err(`tokens: ${used.inputTokens} in, ${used.outputTokens} out, ${used.calls} calls`);
     return exitCode(verified);
   } finally {
     await db.close();

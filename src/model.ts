@@ -18,16 +18,24 @@ import type { Effort } from "./config.js";
 
 export const DEFAULT_MODEL = "claude-sonnet-5";
 
-/** Sends one request and returns the text of the reply. */
-export type Transport = (system: string, messages: Anthropic.MessageParam[], effort?: Effort) => Promise<string>;
+/** Sends one request and returns the text of the reply, with the token usage when the API reported it. */
+export type Transport = (
+  system: string,
+  messages: Anthropic.MessageParam[],
+  effort?: Effort,
+) => Promise<string | { text: string; inputTokens: number; outputTokens: number }>;
 
 export type AskOptions = {
   /** Reasoning effort for this call; defaults to the effort the model was created with. */
   effort?: Effort;
 };
 
+export type Usage = { calls: number; inputTokens: number; outputTokens: number };
+
 export type Model = {
   ask<T>(promptName: string, input: unknown, schema: z.ZodType<T>, options?: AskOptions): Promise<T>;
+  /** Tokens sent and received so far, summed over every call including retries. Zero with an injected transport. */
+  usage(): Usage;
   /**
    * Proves the API is reachable with the configured credentials and model before any data is
    * read. Sends only the model id. Throws a plain-language error naming what to fix.
@@ -51,8 +59,21 @@ export function createModel(opts: ModelOptions): Model {
   const modelId = opts.model ?? DEFAULT_MODEL;
   const client = opts.transport ? undefined : new Anthropic(opts.apiKey ? { apiKey: opts.apiKey } : {});
   const transport = opts.transport ?? sdkTransport(client!, modelId, opts.maxOutputTokens);
+  const usage: Usage = { calls: 0, inputTokens: 0, outputTokens: 0 };
+
+  /** One request through the transport, with usage accounted for. */
+  async function send(system: string, messages: Anthropic.MessageParam[], effort: Effort | undefined): Promise<string> {
+    const reply = await transport(system, messages, effort);
+    usage.calls += 1;
+    if (typeof reply === "string") return reply;
+    usage.inputTokens += reply.inputTokens;
+    usage.outputTokens += reply.outputTokens;
+    return reply.text;
+  }
 
   return {
+    usage: () => ({ ...usage }),
+
     async preflight() {
       if (!client) return;
       try {
@@ -67,7 +88,7 @@ export function createModel(opts: ModelOptions): Model {
       const system = readPrompt(promptName);
       const messages: Anthropic.MessageParam[] = [{ role: "user", content: JSON.stringify(input) }];
 
-      const first = await transport(system, messages, effort);
+      const first = await send(system, messages, effort);
       const firstTry = validate(first, schema);
       if (firstTry.ok) return firstTry.value;
 
@@ -80,7 +101,7 @@ export function createModel(opts: ModelOptions): Model {
             "Respond again with JSON only, matching the schema in the instructions.",
         },
       );
-      const second = await transport(system, messages, effort);
+      const second = await send(system, messages, effort);
       const secondTry = validate(second, schema);
       if (secondTry.ok) return secondTry.value;
 
@@ -145,9 +166,10 @@ function sdkTransport(client: Anthropic, model: string, maxOutputTokens: number)
     if (message.stop_reason === "max_tokens") {
       throw new Error(`the model's reply was cut off at ${maxOutputTokens} output tokens; raise DBTRUTH_MODEL_MAX_OUTPUT_TOKENS`);
     }
-    return message.content
+    const text = message.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
       .map((block) => block.text)
       .join("");
+    return { text, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens };
   };
 }
