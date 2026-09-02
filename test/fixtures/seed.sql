@@ -148,3 +148,10 @@ ANALYZE;
 CREATE MATERIALIZED VIEW order_totals AS
   SELECT customer_id, count(*) AS orders, sum(total_cents) AS total_cents FROM orders GROUP BY customer_id
   WITH NO DATA;
+
+-- 10. A careful user's role: SELECT only, no CREATE on the schema (the Postgres 15+ default
+--     for non-owners). A CREATE TABLE attempt from it fails with 42501, not 25006, and the
+--     session is read-only all the same.
+CREATE ROLE reader LOGIN PASSWORD 'reader';
+GRANT USAGE ON SCHEMA public TO reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO reader;

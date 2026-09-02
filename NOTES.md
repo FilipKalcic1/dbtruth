@@ -27,9 +27,16 @@ a competing recommendation. Each entry says what, why, and what was not done.
 
 ## Mechanisms, stated plainly
 
-- **Read-only proof** is a `CREATE TABLE` inside a transaction that is always
-  rolled back. It is the one write-shaped statement the tool ever sends, it is
-  expected to fail with SQLSTATE 25006, and it never persists either way.
+- **Read-only proof** is two checks inside one transaction that is always
+  rolled back. First the server states `current_setting('transaction_read_only')`,
+  which is the proof: Postgres enforces that mode on every write. Then a
+  `CREATE TABLE` is attempted as an empirical confirmation; any refusal is
+  fine, since a role without CREATE privilege refuses it with 42501 and is
+  read-only all the same. Only an accepted write disproves anything. That
+  attempt is the one write-shaped statement this tool ever sends, in tension
+  with "never write". It is accepted deliberately: the spec asks for it, the
+  transaction is rolled back whether it succeeds or fails, and it exists to
+  catch the case where the read-only setting silently did not take.
 - **Statistics never leave the database.** Null rate and distinct count are
   computed by one aggregate query per table over the bounded sample. Node
   only ever holds the shown rows, and hidden cells are replaced before they
@@ -91,6 +98,31 @@ samples sent to the model for nothing.
 
 Needs Postgres 11 or newer: `pg_constraint.conparentid` and `relispartition`.
 
+## 0.1.4: from the first code review
+
+1. **False alarm for careful users.** The read-only proof counted only
+   SQLSTATE 25006. A role without CREATE privilege on the schema, the
+   Postgres 15+ default for non-owners, gets 42501 instead, so the most
+   careful users got a loud warning that the session was not proven
+   read-only. Now the server's own `transaction_read_only` is the proof and
+   any refusal of the write attempt is acceptable. The fixture has a `reader`
+   role for exactly this, and a test that expects no warning.
+2. **Non-text columns were always visible.** `visible = !isText || categorical`
+   meant a national id stored as `bigint`, a phone number as `numeric`, a
+   birth date, a salary, a coordinate were all sent to the model. Visibility
+   is now one rule for every type: categorical, or a declared key (primary or
+   foreign key column, an identifier by declaration), or revealed. Hidden
+   date and timestamp columns keep a year range so staleness can still be
+   suspected. The cost: the model can no longer quote orphan values such as
+   `9001, 9002` in its reports; the measurement does not care.
+3. **First impression.** A small schema ran at effort `high` for a minute and
+   a half. Effort now follows schema size through bands in config, small
+   schemas start at `low`, and each step prints one progress line with its
+   time, so a person can see it working. `DBTRUTH_MODEL_EFFORT` still pins a
+   level.
+4. **The GIF left the tarball.** The README links to it on GitHub; 171 kB per
+   install for a picture nobody sees locally was waste.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `isTextType` in `extract.ts` names the Postgres type families whose values
@@ -117,11 +149,6 @@ Needs Postgres 11 or newer: `pg_constraint.conparentid` and `relispartition`.
   inferred, and every run since has behaved. The measurement itself still
   cannot express "only where entity = x"; that would be a conditional join
   claim, allowed fix 3, and was not added because the prompt fix held.
-- A high-cardinality **numeric** column is visible, per the spec's rule
-  (non-text is shown). A phone number stored as `bigint` would be shown. The
-  mechanism-consistent tightening would be a config value that hides any
-  column above `categoricalMaxDistinct`; it was not added because it was not
-  requested.
 - `WITH` is accepted by the statement guard because verify uses CTEs. A
   data-modifying CTE would be refused by the read-only session anyway.
 - Structured outputs (`output_config.format`) could replace JSON extraction
@@ -142,11 +169,13 @@ Needs Postgres 11 or newer: `pg_constraint.conparentid` and `relispartition`.
   effort (`high`) live runs took 101 s, 68 s and 86 s; `medium` took 79 s;
   `low` took 40 s with identical findings on the fixture. The database took
   0.1 s every time; the rest is two calls to `claude-sonnet-5`.
-- The default stays `high`, against the 60 s target. Reason: the fixture is
-  small and easy, and effort only changes what the model proposes and how it
-  writes, which is exactly the part that gets harder on a real database.
-  Correctness ranks above speed in the rules. `DBTRUTH_MODEL_EFFORT=low` is
-  the documented way to meet the target.
+- 0.1.4 replaced the fixed default with effort by schema size. Measured at
+  the defaults afterwards: fixture 51 s and 47 s (effort low, 1,125 schema
+  tokens), so the 60 s target is met; Pagila 81 s at low (3,842 tokens) with
+  the same findings as the earlier runs at high (162 to 241 s), including all
+  21 declared foreign keys confirmed and the partition, activebool and
+  original_language_id observations. The bands stay at 4,000 and 12,000
+  tokens until a database shows that low is too shallow for its size.
 
 ## README
 

@@ -29,12 +29,15 @@ timeout into a skipped measurement rather than a crash. Nothing else in the
 code can reach the database.
 
 **Value visibility, the mechanism that replaces PII lists.** A column's values
-are shown to the model only if it is categorical: a non-text type, or text
-with at most 50 distinct values, none longer than 30 characters, measured on
-a sample. Everything else is sent as `"[hidden]"`, keeping only the column's
-name, type, null rate, distinct count and longest value. Names, emails,
-addresses, tokens and free text are all high-cardinality and fall out of the
-gate automatically; a constant secret such as a shared password hash is
+are shown to the model only if it is categorical, whatever its type: at most
+50 distinct values, none longer than 30 characters, measured on a sample. The
+one exception is a declared key, a primary key or foreign key column, which
+is an identifier by declaration. Everything else is sent as `"[hidden]"`,
+keeping only the column's name, type, null rate, distinct count, longest
+value, and for dates the years of its oldest and newest value. Names, emails,
+addresses, tokens, free text, and also national ids stored as numbers, phone
+numbers, birth dates and salaries, are all high-cardinality and fall out of
+the gate automatically; a constant secret such as a shared password hash is
 low-cardinality but long, and stays hidden too. There is no column-name
 matching anywhere in the code, so it does not depend on anyone having guessed
 your naming convention.
@@ -44,8 +47,9 @@ Escape hatches, explicit: `--reveal table.column` shows one column;
 verify does not).
 
 **Disclosure.** Before the first API call the CLI prints one line stating what
-is being sent: the number of tables, rows per table, that high-cardinality
-text is hidden, and the two flags above. No telemetry, no other network.
+is being sent: the model and effort, the number of relations, rows per table,
+that high-cardinality columns are hidden, and the two flags above. No
+telemetry, no other network.
 
 ## How it works
 
@@ -84,9 +88,12 @@ an empty `cars` beside a populated `vehicles`, a `status` column with `shipped`
 and `SHIPPED`, `audit_log` with no primary key, fake personal data and a
 constant secret in `customers`, `products_legacy` duplicating `products`, a
 view, a partitioned table and a materialized view that was never refreshed.
-The run exited 2 and printed this summary before writing thirteen files:
+The run took 51 seconds, exited 2 and printed this before writing thirteen files:
 
 ```
+contextualize: 11 tables described, 13 claims to test, 20.3s
+verify: 13 measurements, 0.1s
+write: 13 files, 28.8s
 dbtruth: fixture
 relations: 9 tables, 1 view, 1 materialized view, 1 partitioned (fits in an agent's context)
 relationships: 3 confirmed, 1 broken, 0 rejected, 1 unverifiable
@@ -94,40 +101,43 @@ relationships: 3 confirmed, 1 broken, 0 rejected, 1 unverifiable
 suspicions: 5 confirmed, 0 rejected, 3 unverifiable
 entities: 4, questions for a human: 5
 files written: 13 under ./context/
-database time: 0.1s, model time: 97.7s (contextualize 45.6s, write 52.1s)
+database time: 0.1s, model time: 49.1s (contextualize 20.3s, write 28.8s)
 ```
 
 ```markdown
-# Fixture database — agent reference
+# Database Reference (fixture)
 
-Small operational schema: customers, vehicles, orders/order_items, products, plus a polymorphic audit_log, an events log, and two views (shipped_orders, order_totals). Several tables are dead or duplicated — check below before joining.
+Fleet/orders database: customers place orders (with line items against a product catalog) and own vehicles. An audit_log tracks actions polymorphically.
 
-## Broken relationships — fix your joins
+## Broken relationship — fix required
 
-**`orders.customer_id` → `customers.id` is broken.** Hit rate 88% (440/500 sampled). 60 orders have `customer_id` values with no matching customer (some, e.g. 9001, 9002, 9025, 9026, are far outside the 1–250 range seen in `customers.id`). Use `LEFT JOIN customers` and expect/filter NULLs — do not `INNER JOIN` and assume all orders resolve to a customer. (Whether these are bad test data or missing customers is an open question.)
+**orders.customer_id → customers.id is broken: 88% hit rate (440/500), 60 orphans.**
+Do not inner-join orders to customers without guarding. Use `LEFT JOIN` and expect nulls, or filter orphans explicitly. This is not a declared FK — treat with suspicion.
 
-## Confirmed suspicions
+## Confirmed suspicious findings
 
-- **`cars` is dead.** 0 rows. `vehicles` table comment states it replaced `cars`. Do not query `cars` for current fleet data.
-- **`order_totals` is dead.** Materialized view, never refreshed (`populated: false`). Currently returns no rows despite a valid definition over `orders`. Do not rely on it for customer spend totals until refreshed.
-- **`products` and `products_legacy` are duplicates.** Same columns (id, sku, name, category, price_cents). 70 of 80 `products` rows match a `products_legacy` row exactly on all shared columns (87.5%). `products_legacy` looks like a superseded predecessor — prefer `products` for current catalog joins.
-- **`orders.status` has inconsistent casing.** 5 distinct values collapse to 3 canonical forms (`pending`/`Pending`, `shipped`/`SHIPPED`, `cancelled`). Always normalize with `lower(btrim(status))`, or use the `shipped_orders` view which already does this for shipped orders.
-- **`audit_log` has no primary key.** Treat it as append-only; don't assume row uniqueness.
+- **cars is a dead table**: rowEstimate 0, superseded by `vehicles` (per table comment). Do not query it for current data.
+- **order_totals (materialized view) is dead**: never refreshed (`populated:false`). Treat as unreadable/stale; do not rely on it — compute totals from `orders`/`order_items` directly.
+- **products_legacy duplicates products**: 87.5% of rows (70/80) match products exactly on sku/name/category/price_cents. Likely an old copy; prefer `products` unless explicitly asked for legacy data.
+- **orders.status has inconsistent casing**: 5 distinct raw values, only 3 canonical (`pending`/`Pending`, `shipped`/`SHIPPED`, `cancelled`). Always normalize with `lower(btrim(status))`, or use the `shipped_orders` view which already does this.
+- **audit_log has no primary key** and `entity_id` is polymorphic (points to customers/orders/vehicles depending on `entity` column) — cannot be joined with a single FK; join conditionally on `entity`.
+- **customers.api_token has only 1 distinct value across 250 rows** (inferred, unverifiable) — looks like placeholder/test data, don't treat as a real per-row secret.
 
 ## Entities
 
-- **customer** — primary table `customers`. Referenced (with caveats above) from `orders`, `vehicles`, `order_totals`, and polymorphically from `audit_log`.
-- **order** — primary table `orders`. Referenced from `order_items`, `shipped_orders` (view), `order_totals` (dead view), and polymorphically from `audit_log`.
-- **vehicle** — primary table `vehicles`. Predecessor table `cars` is dead/empty (inferred duplicate, unverifiable since `cars` has 0 rows).
-- **product** — primary table `products`. Confirmed duplicate: `products_legacy` (see above).
+- **customer** — table `customers`. Referenced by `vehicles.customer_id` (confirmed) and `orders.customer_id` (broken, see above).
+- **vehicle** — table `vehicles`, replaces dead `cars` table (confirmed duplicate/dead).
+- **order** — table `orders`, with `order_items` (line items) and view `shipped_orders`. `order_totals` materialized view is dead.
+- **product** — table `products`; `products_legacy` is a confirmed duplicate/stale copy.
 
 ## Open questions for a human
 
-- Are the out-of-range `orders.customer_id` values (9001, 9002, 9025, 9026, ...) intentional test data or evidence of missing customer records?
-- Is `products_legacy` still used anywhere, or safe to drop?
-- Is `cars` safe to drop, or does something still depend on it?
-- Should `order_totals` be refreshed on a schedule? Why was it never populated?
-- Should `audit_log.entity_id` get per-entity FK columns, or stay polymorphic by design?
+- Is `cars` safe to drop now that `vehicles` fully replaced it?
+- Should `products_legacy` be archived/dropped, or is something still reading it?
+- Why is `order_totals` never refreshed — still needed?
+- What entity does `events` relate to? No FKs declared (inferred: unclear, possibly customers or products).
+- Should `orders.status` get an enum/check constraint to stop future case drift?
+- Why do 60 orders (12%) reference nonexistent customers — bad data or soft-deleted customers?
 ```
 
 ## Tuning
@@ -136,10 +146,10 @@ Every threshold lives in `src/config.ts` with a comment saying what breaks if
 it is set wrong, and each can be overridden by a `DBTRUTH_*` environment
 variable or a flag (`npx dbtruth --help`). `--json` prints the full verified
 analysis as JSON. `ANTHROPIC_MODEL` picks the model. Almost all of a run is
-model time: on the fixture, `DBTRUTH_MODEL_EFFORT=low` finished in 40 s with
-the same findings as the default `high` at 68 to 101 s. Lower it for small
-schemas you have already seen; keep it for a database you are meeting for
-the first time.
+model time, and the reasoning effort is chosen by schema size: small schemas
+run at `low`, mid-sized at `medium`, large at `high`. On the fixture, `low`
+gave the same findings as `high` in under half the time. The bands live in
+`config.ts`; `DBTRUTH_MODEL_EFFORT` pins one level for every run.
 
 ## What it does not do
 

@@ -3,13 +3,13 @@
 // Paths are confined to context/: anything outside it is dropped, so a strange
 // reply can never write elsewhere on disk.
 
-import type { Model } from "./model.js";
+import type { AskOptions, Model } from "./model.js";
 import { FilesSchema, type Files, type Verified } from "./schemas.js";
 
 export const OUTPUT_DIR = "context";
 
-export async function write(model: Model, verified: Verified): Promise<Files> {
-  const files = await model.ask("write", verified, FilesSchema);
+export async function write(model: Model, verified: Verified, options?: AskOptions): Promise<Files> {
+  const files = await model.ask("write", verified, FilesSchema, options);
   const out: Files = {};
   for (const [path, markdown] of Object.entries(files)) {
     const safe = confine(path);

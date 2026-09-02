@@ -82,11 +82,11 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Db> {
   const dbRow = (await client.query("SELECT current_database() AS db")).rows[0] as Row;
   const database = String(dbRow.db);
 
-  const readOnlyProven = await proveReadOnly(client);
+  const proof = await proveReadOnly(client);
+  const readOnlyProven = proof.proven;
   if (!readOnlyProven) {
     opts.warn?.(
-      "WARNING: the preflight write attempt was NOT refused by the server. " +
-        "The session asked for read-only mode but could not prove it. " +
+      `WARNING: the session asked for read-only mode but could not prove it: ${proof.detail}. ` +
         "dbtruth still issues only SELECT statements.",
     );
   }
@@ -130,17 +130,39 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Db> {
   };
 }
 
-/** A trivial write inside a transaction that is always rolled back. Must be refused. */
-async function proveReadOnly(client: pg.Client): Promise<boolean> {
+/**
+ * Two proofs inside one transaction that is always rolled back. First the server states the
+ * transaction mode it will enforce. Then a trivial write is attempted: the one write-shaped
+ * statement this tool ever sends, expected to be refused. Any refusal is fine; a role without
+ * CREATE privilege refuses it with 42501 and is read-only all the same. Only an accepted write
+ * disproves anything.
+ */
+async function proveReadOnly(client: pg.Client): Promise<{ proven: boolean; detail: string }> {
   await client.query("BEGIN");
   try {
-    await client.query("CREATE TABLE dbtruth_preflight_must_fail (x int)");
-    return false;
-  } catch (e) {
-    return sqlState(e) === READ_ONLY_SQL_TRANSACTION;
+    const mode = String((await client.query("SELECT current_setting('transaction_read_only') AS mode")).rows[0]?.mode);
+    try {
+      await client.query("CREATE TABLE dbtruth_preflight_must_fail (x int)");
+      return { proven: false, detail: "the server accepted a CREATE TABLE inside what should be a read-only transaction" };
+    } catch (e) {
+      const state = sqlState(e) ?? "unknown";
+      if (mode === "on") return { proven: true, detail: `transaction_read_only is on; the write was refused with SQLSTATE ${state}` };
+      if (state === READ_ONLY_SQL_TRANSACTION) return { proven: true, detail: "the write was refused as a read-only transaction" };
+      return { proven: false, detail: `transaction_read_only is ${mode} and the write was refused only with SQLSTATE ${state}` };
+    }
   } finally {
     await client.query("ROLLBACK");
   }
+}
+
+// ---------- Postgres type families, by declared type, never by column name ----------
+
+/** "text" for free-text families, "time" for dates and timestamps, "other" for everything else. */
+export function typeFamily(type: string): "text" | "time" | "other" {
+  const base = type.replace(/\[\]$/, "").replace(/\(.*\)$/, "").trim().toLowerCase();
+  if (["text", "character varying", "character", "varchar", "char", "citext", "name", "json", "jsonb", "xml", "bytea"].includes(base)) return "text";
+  if (base.startsWith("timestamp") || base === "date") return "time";
+  return "other";
 }
 
 function isReadStatement(sql: string): boolean {

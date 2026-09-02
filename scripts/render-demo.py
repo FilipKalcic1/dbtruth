@@ -124,18 +124,21 @@ s.output([
     ("(4 rows)", "dim"),
     ("", "text"),
     ("-- 440 orders. 60 vanished in the join. Nobody noticed.", "warn"),
-], 2300)
+], 2000)
 
 # Scene 2: run the tool. Lines are the real terminal output of a live run.
 s.clear()
 s.type_command("npx dbtruth")
 disclosure = (
-    "Sending to claude-sonnet-5: 11 relations (9 tables, 1 view, 1 materialized view, "
-    "1 partitioned), schema and per-column statistics, 15 sample rows per table with "
-    "high-cardinality text hidden (--no-samples off, --reveal: none). Nothing else leaves this machine."
+    "Sending to claude-sonnet-5 at effort low (by schema size, 1125 tokens): 11 relations "
+    "(9 tables, 1 view, 1 materialized view, 1 partitioned), schema and per-column statistics, "
+    "15 sample rows per table with high-cardinality columns hidden (--no-samples off, --reveal: none). "
+    "Nothing else leaves this machine."
 )
-s.output([(line, "dim") for line in wrap(disclosure, 96)], 1200)
-s.output([("... 98 s later ...", "comment")], 900)
+s.output([(line, "dim") for line in wrap(disclosure, 96)], 1000)
+s.output([("contextualize: 11 tables described, 13 claims to test, 20.3s", "comment")], 800)
+s.output([("verify: 13 measurements, 0.1s", "comment")], 500)
+s.output([("write: 13 files, 28.8s", "comment")], 800)
 s.output([
     ("dbtruth: fixture", "head"),
     ("relations: 9 tables, 1 view, 1 materialized view, 1 partitioned (fits in an agent's context)", "text"),
@@ -144,20 +147,20 @@ s.output([
     ("suspicions: 5 confirmed, 0 rejected, 3 unverifiable", "text"),
     ("entities: 4, questions for a human: 5", "text"),
     ("files written: 13 under ./context/", "text"),
-    ("database time: 0.1s, model time: 97.7s (contextualize 45.6s, write 52.1s)", "text"),
-], 2600)
+    ("database time: 0.1s, model time: 49.1s (contextualize 20.3s, write 28.8s)", "text"),
+], 2400)
 
 # Scene 3: what the agent reads next. Real lines from that run's context/README.md.
 s.clear()
 s.type_command("head -6 context/README.md")
 s.output([
-    ("# Fixture database — agent reference", "head"),
+    ("# Database Reference (fixture)", "head"),
     ("", "text"),
-    ("## Broken relationships — fix your joins", "head"),
+    ("## Broken relationship — fix required", "head"),
     ("", "text"),
-    ("**`orders.customer_id` → `customers.id` is broken.** Hit rate 88% (440/500 sampled).", "warn"),
-    ("60 orders have `customer_id` values with no matching customer. Use `LEFT JOIN customers`", "text"),
-    ("and expect/filter NULLs — do not `INNER JOIN` and assume all orders resolve to a customer.", "text"),
+    ("**orders.customer_id → customers.id is broken: 88% hit rate (440/500), 60 orphans.**", "warn"),
+    ("Do not inner-join orders to customers without guarding. Use `LEFT JOIN` and expect nulls,", "text"),
+    ("or filter orphans explicitly. This is not a declared FK — treat with suspicion.", "text"),
 ], 3000)
 
 # Scene 4: the agent's second attempt. Every order is counted.
@@ -183,7 +186,7 @@ s.output([
     ("(5 rows)", "dim"),
     ("", "text"),
     ("-- 500 orders. The 60 are visible now.", "prompt"),
-], 2800)
+], 2600)
 
 os.makedirs("docs", exist_ok=True)
 frames = [f.quantize(colors=32, method=Image.Quantize.MEDIANCUT) for f in s.frames]

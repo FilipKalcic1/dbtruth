@@ -6,7 +6,7 @@ import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { resolveConfig, overridable, type Overrides } from "./config.js";
+import { effortFor, resolveConfig, overridable, type Overrides } from "./config.js";
 import { contextualize } from "./contextualize.js";
 import { extract } from "./extract.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
@@ -49,7 +49,6 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
     rawDir: join(opts.cwd, OUTPUT_DIR),
     model,
     maxOutputTokens: cfg.modelMaxOutputTokens,
-    effort: cfg.modelEffort,
     ...(env.ANTHROPIC_API_KEY ? { apiKey: env.ANTHROPIC_API_KEY } : {}),
     ...(deps.transport ? { transport: deps.transport } : {}),
   });
@@ -60,27 +59,34 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
   try {
     // 3. Extract.
     const extracted = await extract(db, cfg, { samples: opts.samples, reveal: new Set(opts.reveal) });
+    const effort = effortFor(extracted.schemaTokens, cfg);
 
     // 4. Disclosure, before the first call that carries data. Human-facing lines go to stderr so --json stays clean.
     opts.err(
-      `Sending to ${model}: ${extracted.tables.length} relations (${describeKinds(extracted.tables)})` +
+      `Sending to ${model} at effort ${effort}${cfg.modelEffort === "auto" ? ` (by schema size, ${extracted.schemaTokens} tokens)` : ""}: ` +
+        `${extracted.tables.length} relations (${describeKinds(extracted.tables)})` +
         (extracted.skipped.length ? ` (${extracted.skipped.length} skipped, over budget)` : "") +
         `, schema and per-column statistics, ` +
         (opts.samples
-          ? `${cfg.sampleRowsShown} sample rows per table with high-cardinality text hidden (--no-samples off, --reveal: ${opts.reveal.length ? opts.reveal.join(", ") : "none"})`
+          ? `${cfg.sampleRowsShown} sample rows per table with high-cardinality columns hidden (--no-samples off, --reveal: ${opts.reveal.length ? opts.reveal.join(", ") : "none"})`
           : `no sample rows (--no-samples on, --reveal ignored)`) +
         `. Nothing else leaves this machine.`,
     );
 
-    // 5. Contextualize. 6. Verify. 7. Write.
+    // 5. Contextualize. 6. Verify. 7. Write. One progress line each, so a person can see it working.
+    const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
     const t0 = performance.now();
-    const claims = await contextualize(ai, extracted);
+    const claims = await contextualize(ai, extracted, { effort });
     const t1 = performance.now();
+    const claimCount = claims.relationships.length + claims.suspicions.length;
+    opts.err(`contextualize: ${claims.tables.length} tables described, ${claimCount} claims to test, ${seconds(t1 - t0)}`);
     const measurements = await verify(db, cfg, extracted, claims);
     const verified = assemble(extracted, claims, measurements, cfg);
     const t2 = performance.now();
-    const files = await write(ai, verified);
+    opts.err(`verify: ${measurements.length} measurements, ${seconds(t2 - t1)}`);
+    const files = await write(ai, verified, { effort });
     const modelMs = { contextualize: t1 - t0, write: performance.now() - t2 };
+    opts.err(`write: ${Object.keys(files).length} files, ${seconds(modelMs.write)}`);
 
     // 8. Write files, print the summary, exit.
     for (const [path, markdown] of Object.entries(files)) {

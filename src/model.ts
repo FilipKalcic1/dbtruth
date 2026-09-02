@@ -19,10 +19,15 @@ import type { Effort } from "./config.js";
 export const DEFAULT_MODEL = "claude-sonnet-5";
 
 /** Sends one request and returns the text of the reply. */
-export type Transport = (system: string, messages: Anthropic.MessageParam[]) => Promise<string>;
+export type Transport = (system: string, messages: Anthropic.MessageParam[], effort?: Effort) => Promise<string>;
+
+export type AskOptions = {
+  /** Reasoning effort for this call; defaults to the effort the model was created with. */
+  effort?: Effort;
+};
 
 export type Model = {
-  ask<T>(promptName: string, input: unknown, schema: z.ZodType<T>): Promise<T>;
+  ask<T>(promptName: string, input: unknown, schema: z.ZodType<T>, options?: AskOptions): Promise<T>;
   /**
    * Proves the API is reachable with the configured credentials and model before any data is
    * read. Sends only the model id. Throws a plain-language error naming what to fix.
@@ -45,7 +50,7 @@ export type ModelOptions = {
 export function createModel(opts: ModelOptions): Model {
   const modelId = opts.model ?? DEFAULT_MODEL;
   const client = opts.transport ? undefined : new Anthropic(opts.apiKey ? { apiKey: opts.apiKey } : {});
-  const transport = opts.transport ?? sdkTransport(client!, modelId, opts.maxOutputTokens, opts.effort);
+  const transport = opts.transport ?? sdkTransport(client!, modelId, opts.maxOutputTokens);
 
   return {
     async preflight() {
@@ -57,11 +62,12 @@ export function createModel(opts: ModelOptions): Model {
       }
     },
 
-    async ask(promptName, input, schema) {
+    async ask(promptName, input, schema, options = {}) {
+      const effort = options.effort ?? opts.effort;
       const system = readPrompt(promptName);
       const messages: Anthropic.MessageParam[] = [{ role: "user", content: JSON.stringify(input) }];
 
-      const first = await transport(system, messages);
+      const first = await transport(system, messages, effort);
       const firstTry = validate(first, schema);
       if (firstTry.ok) return firstTry.value;
 
@@ -74,7 +80,7 @@ export function createModel(opts: ModelOptions): Model {
             "Respond again with JSON only, matching the schema in the instructions.",
         },
       );
-      const second = await transport(system, messages);
+      const second = await transport(system, messages, effort);
       const secondTry = validate(second, schema);
       if (secondTry.ok) return secondTry.value;
 
@@ -128,8 +134,8 @@ function explainApiFailure(e: unknown, model: string): string {
   return `no API key found. ${KEY_HELP} (${e instanceof Error ? e.message : String(e)})`;
 }
 
-function sdkTransport(client: Anthropic, model: string, maxOutputTokens: number, effort?: Effort): Transport {
-  return async (system, messages) => {
+function sdkTransport(client: Anthropic, model: string, maxOutputTokens: number): Transport {
+  return async (system, messages, effort) => {
     const message = await client.messages
       .stream({ model, max_tokens: maxOutputTokens, system, messages, ...(effort ? { output_config: { effort } } : {}) })
       .finalMessage();

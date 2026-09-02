@@ -5,7 +5,7 @@
 // not be taken (timeout, budget, unknown table, no way to measure).
 
 import type { Config } from "./config.js";
-import { q, qualified, sampleSource, type Db, type QueryResult } from "./safety.js";
+import { q, qualified, sampleSource, typeFamily, type Db, type QueryResult } from "./safety.js";
 import {
   relationshipId,
   suspicionId,
@@ -89,7 +89,7 @@ async function measureDeadTable(db: Db, cfg: Config, extract: Extract, claimId: 
     };
   }
 
-  const timeColumns = table.columns.filter((c) => isTimeType(c.type));
+  const timeColumns = table.columns.filter((c) => typeFamily(c.type) === "time");
   const latest = timeColumns.length > 0 ? `greatest(${timeColumns.map((c) => `max(${q(c.name)})`).join(", ")})` : "NULL::timestamptz";
   const exact = table.rowEstimate <= cfg.sampleRows;
   const count = exact ? "count(*)" : `${Math.round(table.rowEstimate)}`;
@@ -198,11 +198,6 @@ const NEVER_REFRESHED = "a materialized view that has never been refreshed canno
 
 function unpopulated(table: Table): boolean {
   return table.populated === false;
-}
-
-function isTimeType(type: string): boolean {
-  const base = type.toLowerCase();
-  return base.startsWith("timestamp") || base === "date";
 }
 
 function num(v: unknown): number {

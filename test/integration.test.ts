@@ -65,8 +65,15 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   );
 
   assert.equal(code, 2, "broken join and confirmed suspicions exit 2");
-  assert.match(err[0]!, /^Sending to claude-sonnet-5: 11 relations \(9 tables, 1 view, 1 materialized view, 1 partitioned\)/, "disclosure line comes first, on stderr");
-  assert.match(err[0]!, /high-cardinality text hidden/);
+  assert.match(
+    err[0]!,
+    /^Sending to claude-sonnet-5 at effort low \(by schema size, \d+ tokens\): 11 relations \(9 tables, 1 view, 1 materialized view, 1 partitioned\)/,
+    "disclosure line comes first, on stderr, and names the effort",
+  );
+  assert.match(err[0]!, /high-cardinality columns hidden/);
+  assert.ok(err.some((l) => /^contextualize: \d+ tables described, \d+ claims to test, [\d.]+s$/.test(l)), "one progress line per step");
+  assert.ok(err.some((l) => /^verify: \d+ measurements, [\d.]+s$/.test(l)));
+  assert.ok(err.some((l) => /^write: \d+ files, [\d.]+s$/.test(l)));
 
   const verified = JSON.parse(out.join("\n")) as Verified; // stdout is the JSON and nothing else
   assert.equal(verified.version, 1);
@@ -123,6 +130,21 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   assert.equal(matview.kind, "materialized view");
   assert.equal(matview.populated, false);
   assert.equal(matview.samples.length, 0, "nothing can be read from it, so nothing is sent");
+
+  // Visibility is one rule for every type: categorical, or a declared key. Nothing else.
+  const column = (t: Extract["tables"][number], name: string) => t.columns.find((c) => c.name === name)!;
+  const orders = sent.tables.find((t) => t.name === "orders")!;
+  assert.equal(column(orders, "id").visible, true, "a primary key column is an identifier by declaration");
+  assert.equal(column(orders, "customer_id").visible, false, "high-cardinality integer without a declared key: hidden like text");
+  assert.equal(column(orders, "total_cents").visible, false);
+  assert.equal(orders.samples[0]!.customer_id, "[hidden]");
+  assert.equal(column(orders, "status").visible, true, "few short values: shown");
+  const items = sent.tables.find((t) => t.name === "order_items")!;
+  assert.equal(column(items, "order_id").visible, true, "a declared foreign key column is shown");
+  const created = column(customers, "created_at");
+  assert.equal(created.visible, false);
+  assert.ok(Array.isArray(created.years) && created.years.length === 2 && created.years[0]! <= created.years[1]!, "a hidden timestamp keeps its year range");
+  assert.equal(column(orders, "status").years, undefined, "only hidden date and timestamp columns carry years");
 
   for (const text of [...out, ...err, readFileSync(join(cwd, "context", "README.md"), "utf8")]) {
     assert.doesNotMatch(text, /dbtruth:dbtruth@/, "the database URL is never printed or written");

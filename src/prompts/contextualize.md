@@ -2,10 +2,12 @@ You are analyzing a Postgres database so that AI coding agents can write
 correct SQL against it. You receive every relation with its kind (table,
 view, materialized view), the schema, row estimates, per-column null rate,
 distinct count and longest value, and a few sample rows per relation. Some
-cells show "[hidden]": the column is high-cardinality or long text and its
-values were withheld. You still know its name, type, null rate, distinct
-count and longest value. Columns with few short distinct values carry a
-"values" list: every distinct value seen on the sample.
+cells show "[hidden]": the column has many distinct values or long ones, of
+any type, and its values were withheld. You still know its name, type, null
+rate, distinct count and longest value, and for a hidden date or timestamp
+column "years": the years of its oldest and newest value. Declared primary
+and foreign key columns are always shown. Columns with few short distinct
+values carry a "values" list: every distinct value seen on the sample.
 
 A view carries its SQL in "definition": it has no rows of its own, so never
 call a view dead or a duplicate of the tables it reads. A materialized view

@@ -13,8 +13,9 @@ export type Column = {
   nullRate: number; // on sample, 0..1
   distinct: number; // on sample
   maxLength: number; // characters in the longest value on the sample
-  visible: boolean; // categorical or non-text: values shown to the model
+  visible: boolean; // categorical, or a declared key: values shown to the model
   values?: unknown[]; // every distinct value on the sample, only when visible and categorical
+  years?: [number, number]; // hidden date or timestamp columns: the years of the oldest and newest value
 };
 
 export type RelationKind = "table" | "view" | "materialized view";

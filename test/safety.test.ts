@@ -30,6 +30,20 @@ test("the session is proven read-only and only SELECT statements get through", a
   }
 });
 
+test("a role without CREATE privilege is still proven read-only, with no warning", async () => {
+  // The Postgres 15+ default for non-owners: no CREATE on public, so the write attempt fails with 42501, not 25006.
+  const warnings: string[] = [];
+  const db = await connect(FIXTURE_URL.replace("dbtruth:dbtruth@", "reader:reader@"), { ...config, warn: (m) => warnings.push(m) });
+  try {
+    assert.equal(db.readOnlyProven, true, "the server states the transaction is read-only; that is the proof");
+    assert.deepEqual(warnings, []);
+    const ok = await db.query("SELECT count(*) AS n FROM customers");
+    assert.equal(ok.ok && Number(ok.rows[0]?.n), 250);
+  } finally {
+    await db.close();
+  }
+});
+
 test("a statement timeout is a skipped measurement, and the connection stays usable", async () => {
   const db = await connect(FIXTURE_URL, { ...config, statementTimeoutSeconds: 0.2 });
   try {

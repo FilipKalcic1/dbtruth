@@ -16,13 +16,20 @@ export type Config = {
   duplicateOverlap: number;
   fitsInContextTokens: number;
   modelMaxOutputTokens: number;
-  modelEffort: Effort;
+  modelEffort: Effort | "auto";
+  modelEffortBands: { upToSchemaTokens: number; effort: Effort }[];
   charsPerToken: number;
   sampleOversample: number;
 };
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
+
+/** The effort for one run: the fixed setting, or by schema size the first band the schema fits in, else high. */
+export function effortFor(schemaTokens: number, cfg: Config): Effort {
+  if (cfg.modelEffort !== "auto") return cfg.modelEffort;
+  return cfg.modelEffortBands.find((b) => schemaTokens <= b.upToSchemaTokens)?.effort ?? "high";
+}
 
 export const config: Config = {
   // Rows sampled per table for null rate, distinct count and join checks.
@@ -41,11 +48,12 @@ export const config: Config = {
   // Too low: measurements on large tables time out. Too high: one bad query eats the budget.
   statementTimeoutSeconds: 10,
 
-  // Text columns with more distinct values than this on the sample are hidden from the model.
+  // A column of any type with more distinct values than this on the sample is hidden from the model,
+  // unless it is a declared primary or foreign key column.
   // Too high: personal data passes as "categorical". Too low: real enums are hidden.
   categoricalMaxDistinct: 50,
 
-  // A text column also counts as categorical only if its longest value on the sample is at most this many characters.
+  // A column also counts as categorical only if its longest value on the sample is at most this many characters.
   // Too low: long enum labels are hidden. Too high: a constant secret passes as categorical (an MD5 hash is 32, SHA-1 is 40).
   categoricalMaxValueLength: 30,
 
@@ -70,9 +78,17 @@ export const config: Config = {
   // Too low: the write step is cut off on databases with many tables. Too high: nothing, it is a ceiling.
   modelMaxOutputTokens: 64_000,
 
-  // Reasoning effort for each model call (DBTRUTH_MODEL_EFFORT): low, medium, high, xhigh, max.
-  // Too low: weaker claims and sloppier files. Too high: slower runs for the same result on small schemas.
-  modelEffort: "high",
+  // Reasoning effort for each model call (DBTRUTH_MODEL_EFFORT): auto, or a fixed low, medium, high, xhigh, max.
+  // "auto" picks by schema size from the bands below. A fixed value too low: weaker claims. Too high: slow small runs.
+  modelEffort: "auto",
+
+  // With "auto": the first band whose upToSchemaTokens the schema does not exceed applies; above every band, high.
+  // Measured on the fixture (about 1,300 tokens): low gave the same findings as high in under half the time.
+  // Boundaries too high: a mid-sized schema gets shallow claims. Too low: small schemas wait for nothing.
+  modelEffortBands: [
+    { upToSchemaTokens: 4_000, effort: "low" },
+    { upToSchemaTokens: 12_000, effort: "medium" },
+  ],
 
   // Characters per token used to size the schema against fitsInContextTokens.
   // Too low: small schemas look big. Too high: big schemas look small.
@@ -116,8 +132,10 @@ export function resolveConfig(
   }
   const effort = env.DBTRUTH_MODEL_EFFORT;
   if (effort) {
-    if (!(EFFORTS as readonly string[]).includes(effort)) throw new Error(`DBTRUTH_MODEL_EFFORT: "${effort}" is not one of ${EFFORTS.join(", ")}`);
-    out.modelEffort = effort as Effort;
+    if (effort !== "auto" && !(EFFORTS as readonly string[]).includes(effort)) {
+      throw new Error(`DBTRUTH_MODEL_EFFORT: "${effort}" is not auto or one of ${EFFORTS.join(", ")}`);
+    }
+    out.modelEffort = effort as Effort | "auto";
   }
   return out;
 }

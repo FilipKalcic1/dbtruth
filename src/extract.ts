@@ -3,7 +3,13 @@
 // Per relation (table, view, materialized view): schema, row estimate, one bounded
 // sample from which null rate, distinct count and longest value are computed inside
 // the database (the sample never leaves it), a few rows shown with high-cardinality
-// or long text hidden, and the full list of distinct values for categorical columns.
+// columns hidden, and the full list of distinct values for categorical columns.
+//
+// Visibility is one rule for every type: a column's values are shown when it is
+// categorical (few distinct values, none long) or when it is a declared key (primary
+// key or foreign key column, an identifier by declaration). Everything else is
+// "[hidden]"; the model keeps the name, type, null rate, distinct count, longest value,
+// and for dates and timestamps the year range.
 //
 // A partitioned table stands for its partitions: one logical table, with the number
 // of partitions and how many carry foreign keys of their own.
@@ -12,7 +18,7 @@
 // tiny budget still yields a complete schema; the budget governs per-relation sampling.
 
 import type { Config } from "./config.js";
-import { q, qualified, sampleSource, type Db, type Row } from "./safety.js";
+import { q, qualified, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
 import type { Column, Extract, RelationKind, Table } from "./schemas.js";
 
 export type ExtractOptions = {
@@ -212,12 +218,20 @@ function summarizePartitions(relations: Relation[], keysByOid: Map<number, Keys>
 async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table): Promise<Table> {
   const cols = table.columns;
   if (cols.length === 0) return table;
-  // A materialized view that was never refreshed cannot be read at all: schema only, nothing shown.
-  if (table.populated === false) return { ...table, rowEstimate: 0, columns: cols.map((c) => ({ ...c, visible: !isTextType(c.type) })) };
+  const keyColumns = new Set([...(table.primaryKey ?? []), ...table.foreignKeys.map((f) => f.column)]);
+  const shownRegardless = (c: Column) => keyColumns.has(c.name) || opts.reveal.has(`${table.name}.${c.name}`);
 
-  // Null rate, distinct count and longest value, computed inside the database over the bounded sample.
+  // A materialized view that was never refreshed cannot be read at all: schema only, nothing shown.
+  if (table.populated === false) return { ...table, rowEstimate: 0, columns: cols.map((c) => ({ ...c, visible: shownRegardless(c) })) };
+
+  // Null rate, distinct count, longest value, and for dates the year range: inside the database, over the bounded sample.
   const aggregates = cols
-    .map((c, i) => `count(${q(c.name)}) AS nn${i}, count(DISTINCT ${q(c.name)}::text) AS d${i}, max(length(${q(c.name)}::text)) AS l${i}`)
+    .map((c, i) => {
+      const base = `count(${q(c.name)}) AS nn${i}, count(DISTINCT ${q(c.name)}::text) AS d${i}, max(length(${q(c.name)}::text)) AS l${i}`;
+      return typeFamily(c.type) === "time"
+        ? `${base}, date_part('year', min(${q(c.name)}))::int AS y0${i}, date_part('year', max(${q(c.name)}))::int AS y1${i}`
+        : base;
+    })
     .join(", ");
   let source = sampleSource(table, cfg);
   let stats = await db.query(`SELECT count(*) AS n, ${aggregates} FROM ${source} s`);
@@ -226,8 +240,8 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table):
     stats = await db.query(`SELECT count(*) AS n, ${aggregates} FROM ${source} s`);
   }
   if (!stats.ok) {
-    // Statistics unavailable: keep the schema, hide every text column, show nothing.
-    return { ...table, columns: cols.map((c) => ({ ...c, visible: !isTextType(c.type) })) };
+    // Statistics unavailable: keep the schema, show only declared keys, sample nothing.
+    return { ...table, columns: cols.map((c) => ({ ...c, visible: shownRegardless(c) })) };
   }
 
   const row = stats.rows[0] as Row;
@@ -238,8 +252,9 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table):
     const nonNull = Number(row[`nn${i}`]);
     const maxLength = Number(row[`l${i}`] ?? 0);
     const categorical = distinct <= cfg.categoricalMaxDistinct && maxLength <= cfg.categoricalMaxValueLength;
-    const visible = !isTextType(c.type) || categorical || opts.reveal.has(`${table.name}.${c.name}`);
-    return { ...c, nullRate: n === 0 ? 0 : 1 - nonNull / n, distinct, maxLength, visible };
+    const visible = categorical || shownRegardless(c);
+    const years = row[`y0${i}`] !== null && row[`y0${i}`] !== undefined ? ([Number(row[`y0${i}`]), Number(row[`y1${i}`])] as [number, number]) : undefined;
+    return { ...c, nullRate: n === 0 ? 0 : 1 - nonNull / n, distinct, maxLength, visible, ...(years && !visible ? { years } : {}) };
   });
 
   if (!opts.samples) return { ...table, rowEstimate, columns };
@@ -274,12 +289,6 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table):
 }
 
 // ---------- helpers ----------
-
-/** Type families whose values are free text. Everything else is shown. */
-export function isTextType(type: string): boolean {
-  const base = type.replace(/\[\]$/, "").replace(/\(.*\)$/, "").trim().toLowerCase();
-  return ["text", "character varying", "character", "varchar", "char", "citext", "name", "json", "jsonb", "xml", "bytea"].includes(base);
-}
 
 export function displayName(schema: string, table: string): string {
   return schema === "public" ? table : `${schema}.${table}`;
