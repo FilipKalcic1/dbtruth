@@ -1,0 +1,56 @@
+{
+  "name": "dbtruth",
+  "version": "0.1.2",
+  "description": "Verified database context for AI coding agents. Read-only, Postgres.",
+  "license": "MIT",
+  "keywords": [
+    "postgres",
+    "postgresql",
+    "ai",
+    "agent",
+    "context",
+    "schema",
+    "database",
+    "claude"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FilipKalcic1/dbtruth.git"
+  },
+  "homepage": "https://github.com/FilipKalcic1/dbtruth#readme",
+  "bugs": {
+    "url": "https://github.com/FilipKalcic1/dbtruth/issues"
+  },
+  "type": "module",
+  "bin": {
+    "dbtruth": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "docs/demo.gif",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-prompts.mjs",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "dev": "tsx src/cli.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.123.0",
+    "commander": "^15.0.0",
+    "pg": "^8.23.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}
