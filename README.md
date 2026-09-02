@@ -5,7 +5,7 @@ agent can trust: what each table is for, which entities live where, and how
 tables relate, with every relationship checked against the actual data before
 it is written down.
 
-![An agent writes an inner join and loses 60 orders; dbtruth runs; the agent reads context/README.md and writes a left join](docs/demo.gif)
+![An agent writes an inner join and loses 60 orders; dbtruth runs; the agent reads context/README.md and writes a left join](https://raw.githubusercontent.com/FilipKalcic1/dbtruth/main/docs/demo.gif)
 
 ```bash
 npx dbtruth            # writes ./context/ and prints a summary
