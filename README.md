@@ -28,10 +28,25 @@ npx dbtruth            # writes ./context/ and prints a summary
 ```
 
 You get `context/README.md`, `context/ENTITIES.md` and one file per table in
-`context/tables/`. Point your coding agent at that folder. Exit code `2` means
-it found something an agent must know before writing SQL, `1` means it could
-not run, `0` means nothing found. The database URL can also be passed as
-`--url`, and both settings can come from the environment instead of `.env`.
+`context/tables/`. Exit code `2` means it found something an agent must know
+before writing SQL, `1` means it could not run, `0` means nothing found. The
+database URL can also be passed as `--url`, and both settings can come from
+the environment instead of `.env`.
+
+## Giving it to your agent
+
+The output is plain markdown, so any agent can read it. Tell yours to look
+there before it writes SQL:
+
+- **Claude Code**: one line in `CLAUDE.md`. *Before writing SQL against this
+  database, read `context/README.md` and the file in `context/tables/` for
+  every table you touch.*
+- **Cursor**: the same sentence in `.cursor/rules`, or `@context` in the chat.
+- **Anything else**: paste `context/README.md` at the start of the task.
+
+Commit `context/` next to your code. It is small, it reads well in a diff, and
+everyone on the project gets the same warnings. Run the tool again when the
+schema changes.
 
 ## What it sends, and what it never does
 
