@@ -7,14 +7,31 @@ it is written down.
 
 ![An agent writes an inner join and loses 60 orders; dbtruth runs; the agent reads context/README.md and writes a left join](https://raw.githubusercontent.com/FilipKalcic1/dbtruth/main/docs/demo.gif)
 
+## Quick start
+
+You need Node 20 or newer, a Postgres 11 or newer database you can read, and
+an Anthropic API key (create one at console.anthropic.com). Measured on
+schemas of up to 30 tables, one run costs between $0.10 and $0.25 of that key
+and takes one to two minutes, almost all of it waiting for the model.
+
+Put both settings in a `.env` file in the directory you run from:
+
+```
+DATABASE_URL=postgres://user:password@host:5432/dbname
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Then:
+
 ```bash
 npx dbtruth            # writes ./context/ and prints a summary
 ```
 
-It needs `DATABASE_URL` and `ANTHROPIC_API_KEY`, from the environment or from
-a `.env` file in the current directory (`--url` also works for the database).
-Exit code `2` means it found something an agent must know before writing SQL,
-`1` means it could not run, `0` means nothing found.
+You get `context/README.md`, `context/ENTITIES.md` and one file per table in
+`context/tables/`. Point your coding agent at that folder. Exit code `2` means
+it found something an agent must know before writing SQL, `1` means it could
+not run, `0` means nothing found. The database URL can also be passed as
+`--url`, and both settings can come from the environment instead of `.env`.
 
 ## What it sends, and what it never does
 
