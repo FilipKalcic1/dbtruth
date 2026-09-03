@@ -165,13 +165,6 @@ docker compose up -d --wait     # fixture, clean and scale databases on port 543
 npm test                        # unit, structure, safety, integration, scale
 ANTHROPIC_API_KEY=... npm test  # also the two live tests
 python scripts/render-demo.py   # regenerates docs/demo.gif from real output (needs Pillow)
-npx tsx scripts/benchmark.ts name=postgres://...   # measures any schemas you point it at, see docs/benchmark.md
 ```
-
-[docs/benchmark.md](docs/benchmark.md) holds the numbers for eight public
-schemas: four sample databases and the schemas of Discourse, Gitea, Mastodon
-and Metabase. Short version: curated samples are clean, application schemas
-declare anywhere from every foreign key (Mastodon) to none at all (Gitea), and
-without data the tool can describe them but not measure them.
 
 MIT.

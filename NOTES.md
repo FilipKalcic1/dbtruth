@@ -123,21 +123,29 @@ Needs Postgres 11 or newer: `pg_constraint.conparentid` and `relispartition`.
 4. **The GIF left the tarball.** The README links to it on GitHub; 171 kB per
    install for a picture nobody sees locally was waste.
 
-## 0.1.5: token usage and the benchmark
+## 0.1.5: token usage
 
-- `model.usage()` sums input and output tokens over every call, including
-  retries, and the summary prints them. It exists because "what does a run
-  cost" was a question nobody could answer from the outside.
-- `scripts/benchmark.ts` drives the tool's own extract, verify and verdict
-  with claims synthesized from the schema, every declared foreign key, every
-  table and every categorical text column, so the structural numbers need no
-  model and cost nothing. One model run per schema is added for time, tokens
-  and cost. `docs/benchmark.md` is its output over eight public schemas.
-- What the benchmark taught: curated sample databases are clean, which is a
-  sanity check rather than a finding; application schemas obtained from
-  migrations carry no rows, so the tool can count their tables, keys and
-  keyless tables but cannot measure a single join on them. The tool's claim
-  is only testable on a populated database, and none of the eight is one.
+`model.usage()` sums input and output tokens over every call, including
+retries, and the summary prints them. It exists because "what does a run
+cost" was a question nobody could answer from the outside.
+
+### A benchmark script that was written and then removed
+
+For one day `scripts/benchmark.ts` ran the tool's own extract, verify and
+verdict over eight public schemas with claims synthesized from the schema
+instead of from the model: every declared foreign key, every table, every
+categorical text column. It needed no model and cost nothing.
+
+It was removed because it measured what cannot break. Postgres enforces a
+declared foreign key, so its hit rate is 1.0 by construction; all eight
+schemas returned exactly that. The relationships worth finding are the
+undeclared ones, which exist only in application code, and nothing in the
+schema points at them. Producing that list is the model's whole job.
+
+Worth keeping from the exercise: application schemas taken from migrations
+carry no rows, so on them this tool can count tables and keys but cannot
+measure a single join. Its claim is testable only on a populated database
+with real history.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 
