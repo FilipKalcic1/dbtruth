@@ -96,7 +96,7 @@ itself exposed five defects, none caught by a test. Each fix is a mechanism.
 Speed on Pagila (214 s) was mostly item 2: 55 partitions of schema and
 samples sent to the model for nothing.
 
-Needs Postgres 11 or newer: `pg_constraint.conparentid` and `relispartition`.
+Needs Postgres 12 or newer (see the 0.1.6 section).
 
 ## 0.1.4: from the first code review
 
@@ -146,6 +146,92 @@ Worth keeping from the exercise: application schemas taken from migrations
 carry no rows, so on them this tool can count tables and keys but cannot
 measure a single join. Its claim is testable only on a populated database
 with real history.
+
+## 0.1.6: the second review, eight reviewers over src/
+
+`/code-review` and `/simplify` ran eight independent readers over the source:
+conventions, simplification, efficiency, reuse, altitude, a cross-file tracer,
+a removed-behaviour audit and a line-by-line scan. About thirty-five findings
+came back. Each was checked against the code; these were real and are fixed.
+
+Correctness and safety:
+
+- **A small table leaked.** The categorical test was absolute, so on a
+  40-row `customers` table `email` (40 distinct, 17 characters) counted as
+  categorical and was sent. A categorical column now also has to repeat a
+  value: `distinct < nonNull`. An identifier is an identifier at any size.
+- **An empty sample opened the gate.** A stale row estimate made TABLESAMPLE
+  return zero rows; every column then had zero distinct values, every column
+  was "categorical", and the shown rows were read from the table unmasked.
+  A categorical column now needs at least one value, an empty sample falls
+  back to the plain form, and the shown rows are drawn from the same sample
+  with only the visible columns selected, so a hidden value is never read
+  out of the database at all.
+- **A text key was shown.** Declared keys were exempt from hiding whatever
+  their type, so `users(email PRIMARY KEY)` sent every email. Keys are exempt
+  only when they are not text.
+- **A dead-table check could return millions of rows.** For a large table
+  with no timestamp column the statement had no aggregate, so it returned one
+  row per table row. `deadTableQuery` is now always an aggregate or no
+  statement at all, and a test proves it.
+- **A lost connection looked like "nothing found".** Every failed statement
+  became a skipped measurement, so after the server dropped the session the
+  run finished, wrote files and exited 0. A failure with no SQLSTATE, or one
+  in class 08 or 57, now stops the run.
+- **OIDs above 2^31 wrapped negative** through `::int` and were then rejected
+  as `oid[]` input. They travel as `bigint`.
+- **Dates of `infinity` and `date[]` columns** broke the whole statistics
+  statement for their table, which then silently lost all its statistics.
+  Year ranges are computed as float and checked for finiteness; arrays are
+  not date columns.
+- **`--reveal` never matched a table outside `public`**, and a typo went
+  unreported. Both forms match now, and every entry that named no column is
+  reported.
+- **A view's size was reported as the sample size.** A relation whose count
+  hit the sample limit is now reported as -1, "at least this many", and the
+  prompt says what that means; a plain count that came back short is exact.
+- **The write step could abort after both paid calls** on a path Windows
+  refuses, silently write to an NTFS stream, or let `Users` and `users`
+  overwrite each other. Paths are sanitised, reserved names prefixed,
+  case collisions suffixed, and one file that cannot be written is reported
+  while the rest are written. Files from a previous run are cleared first, so
+  a dropped table leaves no stale context behind.
+- **Identical claims were measured twice** and the second verdict could not
+  be mapped back. Claims are deduplicated when they are parsed.
+- **A model that rejects the effort parameter** failed after all the
+  sampling with a raw 400. The call is retried once without effort and the
+  summary says so; every API error mid-run is now explained the same way as
+  at preflight.
+- **Config accepted anything numeric.** `statement_timeout = 0` disables the
+  timeout in Postgres; `join.broken` above `join.confirmed` inverted the
+  bands. Every tunable now carries its range, and the invariants are checked.
+
+Efficiency and structure:
+
+- The join measurement probes per row only when the target column is a key;
+  otherwise it hashes the target once. Claims are measured strongest first.
+- Statistics and value lists of one table come from the same
+  `TABLESAMPLE ... REPEATABLE` pages, in two statements instead of three.
+- The extract is measured against `modelMaxInputTokens` before it is sent,
+  and trimmed in tiers (sample rows, value lists, tables) until it fits.
+- Sampling stops at `extractBudgetShare` of the budget so verifying keeps
+  the rest. `.env`, `bareName`, the seconds formatter and the keys-only
+  column list each live in one place. Effort bands are two numbers.
+
+Deliberately not done:
+
+- A connection pool for concurrent sampling. It would cut latency on remote
+  databases but would need the read-only proof per connection and a
+  different budget model. One connection, one session, one proof.
+- Grouping several relationship claims on the same source table into one
+  statement. It would save scans but complicates the per-claim text fallback
+  and the per-claim query a human can rerun.
+- Flattening `join` and `effortBands` in config. The spec names `join`.
+- A pure-schema "text type" list still exists in `typeFamily`, because the
+  key exemption needs it.
+
+Needs Postgres 12 or newer: `MATERIALIZED` common table expressions,
+`pg_constraint.conparentid`, `relispartition`.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

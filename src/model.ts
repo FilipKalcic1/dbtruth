@@ -1,14 +1,15 @@
 // model.ts: the ONLY module that imports the Anthropic SDK, and the only way to reach the API.
 //
-// One mechanism for every prompt: ask(name, input, schema).
+// One mechanism for every prompt: ask(name, input, schema, { effort }).
 //   - reads prompts/<name>.md and sends it as the system prompt
 //   - sends JSON.stringify(input) as the user message
 //   - extracts the JSON body from the reply and validates it with the zod schema
 //   - on failure, sends the validation error back once and validates again
 //   - on a second failure, saves both raw replies and throws
 //
-// The transport is injectable so tests can run the whole loop without the network
-// and can capture exactly what would have been sent.
+// Every API failure, before or during a request, becomes one sentence a person can act on.
+// The transport is injectable so tests can run the whole loop without the network and can
+// capture exactly what would have been sent.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -18,19 +19,23 @@ import type { Effort } from "./config.js";
 
 export const DEFAULT_MODEL = "claude-sonnet-5";
 
+export type Reply = { text: string; inputTokens: number; outputTokens: number; effortDropped?: boolean };
+
 /** Sends one request and returns the text of the reply, with the token usage when the API reported it. */
-export type Transport = (
-  system: string,
-  messages: Anthropic.MessageParam[],
-  effort?: Effort,
-) => Promise<string | { text: string; inputTokens: number; outputTokens: number }>;
+export type Transport = (system: string, messages: Anthropic.MessageParam[], effort?: Effort) => Promise<string | Reply>;
 
 export type AskOptions = {
-  /** Reasoning effort for this call; defaults to the effort the model was created with. */
+  /** Reasoning effort for this call. Omitted: the API's default for the model. */
   effort?: Effort;
 };
 
-export type Usage = { calls: number; inputTokens: number; outputTokens: number };
+export type Usage = {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** true when a call had to run without the requested effort because the model rejected the parameter. */
+  effortDropped: boolean;
+};
 
 export type Model = {
   ask<T>(promptName: string, input: unknown, schema: z.ZodType<T>, options?: AskOptions): Promise<T>;
@@ -50,8 +55,6 @@ export type ModelOptions = {
   maxOutputTokens: number;
   /** Explicit key (for example from .env); when absent the SDK resolves credentials from the environment. */
   apiKey?: string;
-  /** Reasoning effort passed through to the API. */
-  effort?: Effort;
   transport?: Transport;
 };
 
@@ -59,7 +62,7 @@ export function createModel(opts: ModelOptions): Model {
   const modelId = opts.model ?? DEFAULT_MODEL;
   const client = opts.transport ? undefined : new Anthropic(opts.apiKey ? { apiKey: opts.apiKey } : {});
   const transport = opts.transport ?? sdkTransport(client!, modelId, opts.maxOutputTokens);
-  const usage: Usage = { calls: 0, inputTokens: 0, outputTokens: 0 };
+  const usage: Usage = { calls: 0, inputTokens: 0, outputTokens: 0, effortDropped: false };
 
   /** One request through the transport, with usage accounted for. */
   async function send(system: string, messages: Anthropic.MessageParam[], effort: Effort | undefined): Promise<string> {
@@ -68,6 +71,7 @@ export function createModel(opts: ModelOptions): Model {
     if (typeof reply === "string") return reply;
     usage.inputTokens += reply.inputTokens;
     usage.outputTokens += reply.outputTokens;
+    if (reply.effortDropped) usage.effortDropped = true;
     return reply.text;
   }
 
@@ -84,11 +88,10 @@ export function createModel(opts: ModelOptions): Model {
     },
 
     async ask(promptName, input, schema, options = {}) {
-      const effort = options.effort ?? opts.effort;
       const system = readPrompt(promptName);
       const messages: Anthropic.MessageParam[] = [{ role: "user", content: JSON.stringify(input) }];
 
-      const first = await send(system, messages, effort);
+      const first = await send(system, messages, options.effort);
       const firstTry = validate(first, schema);
       if (firstTry.ok) return firstTry.value;
 
@@ -101,7 +104,7 @@ export function createModel(opts: ModelOptions): Model {
             "Respond again with JSON only, matching the schema in the instructions.",
         },
       );
-      const second = await send(system, messages, effort);
+      const second = await send(system, messages, options.effort);
       const secondTry = validate(second, schema);
       if (secondTry.ok) return secondTry.value;
 
@@ -144,22 +147,41 @@ function extractJson(reply: string): string | undefined {
 
 const KEY_HELP = "Set ANTHROPIC_API_KEY in the environment or in a .env file in this directory; keys are created at console.anthropic.com.";
 
-/** One sentence a person can act on, from whatever the SDK threw before or during the request. */
+/** One sentence a person can act on, from whatever the SDK threw before or during a request. */
 function explainApiFailure(e: unknown, model: string): string {
   if (e instanceof Anthropic.AuthenticationError) return `the Anthropic API rejected the key. ${KEY_HELP}`;
   if (e instanceof Anthropic.PermissionDeniedError) return `this key is not allowed to use model "${model}". Check ANTHROPIC_MODEL or the key's permissions.`;
   if (e instanceof Anthropic.NotFoundError) return `model "${model}" does not exist for this key. Check ANTHROPIC_MODEL.`;
+  if (e instanceof Anthropic.RateLimitError) return `the Anthropic API is rate-limiting this key (429). Wait a minute and run again.`;
+  if (e instanceof Anthropic.BadRequestError) return `the Anthropic API rejected the request (400): ${e.message}`;
   if (e instanceof Anthropic.APIConnectionError) return `could not reach the Anthropic API: ${e.message}`;
   if (e instanceof Anthropic.APIError) return `the Anthropic API returned ${e.status}: ${e.message}`;
-  // Anything thrown before a request was made: the client could not resolve credentials.
+  // Anything else thrown before a request was made: the client could not resolve credentials.
   return `no API key found. ${KEY_HELP} (${e instanceof Error ? e.message : String(e)})`;
 }
 
 function sdkTransport(client: Anthropic, model: string, maxOutputTokens: number): Transport {
   return async (system, messages, effort) => {
-    const message = await client.messages
-      .stream({ model, max_tokens: maxOutputTokens, system, messages, ...(effort ? { output_config: { effort } } : {}) })
-      .finalMessage();
+    const request = (withEffort: boolean) =>
+      client.messages
+        .stream({ model, max_tokens: maxOutputTokens, system, messages, ...(withEffort && effort ? { output_config: { effort } } : {}) })
+        .finalMessage();
+
+    let message: Anthropic.Message;
+    let effortDropped = false;
+    try {
+      message = await request(true);
+    } catch (e) {
+      // A model that does not accept the effort parameter answers 400. Try once without it, then explain.
+      if (!(effort && e instanceof Anthropic.BadRequestError)) throw new Error(explainApiFailure(e, model));
+      try {
+        message = await request(false);
+        effortDropped = true;
+      } catch (again) {
+        throw new Error(explainApiFailure(again, model));
+      }
+    }
+
     if (message.stop_reason === "refusal") {
       throw new Error(`the model refused the request${message.stop_details?.explanation ? ": " + message.stop_details.explanation : ""}`);
     }
@@ -170,6 +192,6 @@ function sdkTransport(client: Anthropic, model: string, maxOutputTokens: number)
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
       .map((block) => block.text)
       .join("");
-    return { text, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens };
+    return { text, inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens, effortDropped };
   };
 }

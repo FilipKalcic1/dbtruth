@@ -64,6 +64,7 @@ test("a SQL error is a skipped measurement, not a crash", async () => {
     const bad = await db.query("SELECT no_such_column FROM customers");
     assert.equal(bad.ok, false);
     assert.equal(!bad.ok && bad.reason, "error");
+    assert.equal(!bad.ok && bad.sqlState, "42703", "the SQLSTATE travels with the error so callers can tell a datatype problem from a missing column");
     const next = await db.query("SELECT 1 AS one");
     assert.equal(next.ok, true);
   } finally {

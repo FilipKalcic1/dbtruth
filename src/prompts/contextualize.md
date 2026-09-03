@@ -7,7 +7,9 @@ any type, and its values were withheld. You still know its name, type, null
 rate, distinct count and longest value, and for a hidden date or timestamp
 column "years": the years of its oldest and newest value. Declared primary
 and foreign key columns are always shown. Columns with few short distinct
-values carry a "values" list: every distinct value seen on the sample.
+values carry a "values" list: every distinct value seen on the sample. A
+"rowEstimate" of -1 means the size is unknown but at least the sample size;
+it is not an empty relation.
 
 A view carries its SQL in "definition": it has no rows of its own, so never
 call a view dead or a duplicate of the tables it reads. A materialized view

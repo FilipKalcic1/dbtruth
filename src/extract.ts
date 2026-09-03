@@ -2,29 +2,31 @@
 //
 // Per relation (table, view, materialized view): schema, row estimate, one bounded
 // sample from which null rate, distinct count and longest value are computed inside
-// the database (the sample never leaves it), a few rows shown with high-cardinality
-// columns hidden, and the full list of distinct values for categorical columns.
+// the database (the sample never leaves it), a few rows shown with only the visible
+// columns selected, and the full list of distinct values for categorical columns.
 //
-// Visibility is one rule for every type: a column's values are shown when it is
-// categorical (few distinct values, none long) or when it is a declared key (primary
-// key or foreign key column, an identifier by declaration). Everything else is
-// "[hidden]"; the model keeps the name, type, null rate, distinct count, longest value,
-// and for dates and timestamps the year range.
+// Visibility is one rule for every type. A column's values are shown when it is
+// categorical: few distinct values, none long, and at least one value that repeats,
+// so a small table's per-row identifiers stay hidden too. Declared primary and foreign
+// key columns are shown unless they are text, an identifier by declaration. Everything
+// else is "[hidden]"; the model keeps the name, type, null rate, distinct count, longest
+// value, and for dates and timestamps the year range.
 //
 // A partitioned table stands for its partitions: one logical table, with the number
 // of partitions and how many carry foreign keys of their own.
 //
 // The three catalog reads (relations, columns, keys) run outside the time budget so a
-// tiny budget still yields a complete schema; the budget governs per-relation sampling.
+// tiny budget still yields a complete schema; sampling stops at its share of the budget
+// so that verifying claims keeps the rest.
 
 import type { Config } from "./config.js";
-import { q, qualified, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
+import { bareName, q, qualified, querySampled, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
 import type { Column, Extract, RelationKind, Table } from "./schemas.js";
 
 export type ExtractOptions = {
   /** false: send schema and statistics only, no sample rows and no value lists. */
   samples: boolean;
-  /** "table.column" entries whose values are shown even when they would be hidden. */
+  /** "table.column" or "schema.table.column" entries whose values are shown even when they would be hidden. */
   reveal: Set<string>;
 };
 
@@ -36,6 +38,8 @@ export async function extract(db: Db, cfg: Config, opts: ExtractOptions): Promis
   const columnsByOid = await listColumns(db, oids);
   const keysByOid = await listKeys(db, oids, all, columnsByOid);
   const partitionsByParent = summarizePartitions(all, keysByOid);
+  const extractBudgetMs = db.budget().budgetMs * cfg.extractBudgetShare;
+  const matchedReveal = new Set<string>();
 
   const tables: Table[] = [];
   const skipped: string[] = [];
@@ -43,7 +47,7 @@ export async function extract(db: Db, cfg: Config, opts: ExtractOptions): Promis
   for (const rel of all) {
     if (rel.isPartition) continue;
     const name = displayName(rel.schema, rel.table);
-    if (db.budget().exhausted) {
+    if (db.budget().spentMs >= extractBudgetMs) {
       skipped.push(name);
       continue;
     }
@@ -68,7 +72,7 @@ export async function extract(db: Db, cfg: Config, opts: ExtractOptions): Promis
       })),
       samples: [],
     };
-    tables.push(await profile(db, cfg, opts, base));
+    tables.push(await profile(db, cfg, opts, base, matchedReveal));
   }
 
   return {
@@ -76,7 +80,29 @@ export async function extract(db: Db, cfg: Config, opts: ExtractOptions): Promis
     tables,
     skipped,
     schemaTokens: Math.ceil(JSON.stringify(schemaOnly(tables)).length / cfg.charsPerToken),
+    unmatchedReveal: [...opts.reveal].filter((r) => !matchedReveal.has(r)),
   };
+}
+
+/**
+ * The extract, reduced until it fits the model's input ceiling: first sample rows go, then value
+ * lists, then whole tables from the end of the list into `skipped`. The note says what was dropped.
+ */
+export function fitToContext(extract: Extract, cfg: Config): { extract: Extract; reduced?: string } {
+  const tokens = (e: Extract) => Math.ceil(JSON.stringify(e).length / cfg.charsPerToken);
+  if (tokens(extract) <= cfg.modelMaxInputTokens) return { extract };
+
+  let e: Extract = { ...extract, tables: extract.tables.map((t) => ({ ...t, samples: [] })) };
+  if (tokens(e) <= cfg.modelMaxInputTokens) return { extract: e, reduced: "sample rows dropped to fit the model's input limit" };
+
+  e = { ...e, tables: e.tables.map((t) => ({ ...t, columns: t.columns.map(({ values: _values, ...c }) => c) })) };
+  if (tokens(e) <= cfg.modelMaxInputTokens) return { extract: e, reduced: "sample rows and value lists dropped to fit the model's input limit" };
+
+  const kept = [...e.tables];
+  const skipped = [...e.skipped];
+  while (kept.length > 1 && tokens({ ...e, tables: kept, skipped }) > cfg.modelMaxInputTokens) skipped.push(kept.pop()!.name);
+  const dropped = skipped.length - e.skipped.length;
+  return { extract: { ...e, tables: kept, skipped }, reduced: `sample rows, value lists and ${dropped} tables dropped to fit the model's input limit` };
 }
 
 // ---------- catalog queries ----------
@@ -96,8 +122,8 @@ type Relation = {
 
 async function listRelations(db: Db): Promise<Relation[]> {
   const r = await db.catalog(
-    `SELECT c.oid::int AS oid, n.nspname AS schema, c.relname AS "table", c.relkind::text AS relkind,
-            c.relispartition AS is_partition, i.inhparent::int AS parent, c.relispopulated AS populated,
+    `SELECT c.oid::bigint AS oid, n.nspname AS schema, c.relname AS "table", c.relkind::text AS relkind,
+            c.relispartition AS is_partition, i.inhparent::bigint AS parent, c.relispopulated AS populated,
             c.reltuples::float8 AS estimate, obj_description(c.oid, 'pg_class') AS comment,
             CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid, true) END AS definition
        FROM pg_class c
@@ -122,7 +148,7 @@ async function listRelations(db: Db): Promise<Relation[]> {
       ...(row.comment ? { comment: String(row.comment) } : {}),
       ...(row.definition ? { definition: String(row.definition).trim() } : {}),
       ...(kind === "materialized view" ? { populated: Boolean(row.populated) } : {}),
-      // A plain view has no rows of its own: the sample decides its size.
+      // A plain view has no rows of its own; a never-analyzed table reports -1. The sample decides.
       rowEstimate: kind === "view" ? -1 : Number(row.estimate),
     };
   });
@@ -132,7 +158,7 @@ type ColumnBase = Pick<Column, "name" | "type" | "nullable" | "comment"> & { att
 
 async function listColumns(db: Db, oids: number[]): Promise<Map<number, ColumnBase[]>> {
   const r = await db.catalog(
-    `SELECT a.attrelid::int AS oid, a.attnum::int AS attnum, a.attname AS name,
+    `SELECT a.attrelid::bigint AS oid, a.attnum::int AS attnum, a.attname AS name,
             format_type(a.atttypid, a.atttypmod) AS type, NOT a.attnotnull AS nullable,
             col_description(a.attrelid, a.attnum) AS comment
        FROM pg_attribute a
@@ -158,42 +184,33 @@ async function listColumns(db: Db, oids: number[]): Promise<Map<number, ColumnBa
 
 type Keys = { primaryKey: string[] | null; foreignKeys: Table["foreignKeys"]; localForeignKeys: number };
 
-async function listKeys(
-  db: Db,
-  oids: number[],
-  relations: Relation[],
-  columnsByOid: Map<number, ColumnBase[]>,
-): Promise<Map<number, Keys>> {
+async function listKeys(db: Db, oids: number[], relations: Relation[], columnsByOid: Map<number, ColumnBase[]>): Promise<Map<number, Keys>> {
   const r = await db.catalog(
-    `SELECT conrelid::int AS oid, contype::text AS contype, conkey, confrelid::int AS refoid, confkey,
+    `SELECT conrelid::bigint AS oid, contype::text AS contype, conkey, confrelid::bigint AS refoid, confkey,
             (conparentid = 0) AS local
        FROM pg_constraint
       WHERE contype IN ('p', 'f') AND conrelid = ANY($1::oid[])`,
     [oids],
   );
   if (!r.ok) throw new Error(`could not list constraints: ${r.message}`);
-  const nameOf = (oid: number, attnum: number) => columnsByOid.get(oid)?.find((c) => c.attnum === attnum)?.name;
-  const tableName = (oid: number) => {
-    const rel = relations.find((x) => x.oid === oid);
-    return rel ? displayName(rel.schema, rel.table) : undefined;
-  };
+  const nameByOid = new Map(relations.map((rel) => [rel.oid, displayName(rel.schema, rel.table)]));
+  const columnNames = new Map<number, Map<number, string>>();
+  for (const [oid, cols] of columnsByOid) columnNames.set(oid, new Map(cols.map((c) => [c.attnum, c.name])));
+  const nameOf = (oid: number, attnum: number) => columnNames.get(oid)?.get(attnum) ?? "?";
+
   const out = new Map<number, Keys>();
   for (const row of r.rows) {
     const oid = Number(row.oid);
     const keys = out.get(oid) ?? { primaryKey: null, foreignKeys: [], localForeignKeys: 0 };
-    const conkey = (row.conkey as number[]).map((n) => nameOf(oid, Number(n)) ?? "?");
+    const conkey = (row.conkey as number[]).map((n) => nameOf(oid, Number(n)));
     if (row.contype === "p") {
       keys.primaryKey = conkey;
     } else {
       if (row.local) keys.localForeignKeys += 1;
       const refoid = Number(row.refoid);
-      const refTable = tableName(refoid);
+      const refTable = nameByOid.get(refoid);
       const confkey = (row.confkey as number[]).map((n) => Number(n));
-      if (refTable) {
-        conkey.forEach((column, i) => {
-          keys.foreignKeys.push({ column, refTable, refColumn: nameOf(refoid, confkey[i]!) ?? "?" });
-        });
-      }
+      if (refTable) conkey.forEach((column, i) => keys.foreignKeys.push({ column, refTable, refColumn: nameOf(refoid, confkey[i]!) }));
     }
     out.set(oid, keys);
   }
@@ -215,75 +232,86 @@ function summarizePartitions(relations: Relation[], keysByOid: Map<number, Keys>
 
 // ---------- per-relation profiling ----------
 
-async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table): Promise<Table> {
+export type ColumnStats = { nonNull: number; distinct: number; maxLength: number };
+
+/** Few distinct values, none long, and at least one that repeats. The one rule, for every type. */
+export function isCategorical(s: ColumnStats, cfg: Pick<Config, "categoricalMaxDistinct" | "categoricalMaxValueLength">): boolean {
+  return s.distinct >= 1 && s.distinct <= cfg.categoricalMaxDistinct && s.maxLength <= cfg.categoricalMaxValueLength && s.distinct < s.nonNull;
+}
+
+async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, matchedReveal: Set<string>): Promise<Table> {
   const cols = table.columns;
   if (cols.length === 0) return table;
+
   const keyColumns = new Set([...(table.primaryKey ?? []), ...table.foreignKeys.map((f) => f.column)]);
-  const shownRegardless = (c: Column) => keyColumns.has(c.name) || opts.reveal.has(`${table.name}.${c.name}`);
+  // Every reveal entry that names one of this relation's columns is matched up front, whatever else decides visibility.
+  const revealed = new Set<string>();
+  for (const c of cols) {
+    for (const key of [`${bareName(table)}.${c.name}`, `${table.schema}.${bareName(table)}.${c.name}`]) {
+      if (opts.reveal.has(key)) {
+        matchedReveal.add(key);
+        revealed.add(c.name);
+      }
+    }
+  }
+  const shownRegardless = (c: Column) => (keyColumns.has(c.name) && typeFamily(c.type) !== "text") || revealed.has(c.name);
+  const keysOnly = () => ({ ...table, columns: cols.map((c) => ({ ...c, visible: shownRegardless(c) })) });
 
   // A materialized view that was never refreshed cannot be read at all: schema only, nothing shown.
-  if (table.populated === false) return { ...table, rowEstimate: 0, columns: cols.map((c) => ({ ...c, visible: shownRegardless(c) })) };
+  if (table.populated === false) return { ...keysOnly(), rowEstimate: 0 };
 
   // Null rate, distinct count, longest value, and for dates the year range: inside the database, over the bounded sample.
   const aggregates = cols
     .map((c, i) => {
       const base = `count(${q(c.name)}) AS nn${i}, count(DISTINCT ${q(c.name)}::text) AS d${i}, max(length(${q(c.name)}::text)) AS l${i}`;
       return typeFamily(c.type) === "time"
-        ? `${base}, date_part('year', min(${q(c.name)}))::int AS y0${i}, date_part('year', max(${q(c.name)}))::int AS y1${i}`
+        ? `${base}, date_part('year', min(${q(c.name)}))::float8 AS y0${i}, date_part('year', max(${q(c.name)}))::float8 AS y1${i}`
         : base;
     })
     .join(", ");
-  let source = sampleSource(table, cfg);
-  let stats = await db.query(`SELECT count(*) AS n, ${aggregates} FROM ${source} s`);
-  if (!stats.ok && stats.reason === "error" && source.includes("TABLESAMPLE")) {
+  const statsQuery = (source: string) => `SELECT count(*) AS n, ${aggregates} FROM ${source} s`;
+  let { source, result: stats } = await querySampled(db, table, cfg, statsQuery);
+  // A random page sample can come back empty on a table whose estimate is stale; the plain form settles it.
+  if (stats.ok && Number(stats.rows[0]?.n) === 0 && source !== sampleSource(table, cfg, false)) {
     source = sampleSource(table, cfg, false);
-    stats = await db.query(`SELECT count(*) AS n, ${aggregates} FROM ${source} s`);
+    stats = await db.query(statsQuery(source));
   }
-  if (!stats.ok) {
-    // Statistics unavailable: keep the schema, show only declared keys, sample nothing.
-    return { ...table, columns: cols.map((c) => ({ ...c, visible: shownRegardless(c) })) };
-  }
+  if (!stats.ok) return keysOnly(); // statistics unavailable: keep the schema, show only declared keys, sample nothing
 
   const row = stats.rows[0] as Row;
   const n = Number(row.n);
-  const rowEstimate = table.rowEstimate < 0 ? n : table.rowEstimate; // never analyzed, or a view: use what the sample saw
+  // A plain LIMIT that came back short counted the whole relation; a sample that filled up says only "at least this many".
+  const rowEstimate = source === sampleSource(table, cfg, false) && n < cfg.sampleRows ? n : table.rowEstimate < 0 ? -1 : table.rowEstimate;
   const columns: Column[] = cols.map((c, i) => {
-    const distinct = Number(row[`d${i}`]);
-    const nonNull = Number(row[`nn${i}`]);
-    const maxLength = Number(row[`l${i}`] ?? 0);
-    const categorical = distinct <= cfg.categoricalMaxDistinct && maxLength <= cfg.categoricalMaxValueLength;
-    const visible = categorical || shownRegardless(c);
-    const years = row[`y0${i}`] !== null && row[`y0${i}`] !== undefined ? ([Number(row[`y0${i}`]), Number(row[`y1${i}`])] as [number, number]) : undefined;
-    return { ...c, nullRate: n === 0 ? 0 : 1 - nonNull / n, distinct, maxLength, visible, ...(years && !visible ? { years } : {}) };
+    const s: ColumnStats = { nonNull: Number(row[`nn${i}`]), distinct: Number(row[`d${i}`]), maxLength: Number(row[`l${i}`] ?? 0) };
+    const visible = isCategorical(s, cfg) || shownRegardless(c);
+    const y0 = Number(row[`y0${i}`]);
+    const y1 = Number(row[`y1${i}`]);
+    const years = !visible && row[`y0${i}`] !== null && row[`y0${i}`] !== undefined && Number.isFinite(y0) && Number.isFinite(y1);
+    return { ...c, nullRate: n === 0 ? 0 : 1 - s.nonNull / n, distinct: s.distinct, maxLength: s.maxLength, visible, ...(years ? { years: [y0, y1] as [number, number] } : {}) };
   });
 
-  if (!opts.samples) return { ...table, rowEstimate, columns };
+  if (!opts.samples || n === 0) return { ...table, rowEstimate, columns };
 
-  // Every distinct value of the categorical, visible columns.
-  const listed = columns.filter(
-    (c) => c.visible && c.distinct > 0 && c.distinct <= cfg.categoricalMaxDistinct && c.maxLength <= cfg.categoricalMaxValueLength,
-  );
-  if (listed.length > 0) {
-    const lists = listed.map((c, i) => `array_agg(DISTINCT ${q(c.name)}::text) AS v${i}`).join(", ");
-    const values = await db.query(`SELECT ${lists} FROM ${source} s`);
-    if (values.ok) {
-      const vrow = values.rows[0] as Row;
+  // One statement over the same sample: every distinct value of each categorical column, and a few
+  // rows with only the visible columns selected. Hidden values never leave the database.
+  const listed = columns.filter((c) => c.visible && isCategorical({ nonNull: n, distinct: c.distinct, maxLength: c.maxLength }, cfg));
+  const shown = columns.filter((c) => c.visible);
+  const parts = listed.map((c, i) => `(SELECT array_agg(DISTINCT ${q(c.name)}::text) FROM s) AS v${i}`);
+  if (shown.length > 0) parts.push(`(SELECT json_agg(r) FROM (SELECT ${shown.map((c) => q(c.name)).join(", ")} FROM s LIMIT ${cfg.sampleRowsShown}) r) AS shown`);
+  let samples: Record<string, unknown>[] = [];
+  if (parts.length > 0) {
+    const detail = await db.query(`WITH s AS MATERIALIZED (SELECT * FROM ${source} src) SELECT ${parts.join(", ")}`);
+    if (detail.ok) {
+      const drow = detail.rows[0] as Row;
       listed.forEach((c, i) => {
-        const v = vrow[`v${i}`];
+        const v = drow[`v${i}`];
         if (Array.isArray(v)) c.values = v.filter((x) => x !== null);
       });
+      const rows = Array.isArray(drow.shown) ? (drow.shown as Record<string, unknown>[]) : [];
+      samples = rows.map((r) => Object.fromEntries(columns.map((c) => [c.name, c.visible ? r[c.name] : HIDDEN])));
     }
   }
-
-  // A few rows shown, with cells hidden per column.visible.
-  const shown = await db.query(`SELECT * FROM ${qualified(table)} LIMIT ${cfg.sampleRowsShown}`);
-  const samples = shown.ok
-    ? shown.rows.map((r) => {
-        const cell: Record<string, unknown> = {};
-        for (const c of columns) cell[c.name] = c.visible || r[c.name] === null ? r[c.name] : HIDDEN;
-        return cell;
-      })
-    : [];
 
   return { ...table, rowEstimate, columns, samples };
 }

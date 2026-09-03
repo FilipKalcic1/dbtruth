@@ -37,6 +37,8 @@ test("dead_table: empty or stale is confirmed, otherwise rejected", () => {
   assert.equal(decide(m("dead_table", { count: 10, ageDays: config.staleAfterDays + 1 }), config).status, "confirmed");
   assert.equal(decide(m("dead_table", { count: 10, ageDays: 1 }), config).status, "rejected");
   assert.equal(decide(m("dead_table", { count: 10 }), config).status, "rejected");
+  assert.equal(decide(m("dead_table", { ageDays: config.staleAfterDays + 1 }), config).status, "confirmed", "age alone can prove death");
+  assert.equal(decide(m("dead_table", { exact: 0 }), config).status, "unverifiable", "neither count nor age: nothing to decide on");
 });
 
 test("inconsistent_values: any canonical-form collision confirms", () => {
@@ -78,7 +80,7 @@ test("exit code is 2 for a broken relationship or a confirmed suspicion, else 0"
 });
 
 test("fitsInContext is measured in tokens against config, and never true when tables were skipped", () => {
-  const e = (schemaTokens: number, skipped: string[] = []): Extract => ({ database: "x", tables: [], skipped, schemaTokens });
+  const e = (schemaTokens: number, skipped: string[] = []): Extract => ({ database: "x", tables: [], skipped, schemaTokens, unmatchedReveal: [] });
   assert.equal(fitsInContext(e(config.fitsInContextTokens), config), true);
   assert.equal(fitsInContext(e(config.fitsInContextTokens + 1), config), false);
   assert.equal(fitsInContext(e(10, ["big"]), config), false);

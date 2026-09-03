@@ -53,6 +53,21 @@ test("300 tables: the budget is respected and output still renders", async () =>
   assert.ok(existsSync(join(cwd, "context", "README.md")));
 });
 
+test("an extract over the model's input limit is trimmed before it is sent, and the disclosure says so", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "dbtruth-scale-"));
+  const err: string[] = [];
+  let sent: Extract | undefined;
+  const transport: Transport = async (system, messages) => {
+    if (system.includes("writing reference files")) return JSON.stringify({ "context/README.md": "# scale" });
+    sent = JSON.parse(messages[0]!.content as string) as Extract;
+    return JSON.stringify({ entities: [], tables: [], relationships: [], suspicions: [], questions: [] });
+  };
+  await run({ url: SCALE_URL, samples: true, reveal: [], json: false, flags: { modelMaxInputTokens: "30000" }, cwd, env: {}, out: () => {}, err: (l) => err.push(l) }, { transport });
+  assert.ok(sent, "the model was called");
+  assert.ok(sent!.tables.every((t) => t.samples.length === 0), "sample rows were dropped");
+  assert.ok(err.some((l) => /dropped to fit the model's input limit/.test(l)), "the disclosure line names the reduction");
+});
+
 test("300 tables with the full budget: every table extracted", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "dbtruth-scale-"));
   const out: string[] = [];

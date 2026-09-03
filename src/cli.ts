@@ -2,19 +2,19 @@
 // cli.ts: orchestrates one run, in order. Nothing else.
 
 import { Command } from "commander";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { realpathSync } from "node:fs";
+import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { effortFor, resolveConfig, overridable, type Overrides } from "./config.js";
+import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Overrides } from "./config.js";
 import { contextualize } from "./contextualize.js";
-import { extract } from "./extract.js";
+import { extract, fitToContext } from "./extract.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
 import { connect, readDotEnv, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
 import { assemble, EXIT_FAILURE, exitCode } from "./verdict.js";
 import { verify } from "./verify.js";
-import { OUTPUT_DIR, write } from "./write.js";
+import { OUTPUT_DIR, persist, write } from "./write.js";
 
 export type RunOptions = {
   url?: string;
@@ -57,29 +57,30 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
   // 2. Connect through safety, prove read-only.
   const db = await connect(url, { ...cfg, warn: opts.err });
   try {
-    // 3. Extract.
-    const extracted = await extract(db, cfg, { samples: opts.samples, reveal: new Set(opts.reveal) });
+    // 3. Extract, then trim to what the model can take.
+    const raw = await extract(db, cfg, { samples: opts.samples, reveal: new Set(opts.reveal) });
+    for (const miss of raw.unmatchedReveal) opts.err(`--reveal ${miss}: no such column, nothing revealed`);
+    const { extract: extracted, reduced } = fitToContext(raw, cfg);
     const effort = effortFor(extracted.schemaTokens, cfg);
 
     // 4. Disclosure, before the first call that carries data. Human-facing lines go to stderr so --json stays clean.
     opts.err(
       `Sending to ${model} at effort ${effort}${cfg.modelEffort === "auto" ? ` (by schema size, ${extracted.schemaTokens} tokens)` : ""}: ` +
         `${extracted.tables.length} relations (${describeKinds(extracted.tables)})` +
-        (extracted.skipped.length ? ` (${extracted.skipped.length} skipped, over budget)` : "") +
+        (extracted.skipped.length ? ` (${extracted.skipped.length} skipped)` : "") +
         `, schema and per-column statistics, ` +
         (opts.samples
           ? `${cfg.sampleRowsShown} sample rows per table with high-cardinality columns hidden (--no-samples off, --reveal: ${opts.reveal.length ? opts.reveal.join(", ") : "none"})`
           : `no sample rows (--no-samples on, --reveal ignored)`) +
+        (reduced ? `; ${reduced}` : "") +
         `. Nothing else leaves this machine.`,
     );
 
     // 5. Contextualize. 6. Verify. 7. Write. One progress line each, so a person can see it working.
-    const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
     const t0 = performance.now();
     const claims = await contextualize(ai, extracted, { effort });
     const t1 = performance.now();
-    const claimCount = claims.relationships.length + claims.suspicions.length;
-    opts.err(`contextualize: ${claims.tables.length} tables described, ${claimCount} claims to test, ${seconds(t1 - t0)}`);
+    opts.err(`contextualize: ${claims.tables.length} tables described, ${claims.relationships.length + claims.suspicions.length} claims to test, ${seconds(t1 - t0)}`);
     const measurements = await verify(db, cfg, extracted, claims);
     const verified = assemble(extracted, claims, measurements, cfg);
     const t2 = performance.now();
@@ -89,15 +90,13 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
     opts.err(`write: ${Object.keys(files).length} files, ${seconds(modelMs.write)}`);
 
     // 8. Write files, print the summary, exit.
-    for (const [path, markdown] of Object.entries(files)) {
-      const full = join(opts.cwd, path);
-      mkdirSync(dirname(full), { recursive: true });
-      writeFileSync(full, markdown);
-    }
+    const saved = persist(opts.cwd, files);
+    for (const f of saved.failed) opts.err(`could not write ${f.path}: ${f.error}`);
     if (opts.json) opts.out(JSON.stringify(verified, null, 2));
-    for (const line of summary(verified, Object.keys(files).length, db.budget().spentMs, modelMs)) opts.err(line);
+    for (const line of summary(verified, saved.written.length, db.budget().spentMs, modelMs)) opts.err(line);
     const used = ai.usage();
     if (used.inputTokens > 0) opts.err(`tokens: ${used.inputTokens} in, ${used.outputTokens} out, ${used.calls} calls`);
+    if (used.effortDropped) opts.err(`note: ${model} did not accept the effort parameter; the calls ran at its default effort`);
     return exitCode(verified);
   } finally {
     await db.close();
@@ -105,9 +104,7 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
 }
 
 function summary(v: Verified, fileCount: number, spentMs: number, modelMs: { contextualize: number; write: number }): string[] {
-  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-  const count = (prefix: string, status: string) =>
-    Object.entries(v.verdicts).filter(([id, x]) => id.startsWith(prefix) && x.status === status).length;
+  const count = (prefix: string, status: string) => Object.entries(v.verdicts).filter(([id, x]) => id.startsWith(prefix) && x.status === status).length;
   const rel = (s: string) => count("relationship:", s);
   const sus = (s: string) => count("suspicion:", s);
   const broken = Object.entries(v.verdicts)
@@ -132,7 +129,8 @@ export async function main(argv: string[]): Promise<number> {
     .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
     .option("--reveal <table.column>", "show one hidden column's values to the model (repeatable)", collect)
     .option("--no-samples", "send schema and statistics only, no sample rows")
-    .option("--json", "print the Verified object as JSON to stdout");
+    .option("--json", "print the Verified object as JSON to stdout")
+    .option(`--${EFFORT_FLAG} <level>`, `auto, low, medium, high, xhigh or max (env ${EFFORT_ENV})`);
   for (const o of overridable) program.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
   program.parse(argv);
   const o = program.opts();
@@ -141,6 +139,7 @@ export async function main(argv: string[]): Promise<number> {
     const v = o[camel(item.flag)];
     if (v !== undefined) flags[item.path] = String(v);
   }
+  if (o[camel(EFFORT_FLAG)] !== undefined) flags.modelEffort = String(o[camel(EFFORT_FLAG)]);
   try {
     return await run({
       url: o.url,
@@ -159,14 +158,16 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
+function seconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 /** "9 tables, 1 view" from a list of relations, naming only the kinds present. */
 function describeKinds(relations: { kind: string; partitions?: { count: number } }[]): string {
   const order = ["table", "view", "materialized view"];
   const counts = new Map<string, number>();
   for (const r of relations) counts.set(r.kind, (counts.get(r.kind) ?? 0) + 1);
-  const parts = [...counts]
-    .sort(([a], [b]) => order.indexOf(a) - order.indexOf(b))
-    .map(([kind, n]) => `${n} ${kind}${n === 1 ? "" : "s"}`);
+  const parts = [...counts].sort(([a], [b]) => order.indexOf(a) - order.indexOf(b)).map(([kind, n]) => `${n} ${kind}${n === 1 ? "" : "s"}`);
   const partitioned = relations.filter((r) => r.partitions).length;
   if (partitioned > 0) parts.push(`${partitioned} partitioned`);
   return parts.join(", ");

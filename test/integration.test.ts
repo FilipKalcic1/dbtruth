@@ -162,10 +162,13 @@ test("--no-samples sends statistics only", async () => {
   assert.doesNotMatch(model.requests[0]!, CANARY);
 });
 
-test("--reveal shows exactly one hidden column", async () => {
+test("--reveal shows exactly one hidden column, and reports an entry that names no column", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "dbtruth-it-"));
   const model = fakeModel();
-  await run({ url: FIXTURE_URL, samples: true, reveal: ["customers.country"], json: false, flags: {}, cwd, env: {}, out: () => {}, err: () => {} }, { transport: model.transport });
+  const err: string[] = [];
+  await run({ url: FIXTURE_URL, samples: true, reveal: ["customers.country", "nope.col"], json: false, flags: {}, cwd, env: {}, out: () => {}, err: (l) => err.push(l) }, { transport: model.transport });
+  assert.ok(err.some((l) => l.startsWith("--reveal nope.col: no such column")), "a typo is reported");
+  assert.ok(!err.some((l) => l.includes("customers.country: no such column")), "a real column is matched even when it is categorical anyway");
   const revealed = fakeModel();
   await run({ url: FIXTURE_URL, samples: true, reveal: ["customers.email"], json: false, flags: {}, cwd, env: {}, out: () => {}, err: () => {} }, { transport: revealed.transport });
   assert.doesNotMatch(model.requests[0]!, CANARY, "revealing a categorical column changes nothing");

@@ -9,17 +9,22 @@ it is written down.
 
 ## Quick start
 
-You need Node 20 or newer, a Postgres 11 or newer database you can read, and
+You need Node 20 or newer, a Postgres 12 or newer database you can read, and
 an Anthropic API key (create one at console.anthropic.com). Measured on
 schemas of up to 30 tables, one run costs between $0.10 and $0.25 of that key
 and takes one to two minutes, almost all of it waiting for the model.
 
-Put both settings in a `.env` file in the directory you run from:
+Put the settings in a `.env` file in the directory you run from:
 
 ```
 DATABASE_URL=postgres://user:password@host:5432/dbname
 ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=claude-sonnet-5     # optional; this is the default
 ```
+
+Any Claude model id works in `ANTHROPIC_MODEL`. The default is the current
+Sonnet-class model; a larger model costs more per run and, on the schemas
+measured so far, found the same things.
 
 Then:
 
@@ -62,17 +67,21 @@ code can reach the database.
 
 **Value visibility, the mechanism that replaces PII lists.** A column's values
 are shown to the model only if it is categorical, whatever its type: at most
-50 distinct values, none longer than 30 characters, measured on a sample. The
-one exception is a declared key, a primary key or foreign key column, which
-is an identifier by declaration. Everything else is sent as `"[hidden]"`,
-keeping only the column's name, type, null rate, distinct count, longest
-value, and for dates the years of its oldest and newest value. Names, emails,
-addresses, tokens, free text, and also national ids stored as numbers, phone
-numbers, birth dates and salaries, are all high-cardinality and fall out of
-the gate automatically; a constant secret such as a shared password hash is
-low-cardinality but long, and stays hidden too. There is no column-name
-matching anywhere in the code, so it does not depend on anyone having guessed
-your naming convention.
+50 distinct values, none longer than 30 characters, and at least one value
+that repeats, all measured on a sample. The one exception is a declared
+non-text key, a primary key or foreign key column, which is an identifier by
+declaration. Everything else is sent as `"[hidden]"`, and the hidden values
+are never even read out of the database: the sample rows shown to the model
+select only the visible columns. The model keeps the column's name, type,
+null rate, distinct count, longest value, and for dates the years of its
+oldest and newest value. Names, emails, addresses, tokens, free text, and
+also national ids stored as numbers, phone numbers, birth dates and salaries,
+all fall out of the gate automatically, on a 40-row table as much as on a
+40-million-row one, because a column where every row is different is an
+identifier whatever its count; a constant secret such as a shared password
+hash is low-cardinality but long, and stays hidden too. There is no
+column-name matching anywhere in the code, so it does not depend on anyone
+having guessed your naming convention.
 
 Escape hatches, explicit: `--reveal table.column` shows one column;
 `--no-samples` sends schema and statistics only (contextualize gets weaker;
@@ -180,8 +189,11 @@ variable or a flag (`npx dbtruth --help`). `--json` prints the full verified
 analysis as JSON. `ANTHROPIC_MODEL` picks the model. Almost all of a run is
 model time, and the reasoning effort is chosen by schema size: small schemas
 run at `low`, mid-sized at `medium`, large at `high`. On the fixture, `low`
-gave the same findings as `high` in under half the time. The bands live in
-`config.ts`; `DBTRUTH_MODEL_EFFORT` pins one level for every run.
+gave the same findings as `high` in under half the time. The band boundaries
+are tunables too; `DBTRUTH_MODEL_EFFORT` or `--model-effort` pins one level
+for every run. Every override is checked against the range its comment in
+`config.ts` describes, so a value that would hang or invert a verdict is
+refused before anything runs.
 
 ## What it does not do
 

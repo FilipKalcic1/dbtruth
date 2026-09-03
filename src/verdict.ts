@@ -22,7 +22,8 @@ export function decide(m: Measurement, cfg: Config): Verdict {
       return verdict("rejected");
     }
     case "dead_table": {
-      if (n.count === undefined) return verdict("unverifiable");
+      // Either number alone can prove death; with neither there is nothing to decide on.
+      if (n.count === undefined && n.ageDays === undefined) return verdict("unverifiable");
       const dead = n.count === 0 || (n.ageDays !== undefined && n.ageDays > cfg.staleAfterDays);
       return verdict(dead ? "confirmed" : "rejected");
     }
