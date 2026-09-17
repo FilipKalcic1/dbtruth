@@ -26,7 +26,7 @@ test("two names that differ only by case get distinct files", async () => {
     maxOutputTokens: 1,
     transport: async () => JSON.stringify({ "context/tables/Users.md": "a", "context/tables/users.md": "b", "context/tables/USERS.md": "c" }),
   });
-  const stub = { version: 1, database: "x", claims: { entities: [], tables: [], relationships: [], suspicions: [], questions: [] }, verdicts: {}, fitsInContext: true, tables: [] } as Verified;
+  const stub = { version: 1, database: "x", relations: "1 table", claims: { entities: [], tables: [], relationships: [], suspicions: [], questions: [] }, verdicts: {}, fitsInContext: true, tables: [] } as Verified;
   const files = await write(model, stub);
   assert.deepEqual(Object.keys(files), ["context/tables/Users.md", "context/tables/users~2.md", "context/tables/USERS~3.md"]);
 });

@@ -12,7 +12,7 @@ import { extract, fitToContext } from "./extract.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
 import { connect, readDotEnv, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
-import { assemble, EXIT_FAILURE, exitCode } from "./verdict.js";
+import { assemble, describeKinds, EXIT_FAILURE, exitCode } from "./verdict.js";
 import { verify } from "./verify.js";
 import { OUTPUT_DIR, persist, write } from "./write.js";
 
@@ -112,14 +112,31 @@ function summary(v: Verified, fileCount: number, spentMs: number, modelMs: { con
     .map(([id, x]) => `  ${id.slice("relationship:".length)}  hit rate ${(x.measurement.numbers.hit! * 100).toFixed(1)}%`);
   return [
     `dbtruth: ${v.database}`,
-    `relations: ${describeKinds(v.tables)}${v.fitsInContext ? " (fits in an agent's context)" : ""}`,
-    `relationships: ${rel("confirmed")} confirmed, ${rel("broken")} broken, ${rel("rejected")} rejected, ${rel("unverifiable")} unverifiable`,
+    `relations: ${v.relations}${v.fitsInContext ? " (fits in an agent's context)" : ""}`,
+    `relationships: ${rel("confirmed")} confirmed, ${rel("broken")} broken, ${rel("rejected")} rejected, ${rel("unverifiable")} unverifiable, ${rel("empty")} empty`,
     ...broken,
-    `suspicions: ${sus("confirmed")} confirmed, ${sus("rejected")} rejected, ${sus("unverifiable")} unverifiable`,
+    `suspicions: ${sus("confirmed")} confirmed, ${sus("rejected")} rejected, ${sus("unverifiable")} unverifiable, ${sus("empty")} empty`,
+    ...emptyClaims(v),
     `entities: ${v.claims.entities.length}, questions for a human: ${v.claims.questions.length}`,
     `files written: ${fileCount} under ./${OUTPUT_DIR}/`,
     `database time: ${seconds(spentMs)}, model time: ${seconds(modelMs.contextualize + modelMs.write)} (contextualize ${seconds(modelMs.contextualize)}, write ${seconds(modelMs.write)})`,
   ];
+}
+
+function emptyClaims(v: Verified): string[] {
+  const reasons = new Map<string, number>();
+  for (const verdict of Object.values(v.verdicts)) {
+    if (verdict.status !== "empty") continue;
+    const reason = verdict.skipped ?? "no reason given";
+    reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+  }
+  const total = [...reasons.values()].reduce((a, b) => a + b, 0);
+  if (total === 0) return [];
+  const ranked = [...reasons].sort(([, a], [, b]) => b - a);
+  const shown = ranked.slice(0, 3).map(([reason, n]) => `${n} ${reason}`);
+  const rest = ranked.slice(3);
+  if (rest.length > 0) shown.push(`${rest.reduce((sum, [, n]) => sum + n, 0)} for ${rest.length} other reasons`);
+  return [`empty: ${total} claim${total === 1 ? "" : "s"} with nothing to measure (${shown.join("; ")})`];
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -160,17 +177,6 @@ export async function main(argv: string[]): Promise<number> {
 
 function seconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
-}
-
-/** "9 tables, 1 view" from a list of relations, naming only the kinds present. */
-function describeKinds(relations: { kind: string; partitions?: { count: number } }[]): string {
-  const order = ["table", "view", "materialized view"];
-  const counts = new Map<string, number>();
-  for (const r of relations) counts.set(r.kind, (counts.get(r.kind) ?? 0) + 1);
-  const parts = [...counts].sort(([a], [b]) => order.indexOf(a) - order.indexOf(b)).map(([kind, n]) => `${n} ${kind}${n === 1 ? "" : "s"}`);
-  const partitioned = relations.filter((r) => r.partitions).length;
-  if (partitioned > 0) parts.push(`${partitioned} partitioned`);
-  return parts.join(", ");
 }
 
 function collect(value: string, previous: string[] = []): string[] {
