@@ -25,10 +25,12 @@ const cannedClaims = {
     { from: { table: "orders", column: "customer_id" }, to: { table: "customers", column: "id" }, basis: "inferred", confidence: 0.8, reason: "name" },
     { from: { table: "order_items", column: "order_id" }, to: { table: "orders", column: "id" }, basis: "stated", confidence: 1, reason: "fk" },
     { from: { table: "vehicles", column: "model_year" }, to: { table: "customers", column: "id" }, basis: "inferred", confidence: 0.2, reason: "control: a guess the data rejects" },
+    { from: { table: "cars", column: "customer_id" }, to: { table: "customers", column: "id" }, basis: "inferred", confidence: 0.5, reason: "control: an empty table has nothing to test" },
   ],
   suspicions: [
     { kind: "dead_table", tables: ["cars"], detail: "empty beside vehicles" },
     { kind: "inconsistent_values", tables: ["orders"], column: "status", detail: "shipped / SHIPPED" },
+    { kind: "inconsistent_values", tables: ["cars"], column: "make", detail: "control: an empty column has nothing to measure" },
     { kind: "duplicate_entity", tables: ["products", "products_legacy"], detail: "same columns and values" },
     { kind: "missing_key", tables: ["audit_log"], detail: "no primary key" },
     { kind: "dead_table", tables: ["order_totals"], detail: "materialized view never refreshed" },
@@ -97,8 +99,22 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   assert.equal(v["suspicion:missing_key:audit_log"]!.status, "confirmed");
   assert.equal(v["suspicion:dead_table:order_totals"]!.status, "confirmed", "an unpopulated materialized view is dead, from the catalog");
   assert.equal(v["suspicion:dead_table:order_totals"]!.measurement.numbers.populated, 0);
-  assert.equal(v["suspicion:other:customers"]!.status, "unverifiable");
+  assert.equal(v["suspicion:other:customers"]!.status, "unverifiable", "a claim no measurement exists for is still open");
   assert.equal(verified.fitsInContext, true);
+
+  const noRows = v["relationship:cars.customer_id->customers.id"]!;
+  assert.equal(noRows.status, "empty");
+  assert.equal(noRows.skipped, "no non-null rows to test");
+  assert.equal(noRows.measurement.numbers.total, 0);
+  assert.equal(v["suspicion:inconsistent_values:cars.make"]!.status, "empty", "an empty column is not proof that its values are consistent");
+  assert.ok(
+    err.some((l) => l === "empty: 2 claims with nothing to measure (2 no non-null rows to test)"),
+    `the summary collapses them into one line: ${JSON.stringify(err.filter((l) => l.startsWith("empty")))}`,
+  );
+
+  assert.equal(verified.relations, "9 tables, 1 view, 1 materialized view, 1 partitioned");
+  assert.ok(err.some((l) => l === `relations: ${verified.relations} (fits in an agent's context)`), "the summary reads the same count");
+  assert.match(model.requests[1]!, /9 tables, 1 view, 1 materialized view, 1 partitioned/, "the writer is handed the count rather than deriving one");
 
   assert.deepEqual(verified.tables.find((t) => t.name === "orders")!.categorical.status!.slice().sort(), ["Pending", "SHIPPED", "cancelled", "pending", "shipped"]);
 

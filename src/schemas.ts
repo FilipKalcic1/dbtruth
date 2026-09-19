@@ -137,11 +137,14 @@ export type Measurement = {
   numbers: Record<string, number>;
   /** set when the measurement could not be taken: timeout, budget, error, or no way to measure */
   skipped?: string;
+  /** the source held no rows to measure. Only ever set alongside `skipped`. */
+  empty?: boolean;
 };
 
 export type Verdict = {
-  status: "confirmed" | "broken" | "rejected" | "unverifiable";
+  status: "confirmed" | "broken" | "rejected" | "unverifiable" | "empty";
   measurement: { query: string; numbers: Record<string, number> };
+  skipped?: string;
 };
 
 /** Per-relation facts the writer needs that claims do not carry: kind, key, size, categorical values. */
@@ -152,6 +155,8 @@ export type TableFacts = Pick<Table, "name" | "kind" | "partitions" | "rowEstima
 export type Verified = {
   version: 1;
   database: string;
+  /** the relations examined, by kind: "9 tables, 1 view" */
+  relations: string;
   claims: Claims;
   verdicts: Record<string, Verdict>;
   fitsInContext: boolean;

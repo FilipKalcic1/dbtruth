@@ -2,9 +2,10 @@
 //
 // This module knows nothing about thresholds. It runs the query, returns the
 // numbers and the query text, and marks a measurement `skipped` when it could
-// not be taken (timeout, budget, unknown table, no way to measure). Claims are
-// measured strongest first, so when the budget runs out it is the weakest that
-// go unverified.
+// not be taken (timeout, budget, unknown table, no way to measure), and also
+// `empty` when the source held no rows to measure. Claims are measured
+// strongest first, so when the budget runs out it is the weakest that go
+// unverified.
 
 import type { Config } from "./config.js";
 import { bareName, DATATYPE_MISMATCH_STATES, q, qualified, querySampled, typeFamily, type Db, type QueryResult } from "./safety.js";
@@ -28,7 +29,7 @@ async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimI
   const to = findTable(extract, r.to.table);
   if (!from) return skip(claimId, kind, `unknown table ${r.from.table}`);
   if (!to) return skip(claimId, kind, `unknown table ${r.to.table}`);
-  if (unpopulated(from) || unpopulated(to)) return skip(claimId, kind, NEVER_REFRESHED);
+  if (unpopulated(from) || unpopulated(to)) return skipEmpty(claimId, kind, NEVER_REFRESHED);
   if (!hasColumn(from, r.from.column)) return skip(claimId, kind, `unknown column ${r.from.table}.${r.from.column}`);
   if (!hasColumn(to, r.to.column)) return skip(claimId, kind, `unknown column ${r.to.table}.${r.to.column}`);
 
@@ -45,7 +46,7 @@ SELECT count(*) AS total,
   if (!result.ok) return skip(claimId, kind, result.message, query);
   const total = Number(result.rows[0]?.total);
   const hits = Number(result.rows[0]?.hits);
-  if (total === 0) return skip(claimId, kind, "no non-null rows to test", query, { total });
+  if (total === 0) return skipEmpty(claimId, kind, EMPTY_SOURCE, query, { total });
   return { claimId, kind, query, numbers: { total, hits, orphans: total - hits, hit: hits / total } };
 }
 
@@ -112,7 +113,7 @@ async function measureInconsistentValues(db: Db, cfg: Config, extract: Extract, 
   const kind = s.kind;
   const table = findTable(extract, s.tables[0]);
   if (!table) return skip(claimId, kind, `unknown table ${s.tables[0]}`);
-  if (unpopulated(table)) return skip(claimId, kind, NEVER_REFRESHED);
+  if (unpopulated(table)) return skipEmpty(claimId, kind, NEVER_REFRESHED);
   if (!s.column) return skip(claimId, kind, "no column named");
   if (!hasColumn(table, s.column)) return skip(claimId, kind, `unknown column ${table.name}.${s.column}`);
 
@@ -123,6 +124,7 @@ async function measureInconsistentValues(db: Db, cfg: Config, extract: Extract, 
   const distinctValues = Number(result.rows[0]?.distinct_values);
   const canonicalForms = Number(result.rows[0]?.canonical_forms);
   const numbers = { distinctValues, canonicalForms, collisions: distinctValues - canonicalForms };
+  if (distinctValues === 0) return skipEmpty(claimId, kind, EMPTY_SOURCE, query, numbers);
   if (distinctValues > cfg.categoricalMaxDistinct) return skip(claimId, kind, `not categorical: ${distinctValues} distinct values`, query, numbers);
   return { claimId, kind, query, numbers };
 }
@@ -133,7 +135,7 @@ async function measureDuplicateEntity(db: Db, cfg: Config, extract: Extract, cla
   const a = findTable(extract, s.tables[0]);
   const b = findTable(extract, s.tables[1]);
   if (!a || !b) return skip(claimId, kind, `needs two known tables, got ${s.tables.join(", ")}`);
-  if (unpopulated(a) || unpopulated(b)) return skip(claimId, kind, NEVER_REFRESHED);
+  if (unpopulated(a) || unpopulated(b)) return skipEmpty(claimId, kind, NEVER_REFRESHED);
 
   const shared = a.columns.map((c) => c.name).filter((name) => hasColumn(b, name));
   if (shared.length === 0) return skip(claimId, kind, "no shared column names");
@@ -148,7 +150,7 @@ SELECT count(*) AS total,
   const total = Number(result.rows[0]?.total);
   const matched = Number(result.rows[0]?.matched);
   const numbers = { total, matched, sharedColumns: shared.length };
-  if (total === 0) return skip(claimId, kind, `${a.name} has no rows to compare`, query, numbers);
+  if (total === 0) return skipEmpty(claimId, kind, `${a.name} has no rows to compare`, query, numbers);
   return { claimId, kind, query, numbers: { ...numbers, overlap: matched / total } };
 }
 
@@ -177,6 +179,10 @@ function skip(claimId: string, kind: Measurement["kind"], reason: string, query 
   return { claimId, kind, query, numbers, skipped: reason };
 }
 
+function skipEmpty(claimId: string, kind: Measurement["kind"], reason: string, query = "", numbers: Record<string, number> = {}): Measurement {
+  return { ...skip(claimId, kind, reason, query, numbers), empty: true };
+}
+
 /** The relation a claim names: exact match on the display or the qualified name first, then case-insensitive. */
 export function findTable(extract: Extract, name: string | undefined): Table | undefined {
   if (name === undefined) return undefined;
@@ -193,6 +199,8 @@ function hasColumn(table: Table, column: string): boolean {
 }
 
 const NEVER_REFRESHED = "a materialized view that has never been refreshed cannot be read";
+
+const EMPTY_SOURCE = "no non-null rows to test";
 
 function unpopulated(table: Table): boolean {
   return table.populated === false;

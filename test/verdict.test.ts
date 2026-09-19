@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { config } from "../src/config.js";
-import { decide, exitCode, fitsInContext } from "../src/verdict.js";
-import type { Extract, Measurement, Verified } from "../src/schemas.js";
+import { assemble, decide, describeKinds, exitCode, fitsInContext } from "../src/verdict.js";
+import type { Claims, Extract, Measurement, Table, Verified } from "../src/schemas.js";
 
 const m = (kind: Measurement["kind"], numbers: Record<string, number>, skipped?: string): Measurement => ({
   claimId: `${kind === "relationship" ? "relationship" : "suspicion"}:x`,
@@ -11,6 +11,8 @@ const m = (kind: Measurement["kind"], numbers: Record<string, number>, skipped?:
   numbers,
   ...(skipped ? { skipped } : {}),
 });
+
+const empty = (kind: Measurement["kind"], numbers: Record<string, number>, reason: string): Measurement => ({ ...m(kind, numbers, reason), empty: true });
 
 test("relationship bands come from config: confirmed, broken, rejected", () => {
   assert.equal(decide(m("relationship", { hit: 1 }), config).status, "confirmed");
@@ -30,6 +32,27 @@ test("the broken band moves with config, not code", () => {
 test("a skipped measurement is unverifiable whatever its numbers", () => {
   assert.equal(decide(m("relationship", { hit: 1 }, "timeout"), config).status, "unverifiable");
   assert.equal(decide(m("dead_table", { count: 0 }, "budget"), config).status, "unverifiable");
+});
+
+test("a measurement with nothing to measure is empty, not unverifiable", () => {
+  const nothing = decide(empty("relationship", { total: 0 }, "no non-null rows to test"), config);
+  assert.equal(nothing.status, "empty", "an empty source proves nothing about the claim either way");
+  assert.equal(nothing.skipped, "no non-null rows to test");
+  assert.equal(nothing.measurement.numbers.total, 0, "the evidence is still carried");
+  assert.equal(decide(empty("duplicate_entity", {}, "cars has no rows to compare"), config).status, "empty");
+});
+
+test("a measurement that was attempted and failed stays unverifiable, with its reason", () => {
+  const failed = decide(m("relationship", { hit: 1 }, "timeout"), config);
+  assert.equal(failed.status, "unverifiable");
+  assert.equal(failed.skipped, "timeout");
+});
+
+test("an empty claim is not a finding: the exit code stays 0", () => {
+  const base: Verified = { version: 1, database: "x", relations: "1 table", claims: { entities: [], tables: [], relationships: [], suspicions: [], questions: [] }, verdicts: {}, fitsInContext: true, tables: [] };
+  const measurement = { query: "", numbers: {} };
+  assert.equal(exitCode({ ...base, verdicts: { "relationship:a": { status: "empty", measurement, skipped: "no non-null rows to test" } } }), 0);
+  assert.equal(exitCode({ ...base, verdicts: { "suspicion:dead_table:cars": { status: "empty", measurement, skipped: "no non-null rows to test" } } }), 0);
 });
 
 test("dead_table: empty or stale is confirmed, otherwise rejected", () => {
@@ -68,7 +91,7 @@ test("verdicts carry the query and the numbers so a human can rerun them", () =>
 });
 
 test("exit code is 2 for a broken relationship or a confirmed suspicion, else 0", () => {
-  const base: Verified = { version: 1, database: "x", claims: { entities: [], tables: [], relationships: [], suspicions: [], questions: [] }, verdicts: {}, fitsInContext: true, tables: [] };
+  const base: Verified = { version: 1, database: "x", relations: "1 table", claims: { entities: [], tables: [], relationships: [], suspicions: [], questions: [] }, verdicts: {}, fitsInContext: true, tables: [] };
   const ok = { ...base, verdicts: { "relationship:a": { status: "confirmed" as const, measurement: { query: "", numbers: {} } } } };
   const broken = { ...base, verdicts: { "relationship:a": { status: "broken" as const, measurement: { query: "", numbers: {} } } } };
   const sus = { ...base, verdicts: { "suspicion:dead_table:cars": { status: "confirmed" as const, measurement: { query: "", numbers: {} } } } };
@@ -77,6 +100,38 @@ test("exit code is 2 for a broken relationship or a confirmed suspicion, else 0"
   assert.equal(exitCode(broken), 2);
   assert.equal(exitCode(sus), 2);
   assert.equal(exitCode(rejectedSus), 0);
+});
+
+const relation = (name: string, kind: Table["kind"], partitions?: Table["partitions"]): Table => ({
+  name,
+  schema: "public",
+  kind,
+  ...(partitions ? { partitions } : {}),
+  rowEstimate: 0,
+  primaryKey: null,
+  foreignKeys: [],
+  columns: [],
+  samples: [],
+});
+
+test("relations are named by kind", () => {
+  assert.equal(describeKinds([relation("a", "table"), relation("b", "table")]), "2 tables");
+  assert.equal(describeKinds([relation("a", "table"), relation("v", "view"), relation("m", "materialized view")]), "1 table, 1 view, 1 materialized view");
+  assert.equal(describeKinds([relation("e", "table", { count: 2, withLocalForeignKeys: 0 })]), "1 table, 1 partitioned");
+  assert.equal(describeKinds([]), "no relations");
+});
+
+test("assemble counts the relations for the writer, and says how many were left out", () => {
+  const claims: Claims = { entities: [], tables: [], relationships: [], suspicions: [], questions: [] };
+  const extract: Extract = {
+    database: "shop",
+    tables: [relation("orders", "table"), relation("customers", "table"), relation("shipped_orders", "view")],
+    skipped: [],
+    schemaTokens: 10,
+    unmatchedReveal: [],
+  };
+  assert.equal(assemble(extract, claims, [], config).relations, "2 tables, 1 view");
+  assert.equal(assemble({ ...extract, skipped: ["a", "b"] }, claims, [], config).relations, "2 tables, 1 view, 2 not examined");
 });
 
 test("fitsInContext is measured in tokens against config, and never true when tables were skipped", () => {

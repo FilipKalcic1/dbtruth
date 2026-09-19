@@ -9,9 +9,9 @@ import type { Claims, Extract, Measurement, Verdict, Verified } from "./schemas.
 export function decide(m: Measurement, cfg: Config): Verdict {
   const measurement = { query: m.query, numbers: m.numbers };
   const n = m.numbers;
-  const verdict = (status: Verdict["status"]): Verdict => ({ status, measurement });
+  const verdict = (status: Verdict["status"], skipped?: string): Verdict => ({ status, measurement, ...(skipped ? { skipped } : {}) });
 
-  if (m.skipped !== undefined) return verdict("unverifiable");
+  if (m.skipped !== undefined) return verdict(m.empty ? "empty" : "unverifiable", m.skipped);
 
   switch (m.kind) {
     case "relationship": {
@@ -51,11 +51,23 @@ export function fitsInContext(extract: Extract, cfg: Config): boolean {
   return extract.skipped.length === 0 && extract.schemaTokens <= cfg.fitsInContextTokens;
 }
 
+/** "9 tables, 1 view" from a list of relations, naming only the kinds present. */
+export function describeKinds(relations: { kind: string; partitions?: { count: number } }[]): string {
+  const order = ["table", "view", "materialized view"];
+  const counts = new Map<string, number>();
+  for (const r of relations) counts.set(r.kind, (counts.get(r.kind) ?? 0) + 1);
+  const parts = [...counts].sort(([a], [b]) => order.indexOf(a) - order.indexOf(b)).map(([kind, n]) => `${n} ${kind}${n === 1 ? "" : "s"}`);
+  const partitioned = relations.filter((r) => r.partitions).length;
+  if (partitioned > 0) parts.push(`${partitioned} partitioned`);
+  return parts.length > 0 ? parts.join(", ") : "no relations";
+}
+
 /** Claims + verdicts + the per-table facts the writer needs, version-stamped. */
 export function assemble(extract: Extract, claims: Claims, measurements: Measurement[], cfg: Config): Verified {
   return {
     version: 1,
     database: extract.database,
+    relations: describeKinds(extract.tables) + (extract.skipped.length > 0 ? `, ${extract.skipped.length} not examined` : ""),
     claims,
     verdicts: verdicts(measurements, cfg),
     fitsInContext: fitsInContext(extract, cfg),
