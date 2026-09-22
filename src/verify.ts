@@ -30,6 +30,7 @@ async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimI
   if (!from) return skip(claimId, kind, `unknown table ${r.from.table}`);
   if (!to) return skip(claimId, kind, `unknown table ${r.to.table}`);
   if (unpopulated(from) || unpopulated(to)) return skipEmpty(claimId, kind, NEVER_REFRESHED);
+  if (from.rowEstimate === 0) return skipEmpty(claimId, kind, EMPTY_SOURCE, `-- ${from.name} has no rows according to the catalog`, { total: 0 });
   if (!hasColumn(from, r.from.column)) return skip(claimId, kind, `unknown column ${r.from.table}.${r.from.column}`);
   if (!hasColumn(to, r.to.column)) return skip(claimId, kind, `unknown column ${r.to.table}.${r.to.column}`);
 

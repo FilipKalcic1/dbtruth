@@ -23,6 +23,7 @@ import type { Config } from "./config.js";
 import { bareName, q, qualified, querySampled, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
 import type { Column, Extract, RelationKind, Table } from "./schemas.js";
 
+
 export type ExtractOptions = {
   /** false: send schema and statistics only, no sample rows and no value lists. */
   samples: boolean;
