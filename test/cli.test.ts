@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { run } from "../src/cli.js";
+import { doctor } from "../src/doctor.js";
 import { writeUnreadable } from "./unreadable.js";
 
 const TSX = import.meta.resolve("tsx");
@@ -120,4 +121,19 @@ test("--dotenv reads the file it names, and a missing one exits 1 with one line 
   assert.equal(missing.status, 1);
   assert.equal(missing.stdout, "");
   assert.equal(missing.stderr, "--dotenv nope.env: no such file\n");
+});
+
+test("doctor's Node check reads the version it is given: below 20 fails, 20 and later pass", async () => {
+  // No URL and no key, so nothing after the settings check reaches a database or the network.
+  const cwd = mkdtempSync(join(tmpdir(), "dbtruth-doctor-"));
+  for (const [node, line] of [
+    ["v18.19.0", "FAIL Node v18.19.0: dbtruth needs Node 20 or newer"],
+    ["v19.9.0", "FAIL Node v19.9.0: dbtruth needs Node 20 or newer"],
+    ["v20.0.0", "ok Node v20.0.0"],
+    ["v24.4.1", "ok Node v24.4.1"],
+  ] as const) {
+    const lines: string[] = [];
+    await doctor({ flags: {}, cwd, env: {}, node, err: (l) => lines.push(l) });
+    assert.equal(lines[0], line);
+  }
 });

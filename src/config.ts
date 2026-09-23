@@ -48,8 +48,9 @@ export const config: Config = {
   // Too high: a big database spends everything on sampling and every claim is unverifiable. Too low: tables are skipped for nothing.
   extractBudgetShare: 0.6,
 
-  // Per-query timeout in seconds. Zero would disable the timeout in Postgres, so the minimum is one millisecond.
-  // Too low: measurements on large tables time out. Too high: one bad query eats the budget.
+  // Per-query timeout in seconds, and the limit on connecting. Zero would disable the timeout in Postgres, so the
+  // minimum is one millisecond. Too low: measurements on large tables time out, and a slow server cannot be reached.
+  // Too high: one bad query eats the budget, and a host that drops packets holds the run that long.
   statementTimeoutSeconds: 10,
 
   // A column with more distinct values than this on the sample is hidden from the model,

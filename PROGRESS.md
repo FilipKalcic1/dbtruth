@@ -714,3 +714,234 @@ of each lost point, in the format of section 4.7 of the plan.
 - Sabotage: `findDotEnv` back to `existsSync(path)`; "a directory named .env,
   such as a Python virtualenv, is passed over without a word" failed (not ok
   14). Restored; `git diff` unchanged.
+
+## T1.3 `dbtruth doctor`
+### Iteration 1: 80/100
+- Tests first, against a stub `doctor` in `src/doctor.ts` that only printed
+  what `connect()` throws, with no `doctor` command in `cli.ts` yet:
+  - `test/doctor.test.ts` (new, in `test:db`): all nine tests failed. The
+    in-process ones got at most one line where eight were expected; the
+    connection test's first case got `FAIL could not connect to the database:
+    connect ECONNREFUSED ::1:1; connect ECONNREFUSED 127.0.0.1:1`, not its
+    sentence; the two command tests got `error: too many arguments. Expected
+    0 arguments but got 1: doctor.` and exit 1.
+  - What 0.1.8's `connect()` says for each cause, run by hand with the canary
+    in the URL: `password authentication failed for user "canary-pii"`,
+    `database "canary-pii" does not exist`, `getaddrinfo ENOTFOUND
+    canary-pii.invalid`, the driver's words naming the user, the database and
+    the host. A server that accepts and never answers was still waited on
+    after 3 s: no limit but the system's TCP timeout. A server that refuses
+    `SET` let `unrecognized configuration parameter "canary-pii"` escape raw,
+    without "could not connect", and left the client open: when the test's
+    fake closed the socket, the test runner reported "generated asynchronous
+    activity after the test ended ... Connection terminated unexpectedly".
+  - `test/integration.test.ts`: the T1.1 canary test, its failing URLs now
+    with the canary in the user, the host and the database too, failed on
+    `Error: could not connect to the database: connect ECONNREFUSED ::1:1;
+    connect ECONNREFUSED 127.0.0.1:1`, the driver's text where the sentence
+    was expected.
+  - The package smoke step was written before the command existed, but first
+    run after it.
+- Built: `src/doctor.ts`, eight checks, one line each on stderr, returning
+  whether the setup is ready, which `main()` turns into exit 0 or 1; the
+  `doctor` subcommand in `cli.ts` with its own `--url` and `--dotenv`
+  (`enablePositionalOptions`), the full run moved into the program's action
+  unchanged; `readSettings` in `safety.ts`, the settings step moved out of
+  `run()`, called by both commands; `connect()` bounded by
+  `statementTimeoutSeconds`, one sentence per cause the plan lists and the
+  code alone for anything else, and the client closed with one sentence when
+  the session setup is refused; the `WARNING: ` mark moved to `run()`.
+  `test/fixtures/roles.sql` is mounted after the other init files, and the
+  fixture was reloaded.
+- Checked by hand with the built `dist/cli.js` from a temporary directory: the
+  fixture as `dbtruth` (eight `ok` lines, exit 0) and as `partial` (`ok 2
+  relations readable, 9 not: measurements on those will be skipped`); a host
+  that drops packets, `10.255.255.1` with a 1 s limit, gave the timeout
+  sentence, which read "within 1 seconds" and now reads "within 1 s";
+  `dbtruth` alone and `dbtruth foo` print what they printed before; `doctor
+  --json` is refused as an unknown option. A URL without a password, and
+  `sslmode=require` against the fixture, which has no SSL, give the bare
+  `could not connect to the database`: the driver gives them no code.
+  Written into NOTES.md as not done.
+- The SSL-required reply the test's fake sends is Postgres's own: captured
+  from throwaway `postgres:16` and `postgres:18` containers whose
+  `pg_hba.conf` held `hostssl` lines only (28000, routine
+  `ClientAuthentication`, message ending in `no encryption`); on 16, with SSL
+  turned on, the same client connected with `sslmode=no-verify`.
+- `npm run verify` exits 0: 109 tests, 107 pass, the 2 live tests skipped, and
+  the smoke test prints `pack-smoke: the installed dbtruth doctor prints 8
+  checks, every one ok`.
+- Under Linux as a non-root user, in `node:22-alpine` (22.23.2) and
+  `node:20-alpine` (20.20.2) against the fixture on the host, the doctor,
+  integration, safety, cli and structure test files: 45 tests, 43 pass, the 2
+  live tests skipped. Against fixtures loaded from the same init files on
+  `postgres:18` and on `postgres:12-alpine` (md5 passwords), the doctor and
+  integration test files pass, and on 12 the safety tests too.
+- `npm run acceptance -- --task T1.3` prints `T1.3: 80/100`, every check
+  passing. `npm run acceptance` over every task: T0.1, T0.2, T1.1 and T1.2
+  still 100/100.
+- Lost Tests (-20): `FAIL T1.3 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+### Iteration 2: 80/100
+- Four reviews, 21 findings. Each was checked against the code and the plan
+  first; five were reproduced by hand from an empty directory before any
+  change:
+  - `doctor --dotenv .` printed `ok Node ...`, then `dbtruth: EISDIR: illegal
+    operation on a directory, read`, exit 1, and no key check.
+  - `dbtruth --url postgres://nobody:pw@localhost:1/none doctor`, with
+    `DATABASE_URL` holding the fixture, printed eight `ok` lines and exited
+    0: an option before the name went to the program and was dropped.
+  - `DBTRUTH_STATEMENT_TIMEOUT_SECONDS=abc` printed `ok settings from the
+    environment` and then `dbtruth: DBTRUTH_STATEMENT_TIMEOUT_SECONDS /
+    --statement-timeout-seconds: "abc" is not a number`.
+  - `doctor --url '...?sslmode=require'` printed pg-connection-string's
+    nine-line `SECURITY WARNING` before its own line.
+  - On a fake server that says it is version 9 and refuses any statement
+    naming `relispartition`, as 9.x does: `ok connected to fake`, then
+    `could not read the catalog: column c.relispartition does not exist`
+    thrown, with no version line.
+- Fixed:
+  - Checks 5 and 7 are two statements. The version is read on its own, and
+    the relations are counted only once it has passed. The old-server test's
+    fake is now that version-9 server.
+  - The doctor action reads the program's options under its own: `--url`
+    and `--dotenv` on either side of the name, doctor's winning, and the
+    tunable flags, through the loop the full run used, now `overrides()`
+    for both actions. Commander's `optsWithGlobals()` lets the program's
+    value win (`--url A doctor --url B` gave A), so it was not used.
+  - `readSettings` returns the line for a `--dotenv` file that is missing or
+    cannot be read, and doctor prints it after `FAIL`. Check 2 resolves the
+    tunables too, so a value the full run would refuse is a `FAIL` line and
+    not a crash. The full run prints `--dotenv .: could not read it (EISDIR:
+    ...)` and exits 1, where it threw; T1.1's `/EISDIR/` assertion holds.
+  - The SSL advice is `sslmode=verify-full`: pg treats `require` as that
+    anyway and warns about it. The timeout reads `within 0.5s`, as the CLI's
+    other durations do. The session-setup failure drops its `could not
+    connect to the database: ` prefix, since the server did accept the
+    connection.
+  - Check 3 moved into `doctor()` beside check 2, and its line names
+    `--dotenv <path>` as well. `checkDatabase(url, cfg, err)` is now checks 4
+    to 7, the ones that hold the connection. The preflight is called bound
+    (`deps.preflight?.() ?? createModel(...).preflight()`).
+  - `DESCRIBED_RELATIONS` in the SQL helpers of `safety.ts` is the relation
+    condition `listRelations` and check 7 share, so the comment that claimed
+    they matched is gone.
+  - Wording: the header of `doctor.ts` (the NOTES sentence, and the unreadable
+    `.env` line); the doc of `readSettings`, whose callback is `warn`, as in
+    `SafetyOptions`; the reason in `pack-smoke.mjs` for running without a key.
+  - Tests: the key check also covers a 400, a 500 and an API address where
+    nothing listens (`FAIL could not reach the Anthropic API: Connection
+    error.`). The fake API's error text is no longer the canary, since a 400
+    and a 500 are told in the API's own words; the key `sk-canary-pii` still
+    is. The command test covers the wrong password `canary-pii-pass` at the
+    process level, `--url` before the name, and a tunable before the name.
+    A new test covers the settings failures. The Node check with injected
+    versions moved to `test/cli.test.ts`, which `test:unit` runs; the fixture
+    assertion that an old Node alone fails stays in `test/doctor.test.ts`.
+  - `acceptance/checks.json`: the renamed tests; `node-version` spans both
+    files; A2 also requires the old-server test; a `settings-fail` check.
+  - NOTES.md records all of the above, and how R9 is read: doctor's one API
+    request is the full run's first one, sent only with a key, and check 8
+    of the plan asks for it. Read strictly, R9 forbids it, and then this is
+    the section 0.6 conflict for the maintainer to decide.
+- Rejected:
+  - A sentence for TLS certificate failures (`DEPTH_ZERO_SELF_SIGNED_CERT`,
+    `SELF_SIGNED_CERT_IN_CHAIN` and others). A local TLS server shows the
+    error reaching pg as a bare `Error` with an OpenSSL code and nothing
+    else, so the sentence would need a hand-kept list of codes, and the plan
+    does not list this cause. The code is printed. Recorded in NOTES as not
+    done, with `sslrootcert` and `no-verify` left for T1.5's troubleshooting
+    table.
+  - Decoupling the connect limit from `statementTimeoutSeconds`. Both fixes
+    offered add a number the plan does not ask for: a tunable, or a floor.
+    The config comment already says a too-low value makes a server
+    unreachable. Twenty connects to the fixture took 24 ms median and 51 ms
+    at most, setup included, so the 0.2 s safety test has room. The trade-off
+    is now written into NOTES.
+  - Printing a `FAIL` line when a catalog read in checks 5 or 7 fails,
+    instead of throwing. Only a statement timeout shorter than a trivial
+    catalog query can cause it, and then exit 1 is right: the full run's
+    `listRelations` would fail the same way. `main()` prints the message.
+- Sabotage of the fixes (the task's own sabotage check is still to come),
+  each file restored byte for byte, checked with `cmp`:
+  - The version gate removed: the old-server test failed with `Error: could
+    not read the catalog: column c.relispartition does not exist`.
+  - The doctor action reading only its own options: the command test failed
+    with `--url postgres://canary-pii:... doctor`, `actual: 0, expected: 1`.
+  - `readSettings` rethrowing an unreadable file: the settings test failed
+    with `Error: EISDIR: illegal operation on a directory, read`.
+  - The tunables resolved after `ok settings`, outside the check: the
+    settings test failed with `Error: DBTRUTH_STATEMENT_TIMEOUT_SECONDS /
+    --statement-timeout-seconds: "abc" is not a number`.
+  - The SSL advice back to `sslmode=require`: the connection-failure test
+    failed.
+- `npm run verify` exits 0: 111 tests, 109 pass, the 2 live tests skipped,
+  and `pack-smoke: the installed dbtruth doctor prints 8 checks, every one
+  ok`.
+- `npm run acceptance -- --task T1.3` prints `T1.3: 80/100`, with every
+  automated check passing. `npm run acceptance`: T0.1, T0.2, T1.1 and T1.2
+  are still 100/100.
+- Lost Tests (-20): `FAIL T1.3 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: `acceptance/manual.json` has no
+  evidence for T1.3's sabotage item. The sabotages above cover only this
+  iteration's fixes, not the core of the task, so they are not entered as
+  that evidence; the sabotage check is done by a later stage.
+- The sabotage check of the task. Each file was copied outside the
+  repository first; `test/doctor.test.ts` and `test/cli.test.ts` (and
+  `test/integration.test.ts` for `safety.ts`) were run under each sabotage.
+- Sabotage: `connect()` threw the driver's message again (`could not connect
+  to the database: ${errorMessage(e)}` in place of `connectFailure(...)`);
+  "each connection failure has its own sentence and leaves the setup not
+  ready, and nothing from the URL is printed" failed with "connection
+  refused": `FAIL could not connect to the database: connect ECONNREFUSED
+  ::1:1; connect ECONNREFUSED 127.0.0.1:1` where the sentence was expected.
+  The command test and the T1.1 canary test in `test/integration.test.ts`
+  failed with it. Restored.
+- Sabotage: `checkDatabase` returned `true` in place of `db.readOnlyProven`,
+  so an accepted write no longer left the setup not ready. Every test stayed
+  green: the one server that accepted the write also said it was Postgres 9,
+  and the version gate returned first. Strengthened "a server that accepts a
+  write in a read-only session fails the proof in the words of the full run,
+  and one older than 12 fails too": a second fake, at Postgres 16, accepts
+  the write and passes every other check (`ok Postgres 16`, `ok 0 relations
+  readable, 0 not`), and the setup must not be ready. Repeated; the test
+  failed with "an accepted write leaves the setup not ready even when every
+  other check passes": `true !== false`. Restored.
+- Sabotage: the doctor command exited 0 whatever the checks found (`code =
+  ready ? EXIT_OK : EXIT_OK` in `cli.ts`); "as a command, doctor exits 1 when
+  a check from 1 to 6 fails, takes --url and --dotenv on either side of its
+  name, and prints nothing on stdout" failed with "doctor --url
+  postgres://canary-pii:canary-pii-pass@localhost:1/canary-pii": `0 !== 1`.
+  Restored.
+- Sabotage: `connect()` left the client open when the server refused the
+  session setup (`await client.end()` removed); "a server that accepts the
+  connection but refuses SET gets one sentence, and dbtruth closes the
+  connection" failed with "Expected values to be strictly equal": `'left
+  open'` where `'closed'` was expected. Restored.
+- Sabotage: the Node check took only versions above 20 (`>` for `>=`);
+  "doctor's Node check reads the version it is given: below 20 fails, 20 and
+  later pass" failed with "Expected values to be strictly equal": `'FAIL Node
+  v20.0.0: dbtruth needs Node 20 or newer'` where `'ok Node v20.0.0'` was
+  expected. Restored.
+- Sabotage: check 7 counted every relation as readable (`count(*) AS
+  readable`, without `has_table_privilege`); "a role that can read some
+  relations is told how many it cannot, and its password, which a URL must
+  escape, is never printed" failed with "the relations and how many of
+  them": `'ok 11 relations readable, 9 not: ...'` where `'ok 2 relations
+  readable, 9 not: ...'` was expected. Restored.
+- `src/safety.ts` (the first and fourth), `src/doctor.ts` (the second, fifth
+  and sixth) and `src/cli.ts` (the third) were restored each time from the
+  copy and matched it byte for byte (`cmp`); `git diff HEAD --
+  src/safety.ts` and `-- src/cli.ts` printed the same diff as before, and
+  `git status` was unchanged (`src/doctor.ts` is untracked). The one change
+  left is the strengthened test.
+- After the record, `npm run verify` exits 0: 111 tests, 109 pass, the 2
+  live tests skipped, and `pack-smoke: the installed dbtruth doctor prints 8
+  checks, every one ok`. `npm run acceptance -- --task T1.3` prints `T1.3:
+  100/100`, every check and item passing.
+### Iteration 3: 100/100 (the lead)
+- The two NOTES entries of T1.3 are shortened to half, the facts unchanged.
+  Doctor's API check is recorded as within R9 rather than as an open
+  question: it is the full run's own first request, and the plan's check 8
+  asks for it.

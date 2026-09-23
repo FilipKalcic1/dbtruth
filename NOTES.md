@@ -457,13 +457,86 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   host, user, the API key and every other value never are. A test puts
   `canary-pii` into a `.env`'s password, key and an unrelated variable and
   runs every path T1.1 adds or changes, errors included; no line holds it.
-  One limit remains until T1.3: a failed connection prints the driver's
-  message, which can name the user, the database or the host, never the
-  password (`password authentication failed for user "..."`, `getaddrinfo
-  ENOTFOUND ...`). T1.3 turns connection failures into plain sentences, for
-  the full run as well as for `doctor`. dbtruth's own tuning values, which a
-  `.env` can also hold, are still printed where the tool reports using or
-  rejecting them.
+  Since T1.3 a failed connection is told in a sentence of dbtruth's own
+  (below), and the test puts the canary in the user, host and database of the
+  URL too. dbtruth's own tuning values, which a `.env` can also hold, are
+  still printed where the tool reports using or rejecting them.
+- **`dbtruth doctor` says what stands between a setup and a full run.** Most
+  first runs fail on setup, and a full run meets the problems one at a time.
+  `doctor [--url <url>] [--dotenv <path>]` runs the plan's eight checks in its
+  order, one line each on stderr, `ok <what>` or `FAIL <what>: <fix>`, nothing
+  on stdout, and exits 1 when one of the first six fails: Node, the settings
+  source, the URL (never printed, not even its host), the connection, Postgres
+  12 or newer, the read-only proof. The last two inform only: how many
+  relations the role can and cannot `SELECT`, since a role may be meant to
+  read part of a database, and the API key, since `check` and `mcp` need none.
+  A key that is set is tried with `model.preflight()`, the full run's own
+  first request: the Models endpoint, the model id, no token. The plan's
+  check 8 asks for it, so it is read as within R9's allowance for a full run;
+  `check` and `mcp` stay offline. A check that needs one that failed is not
+  run. How it is built:
+  - The settings step moved out of `run()` into `readSettings` in `safety.ts`,
+    beside `findDotEnv`, and both commands call it. A `--dotenv` file that
+    exists but cannot be read is now a sentence for both, not a raw throw.
+  - Check 7 counts over `DESCRIBED_RELATIONS`, the condition `listRelations`
+    uses too, less partitions, and only once check 5 has passed:
+    `relispartition` does not exist on 9.x, where one combined statement
+    failed before the version could be printed.
+  - Options before `doctor` are its own as well, with those after its name
+    winning (`enablePositionalOptions`); they were dropped, and `dbtruth --url
+    X doctor` checked another database. `optsWithGlobals()` lets the
+    program's value win, so it was not used.
+  - The `WARNING: ` mark moved from `connect()` to `run()`, so check 6 fails in
+    the words of the full run's warning and the full run prints what it did.
+  - The minimum versions are constants in `doctor.ts`, not tunables: they are
+    what the code needs, and the README and CI state the same numbers.
+  - `DoctorDeps.preflight` is the test hook. The proof that no token is spent
+    is the command run against a local HTTP server given as
+    `ANTHROPIC_BASE_URL`: every request it records, for a 200 and for each
+    error `explainApiFailure` words, is `GET /v1/models/<id>`, and there is
+    none without a key.
+  - `test/fixtures/roles.sql` adds a role that can read two of the fixture's
+    eleven relations, with a password a URL must escape and the canary.
+  - The package smoke test runs the installed `dbtruth doctor` against
+    `DATABASE_URL`, else the fixture, as every test does; the plan runs it
+    only when `DATABASE_URL` is set, which would leave A5 unchecked.
+  - Not done: a line for a check that was not run; `USAGE` on the relation's
+    schema in check 7; naming which source the URL came from.
+- **A failed connection is told in dbtruth's words, in a full run too.**
+  `connect()` appended the driver's message, which names the user, the host or
+  the database. It now words the cause, and the full run and `doctor` print
+  the same sentence: nothing listening (`ECONNREFUSED`), host not found
+  (`ENOTFOUND`), authentication failed (SQLSTATE class 28), no such database
+  (3D000), SSL required, timeout; anything else by its code alone.
+  `new pg.Client` is inside the same `try`, because the driver parses the URL
+  there and its errors quote it.
+  - SSL required has no code of its own: a server whose `pg_hba.conf` admits
+    only encrypted connections refuses with 28000 from `ClientAuthentication`
+    (checked on Postgres 16 and 18). A host or user it does not admit is
+    refused the same way, so the sentence says the access rules refused the
+    connection and suggests `sslmode=verify-full`. Not `require`:
+    pg-connection-string treats it as `verify-full` anyway and prints a
+    SECURITY WARNING for it.
+  - Connecting is bounded by `statementTimeoutSeconds` (pg's
+    `connectionTimeoutMillis`); pg sets no limit, and a host that drops
+    packets held a run for the system's TCP timeout. One number says how long
+    dbtruth waits on the server; its comment says so, and a separate limit
+    would be a number the plan does not ask for. pg's timeout carries no code,
+    so its message, `timeout expired`, is what is matched.
+  - A server that accepted the connection and then refused `SET` let its raw
+    error escape and left the client open. The client is now closed and the
+    error reads "the server accepted the connection but refused to set up a
+    read-only session (42704)". No real server can be made to refuse `SET`,
+    so the test runs a fake Postgres of a few lines over `node:net`, against
+    the real driver and the real `connect()`; fakes of the same kind play a
+    server that requires SSL, one that never answers, and a 9.x server that
+    accepts the proof's write.
+  - Not done: a sentence for failures the driver reports only in words, such
+    as a URL without a password or `sslmode` against a server without SSL;
+    they read `could not connect to the database`. A certificate that cannot
+    be verified is named by its OpenSSL code alone; the fixes
+    (`sslrootcert=<file>`, `sslmode=no-verify`) belong in the troubleshooting
+    table of T1.5.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

@@ -28,9 +28,10 @@ Any Claude model id works in `ANTHROPIC_MODEL`. The default is the current
 Sonnet-class model; a larger model costs more per run and, on the schemas
 measured so far, found the same things.
 
-Then:
+Then check the setup, and run it:
 
 ```bash
+npx dbtruth doctor     # one line per check: ok, or FAIL with what to fix
 npx dbtruth            # writes ./context/ and prints a summary
 ```
 
@@ -39,6 +40,16 @@ You get `context/README.md`, `context/ENTITIES.md` and one file per table in
 before writing SQL, `1` means it could not run, `0` means nothing found. The
 database URL can also be passed as `--url`, and both settings can come from
 the environment instead of `.env`.
+
+`doctor` checks, one line each, Node, where the settings came from, the
+database URL, the connection, the Postgres version, the read-only proof, how
+many relations the role can read, and the API key. It spends no tokens: the
+API is asked only whether the model exists for this key. It exits `1` when
+Node, the settings or the database need fixing, and `0` otherwise; relations
+the role cannot read and a missing or rejected key are reported without
+changing the exit code. The URL is never printed, not even its host: a failed
+connection is told in one sentence of dbtruth's own, in a full run too, never
+in the driver's words.
 
 **Monorepos.** Run it from anywhere inside the repository. dbtruth reads the
 `.env` nearest to the current directory, looking up to the repository root
@@ -52,6 +63,7 @@ For a settings file anywhere else, pass `--dotenv <path>`.
 
 ```bash
 npx dbtruth              # writes ./context/ and prints a summary
+npx dbtruth doctor       # checks the setup, one line per check, without spending a token
 npx dbtruth --version    # prints the version (also -v)
 ```
 
@@ -74,13 +86,13 @@ schema changes.
 
 **Database.** `DATABASE_URL` comes from the environment, `.env`, or `--url`; it
 is never printed and never written anywhere. On connect the session is set to
-`default_transaction_read_only = on` with a statement timeout. Before doing
-anything else, dbtruth attempts a trivial write inside a transaction and
-checks that the server refuses it; if the server does not, it warns loudly
-and continues. Every query goes through one module, `safety.ts`, which only
-issues `SELECT`, enforces a time budget and a per-query timeout, and turns a
-timeout into a skipped measurement rather than a crash. Nothing else in the
-code can reach the database.
+`default_transaction_read_only = on` with a statement timeout, which bounds
+connecting too. Before doing anything else, dbtruth attempts a trivial write
+inside a transaction and checks that the server refuses it; if the server does
+not, it warns loudly and continues. Every query goes through one module,
+`safety.ts`, which only issues `SELECT`, enforces a time budget and a
+per-query timeout, and turns a timeout into a skipped measurement rather than
+a crash. Nothing else in the code can reach the database.
 
 **Value visibility, the mechanism that replaces PII lists.** A column's values
 are shown to the model only if it is categorical, whatever its type: at most
@@ -238,7 +250,8 @@ python scripts/render-demo.py       # regenerates docs/demo.gif from real output
 
 The package smoke test (`npm run test:pack`, the last step of `verify`) packs
 the package, installs the tarball into an empty project and runs the installed
-`dbtruth --help` and `dbtruth --version`, so it tests what a user installs.
+`dbtruth --help`, `dbtruth --version` and `dbtruth doctor` (against
+`DATABASE_URL`, else the fixture), so it tests what a user installs.
 `npm run acceptance` runs the checks in `acceptance/checks.json`, counts the
 manual items in `acceptance/manual.json`, and prints every check, each task's
 score and, without `--task`, the overall score, weighted as section 4 of

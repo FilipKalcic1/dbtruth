@@ -2,7 +2,7 @@
 // and runs the installed binary: what a user gets, not what the working copy has.
 // Expects `npm run build` to have run; `npm run verify` orders it that way.
 
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,8 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REQUIRED = ["dist/cli.js", "dist/prompts/contextualize.md", "dist/prompts/write.md", "README.md", "LICENSE"];
 // Matched against every path segment, so dist/test/ or dist/.env is caught as well.
 const FORBIDDEN = ["test", "src", ".env", "context"];
+// The database the installed doctor checks: DATABASE_URL, else the fixture, as every test falls back to it.
+const DATABASE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
 
 // Through a shell, because npm and the installed bin shim are .cmd files on Windows.
 const sh = (cmd, cwd) => execSync(cmd, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -37,6 +39,13 @@ try {
   const printed = sh(`${dbtruth} --version`, dir);
   if (printed !== `${version}\n`) throw new Error(`the installed dbtruth --version printed ${JSON.stringify(printed)}, not ${version}`);
   console.log(`pack-smoke: the installed dbtruth --version prints ${version}, the version in package.json`);
+  // Without an API key, so doctor sends nothing to the API and every line it prints can be ok.
+  const doctor = spawnSync(`${dbtruth} doctor`, { cwd: dir, env: { ...process.env, DATABASE_URL, ANTHROPIC_API_KEY: "" }, shell: true, encoding: "utf8" });
+  const checks = doctor.stderr.trimEnd().split(/\r?\n/);
+  if (doctor.status !== 0 || doctor.stdout !== "" || !checks.every((line) => line.startsWith("ok "))) {
+    throw new Error(`the installed dbtruth doctor exited ${doctor.status}:\n${doctor.stdout}${doctor.stderr}`);
+  }
+  console.log(`pack-smoke: the installed dbtruth doctor prints ${checks.length} checks, every one ok`);
 } catch (e) {
   console.error(`pack-smoke: FAIL ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;

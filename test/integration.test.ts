@@ -296,13 +296,14 @@ test("--dotenv reads that file only, relative to the working directory", async (
 });
 
 test("no value from a .env reaches stdout or stderr on any path that reads one, the errors included", async () => {
-  // canary-pii in the password, the key and a variable dbtruth does not read. The user, the host and the database are
-  // the fixture's: until T1.3 a failed connection can print those (NOTES.md, 0.2.0).
+  // canary-pii in the password, the key and a variable dbtruth does not read, and where the connection fails, in the
+  // user, the host and the database too: a failed connection is told in dbtruth's words, never the driver's.
   const secrets = "ANTHROPIC_API_KEY=sk-canary-pii\nSESSION_SECRET=canary-pii\n";
   const { root, api } = repository(`DATABASE_URL=${FIXTURE_URL}\n${secrets}`);
   writeUnreadable(join(api, ".env"), secrets);
   writeFileSync(join(root, "no-url.env"), secrets);
-  writeFileSync(join(root, "refused.env"), `DATABASE_URL=postgres://dbtruth:canary-pii@localhost:1/fixture\n${secrets}`);
+  writeFileSync(join(root, "refused.env"), `DATABASE_URL=postgres://canary-pii:canary-pii@localhost:1/canary-pii\n${secrets}`);
+  writeFileSync(join(root, "not-found.env"), `DATABASE_URL=postgres://canary-pii:canary-pii@canary-pii.invalid/canary-pii\n${secrets}`);
   // A repository inside this one, with no .env of its own: the walk stops at its root, below the canary .env.
   const lib = join(root, "vendor", "lib");
   mkdirSync(join(lib, ".git"), { recursive: true });
@@ -326,6 +327,7 @@ test("no value from a .env reaches stdout or stderr on any path that reads one, 
     namedMissing: await printed({ dotenv: "nope.env" }),
     namedUnreadable: await printed({ dotenv: "." }),
     refused: await printed({ dotenv: "../../refused.env" }),
+    notFound: await printed({ dotenv: "../../not-found.env" }),
   };
 
   // Each path was taken.
@@ -342,7 +344,8 @@ test("no value from a .env reaches stdout or stderr on any path that reads one, 
   assert.equal(runs.namedWithoutUrl.lines[0], `reading settings from ${join("..", "..", "no-url.env")}`);
   assert.deepEqual(runs.namedMissing, { code: 1, lines: ["--dotenv nope.env: no such file"] });
   assert.match(runs.namedUnreadable.lines.at(-1)!, /EISDIR/);
-  assert.match(runs.refused.lines.at(-1)!, /could not connect to the database/);
+  assert.match(runs.refused.lines.at(-1)!, /could not connect to the database: nothing is listening at the host and port in the URL; /);
+  assert.match(runs.notFound.lines.at(-1)!, /could not connect to the database: the host in the URL was not found; /);
 
   for (const [name, { lines }] of Object.entries(runs)) {
     for (const line of lines) assert.doesNotMatch(line, CANARY, `${name} printed a value from a .env`);

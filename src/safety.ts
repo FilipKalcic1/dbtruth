@@ -6,13 +6,14 @@
 //      attempted inside a transaction that is always rolled back; any refusal is fine, only an
 //      accepted write disproves anything, and then the caller is warned loudly.
 //   2. Only SELECT / WITH statements are issued through query().
-//   3. Every statement has a timeout, and a timeout is a skipped measurement, not a crash.
+//   3. Every statement has a timeout, and a timeout is a skipped measurement, not a crash. Connecting has the same limit.
 //   4. A wall-clock budget covers all sampling and measuring; once spent, query() skips instead of running.
 //   5. A lost connection is an error that stops the run: it is never reported as "nothing found".
-//   6. The connection URL is never logged, stored or returned.
+//   6. The connection URL is never logged, stored or returned. A failed connection is told in a sentence of our own,
+//      never the driver's message, which can hold the user, the host and the database.
 
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import pg from "pg";
 
@@ -46,8 +47,14 @@ export type SafetyOptions = {
 // Postgres SQLSTATE codes and classes.
 const READ_ONLY_SQL_TRANSACTION = "25006";
 const QUERY_CANCELED = "57014";
+const INVALID_CATALOG_NAME = "3D000";
 const CONNECTION_EXCEPTION_CLASS = "08";
+const INVALID_AUTHORIZATION_CLASS = "28";
 const OPERATOR_INTERVENTION_CLASS = "57";
+/** The server function that refuses a connection pg_hba.conf does not admit: an unencrypted one where SSL is required. */
+const PG_HBA_REFUSAL = "ClientAuthentication";
+/** What pg's own connect timeout fails with: this message, and no code. */
+const PG_CONNECT_TIMEOUT = "timeout expired";
 /** Datatype problems that a comparison as text can get around. */
 export const DATATYPE_MISMATCH_STATES: readonly string[] = ["42804", "42883", "42846"];
 
@@ -105,31 +112,78 @@ function repositoryRoot(dir: string): string | undefined {
   return dir;
 }
 
+export type Settings = {
+  /** The environment over the file's values. */
+  env: Record<string, string | undefined>;
+  /** The file read, relative to cwd as given. */
+  file?: string;
+  /** Whether that file is outside cwd, judged on real paths, so a symlinked cwd's own .env is not. */
+  elsewhere: boolean;
+  searched: { dir: string; error?: string }[];
+};
+
+/**
+ * What every command reads DATABASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL and DBTRUTH_* from: the environment, over
+ * the file dotenv names, relative to cwd, or else over the .env findDotEnv finds. A .env that could not be read is
+ * reported through warn, so a file used further up is no surprise; never a value. When the file dotenv names does not
+ * exist or cannot be read, the line that says so instead.
+ */
+export function readSettings(cwd: string, dotenv: string | undefined, environment: Record<string, string | undefined>, warn: (line: string) => void): Settings | string {
+  let found: ReturnType<typeof findDotEnv>;
+  if (dotenv) {
+    const path = resolve(cwd, dotenv);
+    if (!existsSync(path)) return `--dotenv ${dotenv}: no such file`;
+    try {
+      found = { path, values: readEnvFile(path), searched: [] };
+    } catch (e) {
+      return `--dotenv ${dotenv}: could not read it (${errorMessage(e)})`;
+    }
+  } else {
+    found = findDotEnv(cwd);
+  }
+  // Relative to cwd as given, not its real path, because Windows resolves ".." as written.
+  for (const { dir, error } of found.searched) {
+    if (error) warn(`could not read ${relative(cwd, join(dir, ".env"))} (${error})`);
+  }
+  return {
+    env: { ...found.values, ...environment },
+    file: found.path && relative(cwd, found.path),
+    elsewhere: found.path !== undefined && realpathSync(dirname(found.path)) !== realpathSync(cwd),
+    searched: found.searched,
+  };
+}
+
 /** DATABASE_URL from --url, then the environment (merged with .env by the caller). Never printed. */
 export function resolveDatabaseUrl(flagUrl: string | undefined, env: Record<string, string | undefined>): string | undefined {
   return flagUrl || env.DATABASE_URL || undefined;
 }
 
 export async function connect(url: string, opts: SafetyOptions): Promise<Db> {
-  const client = new pg.Client({ connectionString: url, application_name: "dbtruth" });
+  // pg sets no limit on connecting, and a host that drops packets would hold the run for the system's TCP timeout.
+  const timeoutMs = Math.max(1, Math.round(opts.statementTimeoutSeconds * MS_PER_SECOND));
+  let client: pg.Client;
   try {
+    // Inside the try: the driver parses the URL and reads the certificate files it names here, and its errors quote them.
+    client = new pg.Client({ connectionString: url, application_name: "dbtruth", connectionTimeoutMillis: timeoutMs });
     await client.connect();
   } catch (e) {
-    throw new Error(`could not connect to the database: ${errorMessage(e)}`);
+    throw new Error(connectFailure(e, opts.statementTimeoutSeconds));
   }
 
-  await client.query("SET default_transaction_read_only = on");
-  await client.query(`SET statement_timeout = ${Math.max(1, Math.round(opts.statementTimeoutSeconds * MS_PER_SECOND))}`);
-
-  const dbRow = (await client.query("SELECT current_database() AS db")).rows[0] as Row;
-  const database = String(dbRow.db);
-
-  const proof = await proveReadOnly(client);
+  let database: string;
+  let proof: { proven: boolean; detail: string };
+  try {
+    await client.query("SET default_transaction_read_only = on");
+    await client.query(`SET statement_timeout = ${timeoutMs}`);
+    database = String(((await client.query("SELECT current_database() AS db")).rows[0] as Row).db);
+    proof = await proveReadOnly(client);
+  } catch (e) {
+    await client.end();
+    const state = sqlState(e);
+    throw new Error(`the server accepted the connection but refused to set up a read-only session${state ? ` (${state})` : ""}`);
+  }
   if (!proof.proven) {
-    opts.warn?.(
-      `WARNING: the session asked for read-only mode but could not prove it: ${proof.detail}. ` +
-        "dbtruth still issues only SELECT statements.",
-    );
+    opts.warn?.(`the session asked for read-only mode but could not prove it: ${proof.detail}. dbtruth still issues only SELECT statements.`);
   }
 
   const budgetMs = opts.budgetSeconds * MS_PER_SECOND;
@@ -195,6 +249,26 @@ async function proveReadOnly(client: pg.Client): Promise<{ proven: boolean; deta
   }
 }
 
+/**
+ * One sentence for each common reason a connection fails, and otherwise the code alone: never the driver's message,
+ * which can hold the user, the host and the database from the URL.
+ */
+function connectFailure(e: unknown, timeoutSeconds: number): string {
+  const code = sqlState(e);
+  const because = (cause: string) => `could not connect to the database: ${cause}`;
+  if (code === "ECONNREFUSED") return because("nothing is listening at the host and port in the URL; check them, and that the server is running");
+  if (code === "ENOTFOUND") return because("the host in the URL was not found; check its spelling");
+  if (e instanceof pg.DatabaseError && e.routine === PG_HBA_REFUSAL) {
+    return because("the server's access rules refused this connection; if the server requires SSL, add sslmode=verify-full to the URL");
+  }
+  if (code?.startsWith(INVALID_AUTHORIZATION_CLASS)) return because("authentication failed; check the user and password in the URL");
+  if (code === INVALID_CATALOG_NAME) return because("the database named in the URL does not exist on that server");
+  if (e instanceof Error && e.message === PG_CONNECT_TIMEOUT) {
+    return because(`the server did not answer within ${timeoutSeconds}s; check the host and port in the URL, and any firewall on the way`);
+  }
+  return `could not connect to the database${code ? ` (${code})` : ""}`;
+}
+
 /** A client-side failure (no SQLSTATE), a class 08 connection exception, or a class 57 shutdown. */
 function isConnectionLoss(state: string | undefined): boolean {
   if (state === undefined) return true;
@@ -249,6 +323,13 @@ export function bareName(t: { schema: string; name: string }): string {
 export function qualified(t: { schema: string; name: string }): string {
   return `${q(t.schema)}.${q(bareName(t))}`;
 }
+
+/**
+ * The relations dbtruth describes, as a condition on pg_class c joined to pg_namespace n: tables, partitioned tables,
+ * views and materialized views outside the system schemas. Partitions match too; the extract folds them into their parent.
+ */
+export const DESCRIBED_RELATIONS =
+  "c.relkind IN ('r', 'p', 'v', 'm') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%'";
 
 export type SampleConfig = { sampleRows: number; sampleOversample: number; sampleSeed: number };
 

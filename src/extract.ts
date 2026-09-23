@@ -20,7 +20,7 @@
 // so that verifying claims keeps the rest.
 
 import type { Config } from "./config.js";
-import { bareName, q, qualified, querySampled, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
+import { bareName, DESCRIBED_RELATIONS, q, qualified, querySampled, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
 import type { Column, Extract, RelationKind, Table } from "./schemas.js";
 
 
@@ -130,9 +130,7 @@ async function listRelations(db: Db): Promise<Relation[]> {
        FROM pg_class c
        JOIN pg_namespace n ON n.oid = c.relnamespace
        LEFT JOIN pg_inherits i ON i.inhrelid = c.oid AND c.relispartition
-      WHERE c.relkind IN ('r', 'p', 'v', 'm')
-        AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-        AND n.nspname NOT LIKE 'pg_toast%'
+      WHERE ${DESCRIBED_RELATIONS}
       ORDER BY n.nspname, c.relname`,
   );
   if (!r.ok) throw new Error(`could not list relations: ${r.message}`);
