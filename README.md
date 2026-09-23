@@ -1,5 +1,7 @@
 # dbtruth
 
+[![ci](https://github.com/FilipKalcic1/dbtruth/actions/workflows/ci.yml/badge.svg)](https://github.com/FilipKalcic1/dbtruth/actions/workflows/ci.yml)
+
 Connects read-only to your Postgres database and writes context an AI coding
 agent can trust: what each table is for, which entities live where, and how
 tables relate, with every relationship checked against the actual data before
@@ -208,10 +210,24 @@ refused before anything runs.
 ## Development
 
 ```bash
-docker compose up -d --wait     # fixture, clean and scale databases on port 54329
-npm test                        # unit, structure, safety, integration, scale
-ANTHROPIC_API_KEY=... npm test  # also the two live tests
-python scripts/render-demo.py   # regenerates docs/demo.gif from real output (needs Pillow)
+docker compose up -d --wait         # fixture, clean and scale databases on port 54329
+npm test                            # every test file
+npm run test:unit                   # only the tests that need no database
+npm run test:db                     # only the tests that need the databases
+ANTHROPIC_API_KEY=... npm test      # also the two live tests
+npm run verify                      # typecheck, every test, build, package smoke test
+npm run acceptance -- --task T1.1   # score one task of BUILD_PLAN.md
+npm run acceptance                  # score every task, then their mean
+python scripts/render-demo.py       # regenerates docs/demo.gif from real output (needs Pillow)
 ```
+
+The package smoke test (`npm run test:pack`, the last step of `verify`) packs
+the package, installs the tarball into an empty project and runs the installed
+`dbtruth --help`, so it tests what a user installs. `npm run acceptance` runs
+the checks in `acceptance/checks.json`, counts the manual items in
+`acceptance/manual.json`, and prints every check, each task's score and,
+without `--task`, the overall score, weighted as section 4 of `BUILD_PLAN.md`
+says. It exits 0 only at 100. The format of both files is described at the top
+of `scripts/acceptance.mjs`.
 
 MIT.

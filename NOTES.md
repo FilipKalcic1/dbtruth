@@ -314,6 +314,93 @@ Deliberately not done, from the same review:
 - An external policy layer: `safety.ts` is the policy layer, and
   `structure.test.ts` pins that nothing else can reach the database.
 
+## 0.2.0 (unreleased)
+
+Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
+`PROGRESS.md`.
+
+- **The score is computed.** Section 4 of the plan scores every task out of
+  100, and `scripts/acceptance.mjs` computes it: it runs the checks in
+  `acceptance/checks.json`, counts the manual items in
+  `acceptance/manual.json`, splits each part's weight evenly over that part's
+  checks, and caps a task at 40 when a gate or an invariant fails. A score an
+  agent judges for itself is one it can argue up to 100; a script that reruns
+  every check cannot be argued with, and a later task that breaks an earlier
+  one shows up as the earlier task's score falling. A task with no checks
+  scores 0, a part with no checks earns nothing, and scores are floored, so
+  100 means that every check and every item passed. The parts are added as
+  one exact fraction: thirds added in floating point fell just below a whole
+  number, and the floor took a point. A command repeated with the same timeout
+  runs once per invocation, because `npm run verify` is the gate of every
+  task; with another timeout it runs again, so no check is judged on a run
+  killed at another check's limit. The typecheck reads the scripts
+  (`allowJs`, not `checkJs`) so the test can import `score()` with its JSDoc
+  type. Not done: weights per check (the plan splits them evenly on purpose),
+  a list of tasks of its own (the overview table in the plan is read instead,
+  leaving out a priority of exactly HUMAN), and running checks in parallel
+  (they share the fixture databases and `dist/`).
+- **Checks are shell commands that run on both systems.** They run under
+  cmd.exe on Windows and sh on Linux, so they use double quotes only and no
+  environment variables. `grep` is not portable, so documentation checks take
+  a second form that reads a file and matches a regex. Both forms are described
+  at the top of `scripts/acceptance.mjs` and nowhere else. A command past its
+  timeout is killed with its whole process tree (`taskkill /T` on Windows, the
+  process group elsewhere), so nothing it started runs on into the next check.
+  A process the kill cannot find, one started detached or orphaned by a shell
+  that has already exited, can still hold the output pipe, so at the timeout
+  the run also stops reading the output instead of waiting for that process,
+  and a kill that failed is named in the check's reason. A check on a
+  test runs it with `--test-reporter=tap` and matches the test's own
+  `ok N - <name>` line: when `--test-name-pattern` matches nothing, node
+  reports the file itself as one passing test, so neither the exit code nor
+  the pass count proves the test ran.
+- **A2 of T0.1 is a manual item.** "`npm run acceptance -- --task T0.1` prints
+  100" cannot be a command check, which would run the script inside itself.
+  Its evidence is the score line of a real run, and that line can read 100
+  only once the evidence is written, so it is filled in two steps: when every
+  other check and item of T0.1 passes, write that run's result as the
+  evidence, run again, and replace it with the line that run printed.
+- **The sabotage record is the condition of the test points, not a share of
+  them.** Section 4.2 earns the tests part "when ... the sabotage check (4.5)
+  is recorded", and 4.5 says a task without it "does not get its 20 test
+  points". The record is the manual item of the tests part: until its evidence
+  is written the part earns nothing, and the part's checks split the 20 points
+  among themselves. The first version counted the record as one more share,
+  so a missing record cost 20/(n+1) points, less with every test added.
+  Manual items belong to acceptance (4.1) or, as the record, to tests; one in
+  gates or invariants is refused, because those parts are earned by commands
+  and evidence there would pass the gate with prose.
+- **Eight test files need no database, not six.** Section 1 of the plan counts
+  six; the code has eight (config, extract, model, schemas, structure, verdict,
+  verify, write). `safety.test.ts` mixes pure tests with database ones and runs
+  under `test:db` with integration and scale. `test:unit` also runs the new
+  `acceptance.test.ts`, where a test fails when a test file is in neither list
+  or in both. `npm test` still runs every file.
+- **The package smoke test reads the usage text, not only the exit code.** On
+  Windows an installed bin that has lost its `#!/usr/bin/env node` line exits
+  0 and prints nothing; that was found while breaking the smoke test on
+  purpose. `--version` (T1.2) and `doctor` (T1.3) join it with their tasks.
+  It looks for `test`, `src`, `.env` and `context` in every segment of every
+  path in the tarball, not only at its top: `files` in `package.json` keeps
+  them out of the top level, and what can still leak is a stray file under
+  `dist/`, which no build cleans.
+
+- **CI runs every Postgres the README promises.** `.github/workflows/ci.yml`
+  runs `npm run verify` on Postgres 12, 14, 16 and 18 and Node 20 and 22, on
+  every push and pull request. 12 is the documented minimum (see 0.1.6) and
+  behaves differently where it matters: it reports a never-analyzed table as
+  `reltuples = 0` rather than `-1`, which T2.1 depends on. 18 is the newest
+  release; 14 and 16 cover the versions between. Node 20 is
+  the `engines` minimum and 22 the current LTS. A service container cannot
+  mount init scripts, so CI loads the fixture files with `psql` in the order
+  `docker-compose.yml` lists them, read from that file rather than repeated;
+  `test/ci.test.ts` fails when a fixture file is not mounted there, or when
+  the matrix no longer starts at the README's minimum versions. Third-party
+  actions are pinned by commit. Not done: caching the fixture databases
+  between runs (loading them takes seconds) and a Windows runner (the
+  database is Linux in every supported setup; the CLI's Windows paths are
+  exercised on the maintainer's machine).
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values
