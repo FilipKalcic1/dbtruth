@@ -2,7 +2,7 @@
 // cli.ts: orchestrates one run, in order. Nothing else.
 
 import { Command } from "commander";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -140,9 +140,12 @@ function emptyClaims(v: Verified): string[] {
 }
 
 export async function main(argv: string[]): Promise<number> {
+  // package.json is one level up from both src/ under tsx and dist/ once installed.
+  const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
   const program = new Command()
     .name("dbtruth")
     .description("Verified database context for AI coding agents. Read-only, Postgres.")
+    .version(version, "-v, --version")
     .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
     .option("--reveal <table.column>", "show one hidden column's values to the model (repeatable)", collect)
     .option("--no-samples", "send schema and statistics only, no sample rows")

@@ -401,6 +401,21 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   database is Linux in every supported setup; the CLI's Windows paths are
   exercised on the maintainer's machine).
 
+- **`--version` reads `package.json` at run time.** `dbtruth --version`, or
+  `-v` as node and npm spell it (commander's default is `-V`), prints the
+  version to stdout, the data this command asks for (R6), and exits 0. Tools
+  that wrap dbtruth ask for it, HOL Guard's rules among them. `main()` reads
+  the `package.json` one directory above the running file, which is the
+  package root both from `src/` under tsx and from `dist/` once installed, so
+  the number is written once and a version bump cannot leave the binary
+  behind. `test/cli.test.ts` runs the source from a directory that has no
+  `package.json` and expects exactly that version and a newline; the package
+  smoke test runs the installed `node_modules/.bin/dbtruth`, which is what
+  `npx dbtruth` runs in a project that has the package, and expects the
+  version npm packed. Not done: a module or helper for the version. The
+  snapshot (T3.1) and the MCP server (T5.1) need the same value, and
+  `cli.ts` will hand it to them.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values

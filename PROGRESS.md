@@ -141,3 +141,74 @@ of each lost point, in the format of section 4.7 of the plan.
   diff` showed nothing for docker-compose.yml.
 - A1 and A2 need GitHub: the branch is pushed so CI runs; A1 is earned only on
   `main`, after a merge.
+
+## T1.2 `--version`
+### Iteration 1: 80/100
+- Tests first: `test/cli.test.ts` (new, in `test:unit`) failed with
+  "--version: error: unknown option '--version'" and `'' !== '0.1.8\n'`:
+  commander had no version option, so it refused the flag, printed nothing on
+  stdout and exited 1. The package smoke test, with its new `--version` step,
+  failed after the `--help` line with `pack-smoke: FAIL Command failed:
+  "node_modules\.bin\dbtruth" --version` and `error: unknown option
+  '--version'`.
+- `main()` reads the version from the `package.json` one directory above the
+  running file and passes it to `.version(version, "-v, --version")`. Both
+  paths checked by hand as well: `node dist/cli.js --version` run from
+  another directory printed `0.1.8` and a newline and exited 0, and
+  `npx --no-install dbtruth --version` in a scratch project with the packed
+  tarball installed printed `0.1.8` and exited 0.
+- `npm run verify` exits 0: 85 tests, 83 pass, the 2 live tests skipped, and
+  the smoke test prints `pack-smoke: the installed dbtruth --version prints
+  0.1.8, the version in package.json`. `npm run acceptance` over every task:
+  T0.1 still 100/100, T0.2 still 50/100 (its CI links), T1.2 80/100 with every
+  check passing.
+- Lost Tests (-20): no sabotage record; the sabotage check is done by a later
+  stage.
+### Iteration 2: 80/100
+- Fixed after review:
+  - The task's Docs item is the README commands list, and the README had
+    none: the line went into the Quick start paragraph, and the docs check
+    matched it anywhere in the file. A `## Commands` section after Quick start
+    now lists `npx dbtruth` and `npx dbtruth --version`, one line each, for
+    T1.5 to extend, and the check wants the line under that heading. Against
+    iteration 1's README it fails.
+  - `test/cli.test.ts` states its time limit (plan 5.3, item 5): each run is
+    killed at 20 s and fails with `spawnSync ... ETIMEDOUT`, where a hang
+    would have blocked `test:unit` with no message. That message was checked
+    on a node that sleeps past the limit.
+  - `test/cli.test.ts` runs the CLI with `DATABASE_URL` empty. A flag that
+    fell through to a full run would have used the developer's settings and
+    reached the model API and a database from `test:unit`. It now stops
+    where the CLI run with no flag stops: nothing on stdout, `no database
+    URL: ...` on stderr, exit 1.
+  - NOTES.md: the smoke test sentence names `node_modules/.bin/dbtruth`, which
+    is what `npx dbtruth` runs, instead of reading as a third thing the smoke
+    test does.
+- Not taken: emptying `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` as well.
+  `run()` resolves the database URL before it creates the model client, so an
+  empty `DATABASE_URL` stops a run before any network, as "the CLI exits 1
+  when no URL is configured" already relies on.
+- `npm run verify` exits 0: 85 tests, 83 pass, the 2 live tests skipped, and
+  the smoke test prints `pack-smoke: the installed dbtruth --version prints
+  0.1.8, the version in package.json`. `npm run acceptance -- --task T1.2`
+  prints `T1.2: 80/100`, every check passing.
+- Lost Tests (-20): `FAIL T1.2 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Sabotage: removed `.version(version, "-v, --version")` from `main()`;
+  "--version prints the version in package.json and nothing else, and exits
+  0" failed with "--version: error: unknown option '--version'" and `'' !==
+  '0.1.8\n'`. Restored.
+- Sabotage: read `package.json` from the working directory
+  (`readFileSync("package.json", "utf8")`) instead of next to the code; the
+  same test failed with "--version: ... Error: ENOENT: no such file or
+  directory, open '...\dbtruth-cli-mLnGpK\package.json'", and, built, the
+  package smoke test failed with "pack-smoke: FAIL the installed dbtruth
+  --version printed "1.0.0\n", not 0.1.8", the version of the project
+  `npm init -y` made. Restored, and `dist/` rebuilt.
+- Sabotage: `.version(version)`, commander's default `-V, --version`; the same
+  test failed with "-v: error: unknown option '-v'" and `'' !== '0.1.8\n'`.
+  Restored.
+- `src/cli.ts` was restored each time from a copy kept outside the
+  repository, matched it byte for byte (`cmp`), and `git diff HEAD --
+  src/cli.ts` printed the same diff as before the first sabotage.

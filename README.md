@@ -40,6 +40,13 @@ before writing SQL, `1` means it could not run, `0` means nothing found. The
 database URL can also be passed as `--url`, and both settings can come from
 the environment instead of `.env`.
 
+## Commands
+
+```bash
+npx dbtruth              # writes ./context/ and prints a summary
+npx dbtruth --version    # prints the version (also -v)
+```
+
 ## Giving it to your agent
 
 The output is plain markdown, so any agent can read it. Tell yours to look
@@ -223,11 +230,11 @@ python scripts/render-demo.py       # regenerates docs/demo.gif from real output
 
 The package smoke test (`npm run test:pack`, the last step of `verify`) packs
 the package, installs the tarball into an empty project and runs the installed
-`dbtruth --help`, so it tests what a user installs. `npm run acceptance` runs
-the checks in `acceptance/checks.json`, counts the manual items in
-`acceptance/manual.json`, and prints every check, each task's score and,
-without `--task`, the overall score, weighted as section 4 of `BUILD_PLAN.md`
-says. It exits 0 only at 100. The format of both files is described at the top
-of `scripts/acceptance.mjs`.
+`dbtruth --help` and `dbtruth --version`, so it tests what a user installs.
+`npm run acceptance` runs the checks in `acceptance/checks.json`, counts the
+manual items in `acceptance/manual.json`, and prints every check, each task's
+score and, without `--task`, the overall score, weighted as section 4 of
+`BUILD_PLAN.md` says. It exits 0 only at 100. The format of both files is
+described at the top of `scripts/acceptance.mjs`.
 
 MIT.

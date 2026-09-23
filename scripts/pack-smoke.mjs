@@ -19,7 +19,7 @@ const sh = (cmd, cwd) => execSync(cmd, { cwd, encoding: "utf8", stdio: ["ignore"
 // The tarball and the project that installs it live in one temporary directory, removed whatever happens.
 const dir = mkdtempSync(join(tmpdir(), "dbtruth-pack-"));
 try {
-  const [{ filename, files }] = JSON.parse(sh(`npm pack --json --pack-destination "${dir}"`, ROOT));
+  const [{ filename, files, version }] = JSON.parse(sh(`npm pack --json --pack-destination "${dir}"`, ROOT));
   const paths = files.map((f) => f.path);
   const missing = REQUIRED.filter((p) => !paths.includes(p));
   if (missing.length > 0) throw new Error(`${filename} lacks ${missing.join(", ")}`);
@@ -30,9 +30,13 @@ try {
 
   sh("npm init -y", dir);
   sh(`npm install --no-audit --no-fund "${join(dir, filename)}"`, dir);
-  const help = sh(`"${join("node_modules", ".bin", "dbtruth")}" --help`, dir);
+  const dbtruth = `"${join("node_modules", ".bin", "dbtruth")}"`;
+  const help = sh(`${dbtruth} --help`, dir);
   if (!help.startsWith("Usage: dbtruth")) throw new Error(`the installed dbtruth --help printed no usage:\n${help}`);
   console.log("pack-smoke: the installed dbtruth --help prints its usage");
+  const printed = sh(`${dbtruth} --version`, dir);
+  if (printed !== `${version}\n`) throw new Error(`the installed dbtruth --version printed ${JSON.stringify(printed)}, not ${version}`);
+  console.log(`pack-smoke: the installed dbtruth --version prints ${version}, the version in package.json`);
 } catch (e) {
   console.error(`pack-smoke: FAIL ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;

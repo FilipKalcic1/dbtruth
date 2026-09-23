@@ -23,5 +23,16 @@
   { "task": "T0.2", "id": "badge", "part": "docs", "file": "README.md", "expectFile": "^\\[!\\[ci\\]\\(https://github\\.com/FilipKalcic1/dbtruth/actions/workflows/ci\\.yml/badge\\.svg\\)\\]" },
   { "task": "T0.2", "id": "notes", "part": "docs", "file": "NOTES.md", "expectFile": "^## 0\\.2\\.0 \\(unreleased\\)$[\\s\\S]*^- \\*\\*CI runs every Postgres the README promises\\.\\*\\*" },
   { "task": "T0.2", "id": "structure", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/structure.test.ts", "expectStdout": "^ok \\d+ - dependency direction matches the spec$", "timeoutSeconds": 60 },
-  { "task": "T0.2", "id": "canary-stdout", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/integration.test.ts", "expectStdout": "^ok \\d+ - the whole loop on the fixture, offline: .*no personal data sent$", "timeoutSeconds": 120 }
+  { "task": "T0.2", "id": "canary-stdout", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/integration.test.ts", "expectStdout": "^ok \\d+ - the whole loop on the fixture, offline: .*no personal data sent$", "timeoutSeconds": 120 },
+  { "task": "T1.2", "id": "A1", "part": "acceptance", "cmd": "npm run verify", "expectStdout": "^pack-smoke: the installed dbtruth --version prints [^ ]+, the version in package\\.json$", "timeoutSeconds": 600 },
+  { "task": "T1.2", "id": "A2", "part": "acceptance", "cmd": "node --import tsx --test --test-reporter=tap test/cli.test.ts", "expectStdout": "^ok \\d+ - --version prints the version in package\\.json and nothing else, and exits 0$", "timeoutSeconds": 60 },
+  { "task": "T1.2", "id": "version-source", "part": "tests", "cmd": "node --import tsx --test --test-reporter=tap test/cli.test.ts", "expectStdout": "^ok \\d+ - --version prints the version in package\\.json and nothing else, and exits 0$", "timeoutSeconds": 60 },
+  { "task": "T1.2", "id": "version-installed", "part": "tests", "cmd": "npm run verify", "expectStdout": "^pack-smoke: the installed dbtruth --version prints [^ ]+, the version in package\\.json$", "timeoutSeconds": 600 },
+  { "task": "T1.2", "id": "verify", "part": "gates", "cmd": "npm run verify", "timeoutSeconds": 600 },
+  { "task": "T1.2", "id": "readme", "part": "docs", "file": "README.md", "expectFile": "^## Commands$[\\s\\S]*^npx dbtruth --version +# " },
+  { "task": "T1.2", "id": "help", "part": "docs", "cmd": "node --import tsx src/cli.ts --help", "expectStdout": "^  -v, --version +output the version number$", "timeoutSeconds": 60 },
+  { "task": "T1.2", "id": "notes", "part": "docs", "file": "NOTES.md", "expectFile": "^## 0\\.2\\.0 \\(unreleased\\)$[\\s\\S]*^- \\*\\*`--version` reads `package\\.json` at run time\\.\\*\\*" },
+  { "task": "T1.2", "id": "changelog", "part": "docs", "file": "CHANGELOG.md", "expectFile": "^## 0\\.2\\.0 \\(unreleased\\)$[\\s\\S]*`npx dbtruth --version`" },
+  { "task": "T1.2", "id": "structure", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/structure.test.ts", "expectStdout": "^ok \\d+ - dependency direction matches the spec$", "timeoutSeconds": 60 },
+  { "task": "T1.2", "id": "canary-stdout", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/integration.test.ts", "expectStdout": "^ok \\d+ - the whole loop on the fixture, offline: .*no personal data sent$", "timeoutSeconds": 120 }
 ]
