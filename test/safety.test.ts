@@ -1,9 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { connect, readDotEnv, resolveDatabaseUrl } from "../src/safety.js";
+import { connect, readDotEnv, resolveDatabaseUrl, sampleSource } from "../src/safety.js";
 import { config } from "../src/config.js";
 
 export const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
+
+test("a large table is sampled at the share of pages that holds the sample size, and the LIMIT only caps a stale estimate", () => {
+  const big = { schema: "public", name: "big", rowEstimate: 1_000_000 };
+  const sampled = sampleSource(big, config);
+  const percent = (config.sampleRows / big.rowEstimate) * 100;
+  assert.match(sampled, new RegExp(`TABLESAMPLE SYSTEM \\(${percent}\\) REPEATABLE \\(${config.sampleSeed}\\)`), "the share of pages that holds about sampleRows rows");
+  assert.match(sampled, new RegExp(`LIMIT ${config.sampleRows * config.sampleOversample}\\)$`), "pages come in file order, so a LIMIT at the sample size would keep only the oldest");
+  assert.match(sampleSource({ ...big, rowEstimate: 1e12 }, config), /SYSTEM \(0\.000005\)/, "a tiny share is not rounded away to nothing");
+  assert.match(sampleSource({ ...big, rowEstimate: 3_000_000 }, config), /SYSTEM \(1\.667\)/, "four significant digits, no floating-point noise in a query a human reruns");
+  assert.equal(sampleSource({ ...big, rowEstimate: config.sampleRows }, config), `(SELECT * FROM "public"."big" LIMIT ${config.sampleRows})`, "a table no larger than the sample is read whole");
+  assert.equal(sampleSource(big, config, false), `(SELECT * FROM "public"."big" LIMIT ${config.sampleRows})`, "the plain form on request");
+});
 
 test("the session is proven read-only and only SELECT statements get through", async () => {
   const db = await connect(FIXTURE_URL, config);

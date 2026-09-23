@@ -105,28 +105,51 @@ const ClaimsShape = z.object({
 });
 
 /**
- * Claims are validated and then deduplicated by id, so each identity is measured exactly once
- * and every verdict maps back to one claim. A relationship stated twice keeps the "stated"
- * copy; suspicions with the same id merge their details.
+ * The relation a claim names, by the display name or the schema-qualified name: an exact match
+ * first, then regardless of case. Undefined when the claim names nothing the extract has.
  */
-export const ClaimsSchema = ClaimsShape.transform((c) => {
-  const relationships = new Map<string, Relationship>();
-  for (const r of c.relationships) {
-    const id = relationshipId(r);
-    const prev = relationships.get(id);
-    if (!prev || (prev.basis === "inferred" && r.basis === "stated")) relationships.set(id, r);
-  }
-  const suspicions = new Map<string, Suspicion>();
-  for (const s of c.suspicions) {
-    const id = suspicionId(s);
-    const prev = suspicions.get(id);
-    if (!prev) suspicions.set(id, { ...s });
-    else if (!prev.detail.includes(s.detail)) prev.detail = `${prev.detail}; ${s.detail}`;
-  }
-  return { ...c, relationships: [...relationships.values()], suspicions: [...suspicions.values()] };
-});
+export function findTable<T extends { name: string; schema: string }>(tables: T[], name: string | undefined): T | undefined {
+  if (name === undefined) return undefined;
+  const wanted = name.trim();
+  const spellings = (t: T) => [t.name, t.name.startsWith(`${t.schema}.`) ? t.name : `${t.schema}.${t.name}`];
+  return tables.find((t) => spellings(t).includes(wanted)) ?? tables.find((t) => spellings(t).some((s) => s.toLowerCase() === wanted.toLowerCase()));
+}
 
-export type Claims = z.output<typeof ClaimsSchema>;
+/**
+ * Claims are validated, every table they name is spelled as the extract spells it (a name the
+ * extract does not have is kept, and verify reports it), and then they are deduplicated by id,
+ * so each identity is measured exactly once and every verdict maps back to one claim. A
+ * relationship stated twice keeps the "stated" copy; suspicions with the same id merge their details.
+ */
+export function claimsSchema(tables: { name: string; schema: string }[]) {
+  const spell = (name: string) => findTable(tables, name)?.name ?? name;
+  return ClaimsShape.transform((c) => {
+    const relationships = new Map<string, Relationship>();
+    for (const r of c.relationships) {
+      const named = { ...r, from: { ...r.from, table: spell(r.from.table) }, to: { ...r.to, table: spell(r.to.table) } };
+      const id = relationshipId(named);
+      const prev = relationships.get(id);
+      if (!prev || (prev.basis === "inferred" && named.basis === "stated")) relationships.set(id, named);
+    }
+    const suspicions = new Map<string, Suspicion>();
+    for (const s of c.suspicions) {
+      const named = { ...s, tables: s.tables.map(spell) };
+      const id = suspicionId(named);
+      const prev = suspicions.get(id);
+      if (!prev) suspicions.set(id, named);
+      else if (!prev.detail.includes(s.detail)) prev.detail = `${prev.detail}; ${s.detail}`;
+    }
+    return {
+      ...c,
+      entities: c.entities.map((e) => ({ ...e, primaryTable: spell(e.primaryTable), referencedIn: e.referencedIn.map(spell) })),
+      tables: c.tables.map((t) => ({ ...t, name: spell(t.name) })),
+      relationships: [...relationships.values()],
+      suspicions: [...suspicions.values()],
+    };
+  });
+}
+
+export type Claims = z.output<ReturnType<typeof claimsSchema>>;
 
 // ---------- Verified: claims + verdicts + evidence (tested) ----------
 
@@ -137,7 +160,7 @@ export type Measurement = {
   numbers: Record<string, number>;
   /** set when the measurement could not be taken: timeout, budget, error, or no way to measure */
   skipped?: string;
-  /** the source held no rows to measure. Only ever set alongside `skipped`. */
+  /** a relation the claim names held no rows to measure. Only ever set alongside `skipped`. */
   empty?: boolean;
 };
 
@@ -165,5 +188,6 @@ export type Verified = {
 
 // ---------- Files: markdown for the agent (trusted) ----------
 
-export const FilesSchema = z.record(z.string(), z.string());
-export type Files = z.infer<typeof FilesSchema>;
+/** The two files the model writes. The per-table files are rendered from Verified, not asked of it. */
+export const FilesSchema = z.object({ "context/README.md": z.string(), "context/ENTITIES.md": z.string() });
+export type Files = Record<string, string>;

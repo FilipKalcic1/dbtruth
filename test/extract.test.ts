@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { config } from "../src/config.js";
-import { fitToContext, isCategorical } from "../src/extract.js";
+import { extract, fitToContext, isCategorical } from "../src/extract.js";
+import type { Db, QueryResult, Row } from "../src/safety.js";
 import type { Extract, Table } from "../src/schemas.js";
 import { deadTableQuery } from "../src/verify.js";
 
@@ -47,6 +48,37 @@ test("the dead-table statement is always an aggregate, or no statement at all", 
 
   const arrays = deadTableQuery(table("t", 10, [{ name: "dates", type: "date[]" }]), config);
   assert.doesNotMatch(arrays.query, /max\("dates"\)/, "an array of dates is not a date column");
+});
+
+/** A database with one integer-column relation at the given catalog estimate, answering every statement over it the same way. */
+function oneTable(estimate: number, stats: QueryResult): Db {
+  const catalog: Row[][] = [
+    [{ oid: 1, schema: "public", table: "t", relkind: "r", is_partition: false, parent: null, populated: true, estimate, comment: null, definition: null }],
+    [{ oid: 1, attnum: 1, name: "id", type: "integer", nullable: false, comment: null }],
+    [],
+  ];
+  return {
+    database: "x",
+    readOnlyProven: true,
+    catalog: async () => ({ ok: true, rows: catalog.shift()! }),
+    query: async () => stats,
+    budget: () => ({ budgetMs: 1000, spentMs: 0, remainingMs: 1000, exhausted: false }),
+    close: async () => {},
+  };
+}
+const counted = (n: number): QueryResult => ({ ok: true, rows: [{ n, nn0: n, d0: n, l0: 5 }] });
+const failed: QueryResult = { ok: false, reason: "timeout", message: "canceling statement due to statement timeout" };
+const sized = async (estimate: number, stats: QueryResult) => (await extract(oneTable(estimate, stats), config, { samples: false, reveal: new Set() })).tables[0]!.rowEstimate;
+
+test("the row estimate after the scan: a short plain scan counts, a full one proves at least the sample size, a random sample keeps the catalog's word", async () => {
+  assert.equal(await sized(0, counted(7)), 7, "a plain scan that came back short counted the relation");
+  assert.equal(await sized(0, counted(config.sampleRows)), -1, "a stale catalog 0 does not survive a scan that filled the sample");
+  assert.equal(await sized(-1, counted(config.sampleRows)), -1, "never analyzed, at least the sample size");
+  assert.equal(await sized(config.sampleRows, counted(config.sampleRows)), config.sampleRows, "an estimate the scan agrees with stands");
+  assert.equal(await sized(60_000, counted(60_001)), 60_000, "a random sample larger than its estimate is sampling variance, not a count");
+  assert.equal(await sized(60_000, counted(0)), 0, "an empty random sample is settled by the plain form");
+  assert.equal(await sized(0, failed), -1, "statistics unavailable: a catalog 0 that nothing confirmed is not a count");
+  assert.equal(await sized(500, failed), 500, "statistics unavailable: a positive estimate stands");
 });
 
 test("fitToContext drops sample rows, then value lists, then tables, until the extract fits", () => {

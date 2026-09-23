@@ -26,6 +26,7 @@ const cannedClaims = {
     { from: { table: "order_items", column: "order_id" }, to: { table: "orders", column: "id" }, basis: "stated", confidence: 1, reason: "fk" },
     { from: { table: "vehicles", column: "model_year" }, to: { table: "customers", column: "id" }, basis: "inferred", confidence: 0.2, reason: "control: a guess the data rejects" },
     { from: { table: "cars", column: "customer_id" }, to: { table: "customers", column: "id" }, basis: "inferred", confidence: 0.5, reason: "control: an empty table has nothing to test" },
+    { from: { table: "customers", column: "address" }, to: { table: "customers", column: "full_name" }, basis: "inferred", confidence: 0.1, reason: "control: a column with nulls, pointing nowhere" },
   ],
   suspicions: [
     { kind: "dead_table", tables: ["cars"], detail: "empty beside vehicles" },
@@ -75,7 +76,7 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   assert.match(err[0]!, /high-cardinality columns hidden/);
   assert.ok(err.some((l) => /^contextualize: \d+ tables described, \d+ claims to test, [\d.]+s$/.test(l)), "one progress line per step");
   assert.ok(err.some((l) => /^verify: \d+ measurements, [\d.]+s$/.test(l)));
-  assert.ok(err.some((l) => /^write: \d+ files, [\d.]+s$/.test(l)));
+  assert.ok(err.some((l) => /^write: 13 files, [\d.]+s$/.test(l)), "README, ENTITIES and one file per relation");
 
   const verified = JSON.parse(out.join("\n")) as Verified; // stdout is the JSON and nothing else
   assert.equal(verified.version, 1);
@@ -90,6 +91,12 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
 
   assert.equal(v["relationship:order_items.order_id->orders.id"]!.status, "confirmed");
   assert.equal(v["relationship:vehicles.model_year->customers.id"]!.status, "rejected");
+  const nullable = v["relationship:customers.address->customers.full_name"]!;
+  assert.equal(nullable.status, "rejected");
+  assert.equal(nullable.measurement.numbers.nulls, 25, "every tenth address is null: counted apart, neither a hit nor an orphan");
+  assert.equal(nullable.measurement.numbers.total, 225);
+  assert.equal(nullable.measurement.numbers.orphans, 225);
+  assert.equal(broken.measurement.numbers.nulls, 0);
   assert.equal(v["suspicion:dead_table:cars"]!.status, "confirmed");
   assert.equal(v["suspicion:dead_table:cars"]!.measurement.numbers.count, 0);
   assert.equal(v["suspicion:inconsistent_values:orders.status"]!.status, "confirmed");
@@ -105,7 +112,8 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   const noRows = v["relationship:cars.customer_id->customers.id"]!;
   assert.equal(noRows.status, "empty");
   assert.equal(noRows.skipped, "no non-null rows to test");
-  assert.equal(noRows.measurement.numbers.total, 0);
+  assert.deepEqual(noRows.measurement.numbers, {}, "nothing ran, so there are no numbers");
+  assert.match(noRows.measurement.query, /^-- from the extract: cars has no rows/);
   assert.equal(v["suspicion:inconsistent_values:cars.make"]!.status, "empty", "an empty column is not proof that its values are consistent");
   assert.ok(
     err.some((l) => l === "empty: 2 claims with nothing to measure (2 no non-null rows to test)"),
@@ -120,7 +128,11 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
 
   assert.ok(existsSync(join(cwd, "context", "README.md")));
   assert.ok(existsSync(join(cwd, "context", "ENTITIES.md")));
-  assert.ok(existsSync(join(cwd, "context", "tables", "orders.md")));
+  const tableFile = (name: string) => readFileSync(join(cwd, "context", "tables", `${name}.md`), "utf8");
+  assert.match(tableFile("orders"), /\*\*BROKEN\*\* orders\.customer_id -> customers\.id: 88\.0% match \(440 of 500 sampled\), 60 orphans \(inferred\)/, "rendered from the measurement, not the model's canned file");
+  assert.deepEqual((/- status: (.*)\n/.exec(tableFile("orders"))?.[1] ?? "").split(", ").sort(), ['"Pending"', '"SHIPPED"', '"cancelled"', '"pending"', '"shipped"'], "every value, quoted");
+  assert.match(tableFile("customers"), /orders\.customer_id -> customers\.id/, "a table the model wrote no file for has one, with its incoming join");
+  assert.match(tableFile("order_totals"), /^# order_totals\n\nmaterialized view, no rows, primary key: none\n/);
   assert.ok(!existsSync(join(cwd, "escape.md")), "paths outside context/ are dropped");
 
   assert.equal(model.requests.length, 2, "one call per prompt when replies validate");
@@ -234,7 +246,7 @@ test("a clean database, offline: declared keys confirmed, nothing broken, fits i
   const cwd = mkdtempSync(join(tmpdir(), "dbtruth-it-"));
   const out: string[] = [];
   const transport: Transport = async (system, messages) => {
-    if (system.includes("writing reference files")) return JSON.stringify({ "context/README.md": "# clean\n" });
+    if (system.includes("writing reference files")) return JSON.stringify({ "context/README.md": "# clean\n", "context/ENTITIES.md": "# entities\n" });
     const extract = JSON.parse(messages[0]!.content as string) as { tables: { name: string; foreignKeys: { column: string; refTable: string; refColumn: string }[] }[] };
     return JSON.stringify({
       entities: [], tables: [], questions: [],

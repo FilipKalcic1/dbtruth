@@ -12,9 +12,11 @@ a competing recommendation. Each entry says what, why, and what was not done.
 ## Small extensions of the spec's types
 
 - **`Verified` carries `database` and `tables`** (per table: primary key, row
-  estimate, distinct values of categorical columns). Prompt B is required to
-  write the key and the categorical values, and `Claims` do not carry them.
-  This is allowed fix 1, better evidence, not a new feature.
+  estimate, distinct values of categorical columns). The per-table files need
+  the key and the categorical values, and `Claims` do not carry them. Since
+  0.1.8 `write.ts` renders those files from `Verified` itself; the model still
+  receives the whole object. This is allowed fix 1, better evidence, not a new
+  feature.
 - **`Table` carries `schema`** so `verify.ts` can write correct SQL for tables
   outside `public`. `name` is still the display name (`table`, or
   `schema.table` outside `public`).
@@ -233,16 +235,96 @@ Deliberately not done:
 Needs Postgres 12 or newer: `MATERIALIZED` common table expressions,
 `pg_constraint.conparentid`, `relispartition`.
 
+## 0.1.8: the third review
+
+An external review listed what it thought was wrong; three independent
+designs and three judges checked each item against the code. Real, and fixed:
+
+- **Per-table files are rendered, not written by the model.** The spec has
+  prompt B produce README.md, ENTITIES.md and one file per table in a single
+  reply. Everything in a table file is already in `Verified`: the purpose and
+  grain the model wrote in step 2, the key, size and values from step 1, the
+  joins and problems with their numbers from step 3. Step 4 could only
+  transcribe them, the reply grew with the table count, and on a database
+  with hundreds of tables it outgrew `modelMaxOutputTokens` and the run failed
+  after the sampling and the contextualize call had been paid for. `write.ts`
+  now renders `context/tables/<table>.md` from `Verified` with no model call,
+  so every number in them is the measured number, every relation gets a file,
+  and nothing unconfirmed passes as a fact. Prompt B writes README.md and
+  ENTITIES.md, where the synthesis is, and its reply is validated as those two
+  keys, so a missing file is sent back like any other invalid reply. Not done:
+  batching per-table calls (the same transcription, N failure modes, N times
+  the input, and a batch size would be a new number) and raising the ceiling.
+  The README's pasted fixture output predates this change; regenerate it from
+  a live run.
+- **Nothing to measure, on either side.** A claim into an empty table came
+  back with zero hits and was rejected, so a possibly true relationship
+  vanished because its target happened to be unloaded; `inconsistent_values`
+  and `duplicate_entity` on an empty table ran a statement to learn it. One
+  helper now answers from the extract before any statement: a materialized
+  view never refreshed, or a relation whose scan counted no rows, on the source
+  side ("no non-null rows to test") or the target side ("no rows to match
+  against"). A claim naming a column the table does not have is unverifiable
+  first, whatever the row count. `dead_table` still counts: there emptiness is
+  the finding, and the count is evidence a human can rerun.
+- **Claims name tables as the extract does.** The model's spelling of a table
+  name is resolved once, when its reply is validated: exact, then regardless
+  of case, on the display or the schema-qualified name. Verify and the
+  per-table files then compare names exactly, and a relationship the model
+  stated twice in two spellings is one claim.
+- **A stale catalog estimate of 0 survived a full scan.** A table analyzed
+  while empty and loaded since takes the plain LIMIT path; when that scan came
+  back full, the catalog's 0 was kept, and every claim on the table would have
+  been "empty" without a query. A plain scan that fills the sample proves at
+  least that many rows, so the estimate stands only when it agrees, else the
+  size is unknown; a random sample keeps the estimate. When the statistics
+  statement fails, a catalog 0 is not trusted either: nothing confirmed it.
+- **Every sample of a large table came from its oldest pages.** `TABLESAMPLE
+  SYSTEM` returns whole pages in file order, and the sample asked for three
+  times the rows and cut them with `LIMIT`, so the statistics, the value lists,
+  the year ranges and the join hit rates of any table above `sampleRows` were
+  measured on roughly its oldest third: a status value added last quarter was
+  missing from `values`, a column back-filled only for new rows looked mostly
+  null. The sample is now sized to `sampleRows` from the estimate, and the
+  LIMIT only caps a sample whose estimate was low by more than
+  `sampleOversample`.
+- **The join statement counts nulls.** Hit rate, hits and orphans are over
+  non-null values as before; `nulls` is the sampled rows with no value, in
+  the same statement. A null is an absence an inner join drops silently, an
+  orphan is a value that points nowhere; the per-table file and prompt B say
+  which is which. Verdicts and exit codes do not move.
+- **Two measurements were quadratic on real tables.** The join to a column
+  that is not the leading primary-key column used `IN (subquery)`, which the
+  planner hashes only while the target fits `work_mem` and rescans per sampled
+  row above it; it is now a join to the deduplicated target, read once.
+  `duplicate_entity` compared with `IS NOT DISTINCT FROM` in a correlated
+  `EXISTS`, one scan of the second table per sampled row; it is now an
+  `INTERSECT` of distinct tuples, one scan of each side, nulls still equal.
+  The overlap is therefore over distinct sampled rows.
+
+Deliberately not done, from the same review:
+
+- A second sample with another seed, or a sweep over every type-compatible
+  target per claim. See "One sample, one target" under Known limits.
+- Polymorphic detection from sibling `_type` / `_kind` columns, or filters
+  for id-like column names. Both read names for meaning, which the visibility
+  rule forbids; the name-free route is the conditional join claim under Known
+  limits.
+- MySQL and MariaDB: every layer leans on Postgres catalog facts and syntax.
+- An external policy layer: `safety.ts` is the policy layer, and
+  `structure.test.ts` pins that nothing else can reach the database.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
-- `isTextType` in `extract.ts` names the Postgres type families whose values
-  are free text. It decides visibility by type, which the spec allows; it
-  never reads a column's name or values.
+- `typeFamily` in `safety.ts` names the Postgres type families whose values
+  are free text or dates. It decides visibility by type, which the spec
+  allows; it never reads a column's name or values.
+- `schemas.ts` matches a claim's table name to an extracted table (exact,
+  then case-insensitive, on the display or the qualified name) when the
+  model's reply is validated, and spells it as the extract does from then on.
 - `safety.ts` checks that a statement begins with SELECT or WITH, quotes
   identifiers, and parses one line of `.env`.
-- `verify.ts` matches a claim's table name to an extracted table (exact,
-  then case-insensitive) and recognises timestamp types for the dead-table
-  measurement.
+- `verify.ts` recognises timestamp types for the dead-table measurement.
 - `write.ts` normalises output paths into `context/`.
 - Verdict ids are prefixed `relationship:` / `suspicion:` so the exit code and
   the summary can tell them apart.
@@ -262,8 +344,20 @@ Needs Postgres 12 or newer: `MATERIALIZED` common table expressions,
 - `WITH` is accepted by the statement guard because verify uses CTEs. A
   data-modifying CTE would be refused by the read-only session anyway.
 - Structured outputs (`output_config.format`) could replace JSON extraction
-  for prompt A. Prompt B returns a record with dynamic keys, so one mechanism
-  (extract, validate, retry once) serves both.
+  for both prompts now that prompt B returns two fixed keys. One mechanism
+  (extract, validate, retry once) still serves both.
+- **One sample, one target.** Every measurement over a table larger than
+  `sampleRows` reads the same `TABLESAMPLE` pages (`sampleSeed`), so the
+  statistics the model saw, the value lists and the join hit rate agree, and
+  the query in every verdict reruns to the same numbers. A second sample would
+  measure sampling variance, which at this sample size moves a 95% proportion
+  by about a tenth of a point, and would not catch a coincidental match: a
+  dense small-integer column (quantities, years, small lookup ids) that hits
+  100% against an unrelated key does so on every sample, because the
+  coincidence is in the data. Sweeping every type-compatible target per claim
+  would multiply statements by the table count and report joins nobody
+  claimed. The defence is the claim: prompt A proposes joins from names, types
+  and constraints, and routes polymorphic references to a suspicion.
 - **The value-length gate is a length, not a shape.** A text column is
   categorical only if it has few distinct values and none longer than
   `categoricalMaxValueLength`. That hides MD5 (32), SHA-1 (40), bcrypt (60)

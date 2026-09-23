@@ -114,6 +114,9 @@ output leads with it and the numbers. Below 50% it is dropped. The same goes
 for suspected dead tables (count, newest timestamp), duplicate tables (row
 overlap), inconsistent values (case and whitespace collisions) and missing
 keys. Every verdict carries the query and the numbers so you can rerun it.
+Each table's file under `context/tables/` is rendered from those measurements
+directly, so every number in it is the measured number; the model writes
+`README.md` and `ENTITIES.md`, where the synthesis is.
 
 Views and materialized views are included, with their SQL, so the model knows
 what they read. A partitioned table stands for its partitions: one entry, with

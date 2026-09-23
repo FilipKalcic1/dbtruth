@@ -3,13 +3,13 @@
 // This module knows nothing about thresholds. It runs the query, returns the
 // numbers and the query text, and marks a measurement `skipped` when it could
 // not be taken (timeout, budget, unknown table, no way to measure), and also
-// `empty` when the source held no rows to measure. Claims are measured
-// strongest first, so when the budget runs out it is the weakest that go
-// unverified.
+// `empty` when a relation the claim names held no rows to measure. Claims are
+// measured strongest first, so when the budget runs out it is the weakest that
+// go unverified.
 
 import type { Config } from "./config.js";
-import { bareName, DATATYPE_MISMATCH_STATES, q, qualified, querySampled, typeFamily, type Db, type QueryResult } from "./safety.js";
-import { relationshipId, suspicionId, type Claims, type Extract, type Measurement, type Relationship, type Suspicion, type Table } from "./schemas.js";
+import { DATATYPE_MISMATCH_STATES, q, qualified, querySampled, typeFamily, type Db, type QueryResult } from "./safety.js";
+import { findTable, relationshipId, suspicionId, type Claims, type Extract, type Measurement, type Relationship, type Suspicion, type Table } from "./schemas.js";
 
 const SECONDS_PER_DAY = 86_400;
 
@@ -25,30 +25,35 @@ export async function verify(db: Db, cfg: Config, extract: Extract, claims: Clai
 
 async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimId: string, r: Relationship): Promise<Measurement> {
   const kind = "relationship";
-  const from = findTable(extract, r.from.table);
-  const to = findTable(extract, r.to.table);
+  const from = findTable(extract.tables, r.from.table);
+  const to = findTable(extract.tables, r.to.table);
   if (!from) return skip(claimId, kind, `unknown table ${r.from.table}`);
   if (!to) return skip(claimId, kind, `unknown table ${r.to.table}`);
-  if (unpopulated(from) || unpopulated(to)) return skipEmpty(claimId, kind, NEVER_REFRESHED);
-  if (from.rowEstimate === 0) return skipEmpty(claimId, kind, EMPTY_SOURCE, `-- ${from.name} has no rows according to the catalog`, { total: 0 });
   if (!hasColumn(from, r.from.column)) return skip(claimId, kind, `unknown column ${r.from.table}.${r.from.column}`);
   if (!hasColumn(to, r.to.column)) return skip(claimId, kind, `unknown column ${r.to.table}.${r.to.column}`);
+  const empty = nothingToMeasure(claimId, kind, from, to);
+  if (empty) return empty;
 
-  // A probe per row is right when the target column is a key (indexed); otherwise one pass over the target, hashed.
-  const keyed = to.primaryKey?.includes(r.to.column) ?? false;
-  const col = q(r.from.column);
-  const target = `${qualified(to)} t`;
+  // The target is probed per row through its index when the column leads the primary key and is compared as is;
+  // otherwise, or once a datatype mismatch forces a comparison as text that no index serves, it is read once,
+  // deduplicated and hashed, which the planner batches to disk when it is large. count(col) and the match both
+  // pass over a null reference, so total and hits are over non-null rows; nulls is what they left out.
+  const keyed = to.primaryKey?.[0] === r.to.column;
+  const col = `f.${q(r.from.column)}`;
+  const counts = `count(${col}) AS total, count(*) - count(${col}) AS nulls`;
   const sql = (source: string, cast: string) =>
-    `WITH s AS (SELECT ${col}${cast} AS v FROM ${source} f WHERE ${col} IS NOT NULL)
-SELECT count(*) AS total,
-       count(*) FILTER (WHERE ${keyed ? `EXISTS (SELECT 1 FROM ${target} WHERE t.${q(r.to.column)}${cast} = s.v)` : `s.v IN (SELECT t.${q(r.to.column)}${cast} FROM ${target})`}) AS hits
-  FROM s`;
+    keyed && !cast
+      ? `SELECT ${counts}, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ${qualified(to)} t WHERE t.${q(r.to.column)} = ${col})) AS hits
+  FROM ${source} f`
+      : `SELECT ${counts}, count(t.v) AS hits
+  FROM ${source} f LEFT JOIN (SELECT DISTINCT ${q(r.to.column)}${cast} AS v FROM ${qualified(to)}) t ON t.v = ${col}${cast}`;
   const { query, result } = await runWithTextFallback(db, cfg, from, sql);
   if (!result.ok) return skip(claimId, kind, result.message, query);
   const total = Number(result.rows[0]?.total);
   const hits = Number(result.rows[0]?.hits);
-  if (total === 0) return skipEmpty(claimId, kind, EMPTY_SOURCE, query, { total });
-  return { claimId, kind, query, numbers: { total, hits, orphans: total - hits, hit: hits / total } };
+  const nulls = Number(result.rows[0]?.nulls);
+  if (total === 0) return skipEmpty(claimId, kind, EMPTY_SOURCE, query, { total, nulls });
+  return { claimId, kind, query, numbers: { total, hits, orphans: total - hits, hit: hits / total, nulls } };
 }
 
 // ---------- suspicions ----------
@@ -87,9 +92,9 @@ export function deadTableQuery(table: Table, cfg: Pick<Config, "sampleRows">): {
 /** count (exact when the table is small) and the age in days of the newest timestamp. */
 async function measureDeadTable(db: Db, cfg: Config, extract: Extract, claimId: string, s: Suspicion): Promise<Measurement> {
   const kind = s.kind;
-  const table = findTable(extract, s.tables[0]);
+  const table = findTable(extract.tables, s.tables[0]);
   if (!table) return skip(claimId, kind, `unknown table ${s.tables[0]}`);
-  if (unpopulated(table)) {
+  if (table.populated === false) {
     return {
       claimId,
       kind,
@@ -112,15 +117,17 @@ async function measureDeadTable(db: Db, cfg: Config, extract: Extract, claimId: 
 /** distinct values vs distinct canonical forms; canonical = lower(btrim(value)). */
 async function measureInconsistentValues(db: Db, cfg: Config, extract: Extract, claimId: string, s: Suspicion): Promise<Measurement> {
   const kind = s.kind;
-  const table = findTable(extract, s.tables[0]);
+  const table = findTable(extract.tables, s.tables[0]);
   if (!table) return skip(claimId, kind, `unknown table ${s.tables[0]}`);
-  if (unpopulated(table)) return skipEmpty(claimId, kind, NEVER_REFRESHED);
   if (!s.column) return skip(claimId, kind, "no column named");
   if (!hasColumn(table, s.column)) return skip(claimId, kind, `unknown column ${table.name}.${s.column}`);
+  const empty = nothingToMeasure(claimId, kind, table);
+  if (empty) return empty;
 
   const col = `${q(s.column)}::text`;
-  const { result, source } = await querySampled(db, table, cfg, (src) => `SELECT count(DISTINCT ${col}) AS distinct_values, count(DISTINCT lower(btrim(${col}))) AS canonical_forms FROM ${src} s`);
-  const query = `SELECT count(DISTINCT ${col}) AS distinct_values, count(DISTINCT lower(btrim(${col}))) AS canonical_forms FROM ${source} s`;
+  const sql = (src: string) => `SELECT count(DISTINCT ${col}) AS distinct_values, count(DISTINCT lower(btrim(${col}))) AS canonical_forms FROM ${src} s`;
+  const { result, source } = await querySampled(db, table, cfg, sql);
+  const query = sql(source);
   if (!result.ok) return skip(claimId, kind, result.message, query);
   const distinctValues = Number(result.rows[0]?.distinct_values);
   const canonicalForms = Number(result.rows[0]?.canonical_forms);
@@ -130,35 +137,36 @@ async function measureInconsistentValues(db: Db, cfg: Config, extract: Extract, 
   return { claimId, kind, query, numbers };
 }
 
-/** share of A's sample rows whose tuple on the shared columns exists in B. */
+/** share of A's distinct sampled tuples on the shared columns that exist in B. */
 async function measureDuplicateEntity(db: Db, cfg: Config, extract: Extract, claimId: string, s: Suspicion): Promise<Measurement> {
   const kind = s.kind;
-  const a = findTable(extract, s.tables[0]);
-  const b = findTable(extract, s.tables[1]);
+  const a = findTable(extract.tables, s.tables[0]);
+  const b = findTable(extract.tables, s.tables[1]);
   if (!a || !b) return skip(claimId, kind, `needs two known tables, got ${s.tables.join(", ")}`);
-  if (unpopulated(a) || unpopulated(b)) return skipEmpty(claimId, kind, NEVER_REFRESHED);
-
   const shared = a.columns.map((c) => c.name).filter((name) => hasColumn(b, name));
   if (shared.length === 0) return skip(claimId, kind, "no shared column names");
+  const empty = nothingToMeasure(claimId, kind, a, b);
+  if (empty) return empty;
 
+  // A set operation treats nulls as equal and hashes each side once, so the cost is one read of each table.
+  const cols = (alias: string, cast: string) => shared.map((c) => `${alias}.${q(c)}${cast}`).join(", ");
   const sql = (source: string, cast: string) =>
-    `WITH a AS (SELECT ${shared.map(q).join(", ")} FROM ${source} a)
-SELECT count(*) AS total,
-       count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ${qualified(b)} b WHERE ${shared.map((c) => `b.${q(c)}${cast} IS NOT DISTINCT FROM a.${q(c)}${cast}`).join(" AND ")})) AS matched
-  FROM a`;
+    `WITH a AS MATERIALIZED (SELECT DISTINCT ${cols("a", cast)} FROM ${source} a)
+SELECT (SELECT count(*) FROM a) AS total,
+       (SELECT count(*) FROM (SELECT * FROM a INTERSECT SELECT ${cols("b", cast)} FROM ${qualified(b)} b) i) AS matched`;
   const { query, result } = await runWithTextFallback(db, cfg, a, sql);
   if (!result.ok) return skip(claimId, kind, result.message, query);
   const total = Number(result.rows[0]?.total);
   const matched = Number(result.rows[0]?.matched);
   const numbers = { total, matched, sharedColumns: shared.length };
-  if (total === 0) return skipEmpty(claimId, kind, `${a.name} has no rows to compare`, query, numbers);
+  if (total === 0) return skipEmpty(claimId, kind, EMPTY_SOURCE, query, numbers);
   return { claimId, kind, query, numbers: { ...numbers, overlap: matched / total } };
 }
 
 /** From the schema: is there a primary key? */
 function measureMissingKey(extract: Extract, claimId: string, s: Suspicion): Measurement {
   const kind = s.kind;
-  const table = findTable(extract, s.tables[0]);
+  const table = findTable(extract.tables, s.tables[0]);
   if (!table) return skip(claimId, kind, `unknown table ${s.tables[0]}`);
   return { claimId, kind, query: `-- from the schema: pg_constraint with contype = 'p' on ${table.name}`, numbers: { hasPrimaryKey: table.primaryKey ? 1 : 0 } };
 }
@@ -184,15 +192,20 @@ function skipEmpty(claimId: string, kind: Measurement["kind"], reason: string, q
   return { ...skip(claimId, kind, reason, query, numbers), empty: true };
 }
 
-/** The relation a claim names: exact match on the display or the qualified name first, then case-insensitive. */
-export function findTable(extract: Extract, name: string | undefined): Table | undefined {
-  if (name === undefined) return undefined;
-  const wanted = name.trim();
-  const candidates = (t: Table) => [t.name, `${t.schema}.${bareName(t)}`];
-  return (
-    extract.tables.find((t) => candidates(t).includes(wanted)) ??
-    extract.tables.find((t) => candidates(t).some((c) => c.toLowerCase() === wanted.toLowerCase()))
-  );
+/**
+ * The empty measurement for a claim whose source or target the extract already knows holds nothing:
+ * a materialized view that was never refreshed (Postgres refuses to read it) or a relation whose scan
+ * counted no rows. Nothing can be measured, so the claim is empty rather than rejected, and no
+ * statement runs. Undefined when every relation named can be read.
+ */
+function nothingToMeasure(claimId: string, kind: Measurement["kind"], source: Table, target?: Table): Measurement | undefined {
+  const empty = (t: Table, noRows: string) =>
+    t.populated === false
+      ? skipEmpty(claimId, kind, NEVER_REFRESHED, `-- from the schema: pg_class.relispopulated is false for ${t.name}`)
+      : t.rowEstimate === 0
+        ? skipEmpty(claimId, kind, noRows, `-- from the extract: ${t.name} has no rows`)
+        : undefined;
+  return empty(source, EMPTY_SOURCE) ?? (target && empty(target, EMPTY_TARGET));
 }
 
 function hasColumn(table: Table, column: string): boolean {
@@ -203,6 +216,4 @@ const NEVER_REFRESHED = "a materialized view that has never been refreshed canno
 
 const EMPTY_SOURCE = "no non-null rows to test";
 
-function unpopulated(table: Table): boolean {
-  return table.populated === false;
-}
+const EMPTY_TARGET = "no rows to match against";
