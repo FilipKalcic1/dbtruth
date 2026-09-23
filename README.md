@@ -40,6 +40,14 @@ before writing SQL, `1` means it could not run, `0` means nothing found. The
 database URL can also be passed as `--url`, and both settings can come from
 the environment instead of `.env`.
 
+**Monorepos.** Run it from anywhere inside the repository. dbtruth reads the
+`.env` nearest to the current directory, looking up to the repository root
+(the first directory with a `.git`), and says which file it read when that is
+not the one in the current directory. A `.env` it cannot read is named with
+the reason and passed over. The nearest file is used whole; two files are
+never merged. Outside a repository only the current directory is searched.
+For a settings file anywhere else, pass `--dotenv <path>`.
+
 ## Commands
 
 ```bash

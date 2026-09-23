@@ -11,8 +11,8 @@
 //   5. A lost connection is an error that stops the run: it is never reported as "nothing found".
 //   6. The connection URL is never logged, stored or returned.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import pg from "pg";
 
@@ -55,18 +55,54 @@ const MS_PER_SECOND = 1000;
 
 /** KEY=value pairs from a .env file in cwd, or {} when there is none. Values are never printed. */
 export function readDotEnv(cwd: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  let text: string;
   try {
-    text = readFileSync(join(cwd, ".env"), "utf8");
+    return readEnvFile(join(cwd, ".env"));
   } catch {
-    return out;
+    return {};
   }
-  for (const line of text.split(/\r?\n/)) {
+}
+
+/** KEY=value pairs from one settings file; throws when it cannot be read. Values are never printed. */
+export function readEnvFile(path: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
     const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
     if (m) out[m[1]!] = m[2]!.replace(/^(["'])(.*)\1$/, "$2");
   }
   return out;
+}
+
+/**
+ * The .env nearest to start, looking up to the repository root: the first directory with a .git,
+ * a directory or, in a worktree or submodule, a file. Outside a repository only start is searched,
+ * so an unrelated ~/.env is never read. The nearest file is used whole, never merged with another;
+ * one that cannot be read is listed in searched with its error, and the search goes on. A directory named
+ * .env, such as a Python virtualenv, is not a settings file and is passed over like a missing one.
+ */
+export function findDotEnv(start: string): { path?: string; values: Record<string, string>; searched: { dir: string; error?: string }[] } {
+  // From the real path, so a symlinked directory is searched where it really is.
+  const from = realpathSync(start);
+  const root = repositoryRoot(from) ?? from;
+  const searched: { dir: string; error?: string }[] = [];
+  for (let dir = from; ; dir = dirname(dir)) {
+    const path = join(dir, ".env");
+    try {
+      if (statSync(path, { throwIfNoEntry: false })?.isFile()) return { path, values: readEnvFile(path), searched: [...searched, { dir }] };
+      searched.push({ dir });
+    } catch (e) {
+      searched.push({ dir, error: errorMessage(e) });
+    }
+    if (dir === root) return { values: {}, searched };
+  }
+}
+
+/** The first directory from dir upward that holds a .git, or undefined when none does up to the filesystem or drive root. */
+function repositoryRoot(dir: string): string | undefined {
+  while (!existsSync(join(dir, ".git"))) {
+    if (dirname(dir) === dir) return undefined;
+    dir = dirname(dir);
+  }
+  return dir;
 }
 
 /** DATABASE_URL from --url, then the environment (merged with .env by the caller). Never printed. */

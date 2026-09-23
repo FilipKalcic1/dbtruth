@@ -2,15 +2,15 @@
 // cli.ts: orchestrates one run, in order. Nothing else.
 
 import { Command } from "commander";
-import { readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Overrides } from "./config.js";
 import { contextualize } from "./contextualize.js";
 import { extract, fitToContext } from "./extract.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
-import { connect, readDotEnv, resolveDatabaseUrl } from "./safety.js";
+import { connect, findDotEnv, readEnvFile, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
 import { assemble, describeKinds, EXIT_FAILURE, exitCode } from "./verdict.js";
 import { verify } from "./verify.js";
@@ -18,6 +18,8 @@ import { OUTPUT_DIR, persist, write } from "./write.js";
 
 export type RunOptions = {
   url?: string;
+  /** The settings file to read instead of looking for .env, relative to cwd. */
+  dotenv?: string;
   samples: boolean;
   reveal: string[];
   json: boolean;
@@ -34,12 +36,27 @@ export type RunDeps = {
 };
 
 export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number> {
-  // 1. DATABASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL and DBTRUTH_* from the environment, else from .env in cwd.
-  const env = { ...readDotEnv(opts.cwd), ...opts.env };
+  // 1. DATABASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL and DBTRUTH_* from the environment, else from the settings
+  //    file: --dotenv, or the .env nearest to cwd up to the repository root.
+  const dotenv = opts.dotenv && resolve(opts.cwd, opts.dotenv);
+  if (dotenv && !existsSync(dotenv)) {
+    opts.err(`--dotenv ${opts.dotenv}: no such file`);
+    return EXIT_FAILURE;
+  }
+  const settings = dotenv ? { path: dotenv, values: readEnvFile(dotenv), searched: [] } : findDotEnv(opts.cwd);
+  // A .env that could not be read is named, so a file used further up is no surprise. Paths are relative to cwd as
+  // given, not its real path, because Windows resolves ".." as written; never a value. Whether the file used is in cwd
+  // is decided on real paths, so a symlinked cwd's own .env is not announced.
+  for (const { dir, error } of settings.searched) {
+    if (error) opts.err(`could not read ${relative(opts.cwd, join(dir, ".env"))} (${error})`);
+  }
+  const file = settings.path && relative(opts.cwd, settings.path);
+  if (settings.path && realpathSync(dirname(settings.path)) !== realpathSync(opts.cwd)) opts.err(`reading settings from ${file}`);
+  const env = { ...settings.values, ...opts.env };
   const cfg = resolveConfig(env, opts.flags);
   const url = resolveDatabaseUrl(opts.url, env);
   if (!url) {
-    opts.err("no database URL: set DATABASE_URL, put it in .env, or pass --url");
+    for (const line of noDatabaseUrl(file, settings.searched)) opts.err(line);
     return EXIT_FAILURE;
   }
 
@@ -103,6 +120,19 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
   }
 }
 
+/** Where DATABASE_URL was looked for, then one way to set it per line. */
+function noDatabaseUrl(file: string | undefined, searched: { dir: string }[]): string[] {
+  return [
+    `no database URL: DATABASE_URL is not in the environment or in ${file ?? "a .env"}`,
+    ...searched.map(({ dir }) => `  searched ${dir}`),
+    "set it to postgres://user:password@host:5432/dbname in one of these ways:",
+    `  in ${file ?? "a .env in one of those directories"}`,
+    "  in the environment",
+    "  with --url",
+    "  in a file elsewhere, read with --dotenv <path>",
+  ];
+}
+
 function summary(v: Verified, fileCount: number, spentMs: number, modelMs: { contextualize: number; write: number }): string[] {
   const count = (prefix: string, status: string) => Object.entries(v.verdicts).filter(([id, x]) => id.startsWith(prefix) && x.status === status).length;
   const rel = (s: string) => count("relationship:", s);
@@ -147,6 +177,7 @@ export async function main(argv: string[]): Promise<number> {
     .description("Verified database context for AI coding agents. Read-only, Postgres.")
     .version(version, "-v, --version")
     .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
+    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root")
     .option("--reveal <table.column>", "show one hidden column's values to the model (repeatable)", collect)
     .option("--no-samples", "send schema and statistics only, no sample rows")
     .option("--json", "print the Verified object as JSON to stdout")
@@ -163,6 +194,7 @@ export async function main(argv: string[]): Promise<number> {
   try {
     return await run({
       url: o.url,
+      dotenv: o.dotenv,
       samples: o.samples !== false,
       reveal: o.reveal ?? [],
       json: Boolean(o.json),

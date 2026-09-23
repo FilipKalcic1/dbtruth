@@ -414,6 +414,56 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   version npm packed. Not done: a module or helper for the version. The
   snapshot (T3.1) and the MCP server (T5.1) need the same value, and
   `cli.ts` will hand it to them.
+- **`.env` is found up to the repository root.** In a monorepo `.env` sits at
+  the root while the command runs from a package, and 0.1.8 read the working
+  directory only, so the user was told "no database URL" with no idea why.
+  `findDotEnv` in `safety.ts` walks up from the real path of the working
+  directory to the first directory that holds a `.git` (a directory, or a
+  file in a worktree or submodule), and searches that root too. Outside a
+  repository it searches the working directory only, so an unrelated
+  `~/.env` is never read. The nearest `.env` wins and is read whole; two
+  files are never merged, so a run's settings are one file a person can open.
+  A `.env` that cannot be read is named on stderr with its error and passed
+  over, so a file used further up is no surprise; a directory named `.env`,
+  such as a Python virtualenv, is not a settings file and is passed over
+  without a word. When the file used is not in the working directory, stderr
+  says `reading settings from ../../.env` before the disclosure line, never a
+  value; that is decided on real paths, so a symlinked directory's own `.env`
+  is not announced, while the path shown is relative to the directory as
+  given, because Windows resolves `..` as written. Paths found on disk are
+  printed as the system spells them, so they paste into its shell. The "no
+  database URL" error lists the directories searched and one fix per line.
+  `searched` carries each directory with an optional error rather than the
+  plan's strings, so `cli.ts` words the error. Precedence is unchanged:
+  `--url`, the environment (an empty variable still means unset and hides
+  the file's), the file. Not done: a line of its own for that empty variable,
+  or for a `--dotenv` file that exists but cannot be read, which stops the run
+  with the system's error like any other unreadable file.
+- **The option is `--dotenv`, not the plan's `--env-file`.** Node claims
+  `--env-file` from anywhere on its command line, after the script name too:
+  `node argv.mjs --env-file nope.env` exits 9 with Node's own `nope.env: not
+  found` before the script runs (Node 20.20, 22.18, 22.23, 24.21, and through
+  `npx`), and with a file that exists Node applies that file's `NODE_OPTIONS`
+  before passing the flag on. `npx dbtruth` and `node dist/cli.js` both go
+  through Node, so an option of that name can never do what the plan asks;
+  `--dotenv` reaches dbtruth untouched. Section 0, item 5 of the plan: the
+  platform wins, and the lead decided the name after T1.1 iteration 3. The
+  later tasks that take the option use it too: `doctor` (T1.3), `check`
+  (T3.2), `mcp` (T5.1) and Appendix E.
+- **What "no value from any `.env` is ever printed" (T1.1, A6) covers.** Nothing
+  read from a settings file is printed except what 0.1.8 already printed on
+  purpose: the model id, which the disclosure line names because it says where
+  the data goes, and the database name as the server reports it. Credentials,
+  host, user, the API key and every other value never are. A test puts
+  `canary-pii` into a `.env`'s password, key and an unrelated variable and
+  runs every path T1.1 adds or changes, errors included; no line holds it.
+  One limit remains until T1.3: a failed connection prints the driver's
+  message, which can name the user, the database or the host, never the
+  password (`password authentication failed for user "..."`, `getaddrinfo
+  ENOTFOUND ...`). T1.3 turns connection failures into plain sentences, for
+  the full run as well as for `doctor`. dbtruth's own tuning values, which a
+  `.env` can also hold, are still printed where the tool reports using or
+  rejecting them.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

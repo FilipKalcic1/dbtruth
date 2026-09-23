@@ -145,7 +145,9 @@ function extractJson(reply: string): string | undefined {
   return start >= 0 && end > start ? reply.slice(start, end + 1) : undefined;
 }
 
-const KEY_HELP = "Set ANTHROPIC_API_KEY in the environment or in a .env file in this directory; keys are created at console.anthropic.com.";
+const KEY_HELP =
+  "Set ANTHROPIC_API_KEY in the environment or in a .env file in this directory or its parents up to the repository root; " +
+  "keys are created at console.anthropic.com.";
 
 /** One sentence a person can act on, from whatever the SDK threw before or during a request. */
 function explainApiFailure(e: unknown, model: string): string {
