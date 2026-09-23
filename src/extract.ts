@@ -277,12 +277,15 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
     source = sampleSource(table, cfg, false);
     stats = await db.query(statsQuery(source));
   }
-  if (!stats.ok) return keysOnly(); // statistics unavailable: keep the schema, show only declared keys, sample nothing
+  // Statistics unavailable: keep the schema, show only declared keys, sample nothing. The catalog's estimate stands, except a 0 that nothing confirmed.
+  if (!stats.ok) return { ...keysOnly(), rowEstimate: table.rowEstimate === 0 ? -1 : table.rowEstimate };
 
   const row = stats.rows[0] as Row;
   const n = Number(row.n);
-  // A plain LIMIT that came back short counted the whole relation; a sample that filled up says only "at least this many".
-  const rowEstimate = source === sampleSource(table, cfg, false) && n < cfg.sampleRows ? n : table.rowEstimate < 0 ? -1 : table.rowEstimate;
+  // A random sample keeps the catalog's estimate. A plain LIMIT that came back short counted the whole relation;
+  // one that filled up proves at least n rows, so an estimate below that (stale, or unknown) is "at least the sample size".
+  const plain = source === sampleSource(table, cfg, false);
+  const rowEstimate = !plain ? table.rowEstimate : n < cfg.sampleRows ? n : table.rowEstimate >= n ? table.rowEstimate : -1;
   const columns: Column[] = cols.map((c, i) => {
     const s: ColumnStats = { nonNull: Number(row[`nn${i}`]), distinct: Number(row[`d${i}`]), maxLength: Number(row[`l${i}`] ?? 0) };
     const visible = isCategorical(s, cfg) || shownRegardless(c);

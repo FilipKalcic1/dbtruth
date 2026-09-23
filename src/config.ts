@@ -70,7 +70,7 @@ export const config: Config = {
   // Too low: seasonal tables look dead. Too high: dead tables look alive.
   staleAfterDays: 90,
 
-  // Share of one table's sample rows found in the other for the pair to count as duplicates.
+  // Share of one table's distinct sampled rows found in the other for the pair to count as duplicates.
   // Too low: parent/child lookalikes are called duplicates. Too high: partial copies are missed.
   duplicateOverlap: 0.7,
 
@@ -101,8 +101,10 @@ export const config: Config = {
   // Too low: small schemas look big. Too high: big schemas look small.
   charsPerToken: 4,
 
-  // TABLESAMPLE SYSTEM returns whole pages, so ask for a few times more than needed and LIMIT.
-  // Too low: samples fall short on tables with sparse pages. Too high: more rows scanned than needed.
+  // TABLESAMPLE SYSTEM returns whole pages in file order, so a LIMIT that cuts a sample keeps its oldest pages.
+  // The sample is sized to sampleRows from the catalog's estimate and cut only when the estimate was low by more
+  // than this factor. Too low: an accurate sample is cut to its oldest pages. Too high: a table that grew since
+  // its last ANALYZE is read far past sampleRows.
   sampleOversample: 3,
 
   // Seed for TABLESAMPLE ... REPEATABLE, so the statistics and the value lists of one table come from the same pages.

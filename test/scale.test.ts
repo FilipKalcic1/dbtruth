@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/cli.js";
@@ -58,7 +58,7 @@ test("an extract over the model's input limit is trimmed before it is sent, and 
   const err: string[] = [];
   let sent: Extract | undefined;
   const transport: Transport = async (system, messages) => {
-    if (system.includes("writing reference files")) return JSON.stringify({ "context/README.md": "# scale" });
+    if (system.includes("writing reference files")) return JSON.stringify({ "context/README.md": "# scale", "context/ENTITIES.md": "# entities" });
     sent = JSON.parse(messages[0]!.content as string) as Extract;
     return JSON.stringify({ entities: [], tables: [], relationships: [], suspicions: [], questions: [] });
   };
@@ -82,5 +82,6 @@ test("300 tables with the full budget: every table extracted", async () => {
   assert.equal(Object.values(verified.verdicts).filter((v) => v.status === "confirmed").length, 300, "every ref_id -> t_1.id join confirmed");
   assert.equal(Object.values(verified.verdicts).filter((v) => v.status === "rejected").length, 20, "every generated table is alive, so dead_table is rejected");
   assert.equal(verified.fitsInContext, false, "300 tables do not fit in an agent's context");
+  assert.equal(readdirSync(join(cwd, "context", "tables")).length, 300, "every relation gets a file from a two-file model reply");
   assert.ok(seconds < 90, `took ${seconds.toFixed(1)}s`);
 });

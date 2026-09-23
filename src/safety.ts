@@ -217,14 +217,16 @@ export function qualified(t: { schema: string; name: string }): string {
 export type SampleConfig = { sampleRows: number; sampleOversample: number; sampleSeed: number };
 
 /**
- * A bounded source of rows, wrapped in parentheses: TABLESAMPLE SYSTEM (random pages, repeatable
- * so two statements see the same pages) when the table is known to be larger than the sample,
- * a plain LIMIT otherwise or when random is false.
+ * A bounded source of rows, wrapped in parentheses: a plain LIMIT when the table is no larger than
+ * the sample or when random is false, otherwise TABLESAMPLE SYSTEM sized from the catalog's estimate
+ * to yield about sampleRows rows, repeatable so two statements see the same pages, and cut only
+ * when the estimate was low by more than sampleOversample (pages come in file order, so a cut keeps
+ * the oldest).
  */
 export function sampleSource(t: { schema: string; name: string; rowEstimate: number }, cfg: SampleConfig, random = true): string {
   if (!random || t.rowEstimate <= cfg.sampleRows) return `(SELECT * FROM ${qualified(t)} LIMIT ${cfg.sampleRows})`;
-  const percent = Math.min(100, (cfg.sampleRows / t.rowEstimate) * 100 * cfg.sampleOversample);
-  return `(SELECT * FROM ${qualified(t)} TABLESAMPLE SYSTEM (${percent.toFixed(4)}) REPEATABLE (${cfg.sampleSeed}) LIMIT ${cfg.sampleRows})`;
+  const percent = Number(((cfg.sampleRows / t.rowEstimate) * 100).toPrecision(4));
+  return `(SELECT * FROM ${qualified(t)} TABLESAMPLE SYSTEM (${percent}) REPEATABLE (${cfg.sampleSeed}) LIMIT ${cfg.sampleRows * cfg.sampleOversample})`;
 }
 
 /**
