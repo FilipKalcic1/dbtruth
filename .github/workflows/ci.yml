@@ -1,0 +1,52 @@
+# Every Postgres the README promises, on both supported Node majors.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Postgres ${{ matrix.postgres }}, Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["12", "14", "16", "18"]
+        node: ["20", "22"]
+    services:
+      db:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: dbtruth
+          POSTGRES_PASSWORD: dbtruth
+          POSTGRES_DB: fixture
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U dbtruth -d fixture"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # A service container cannot mount init scripts, so the fixture files are loaded here,
+      # in the order docker-compose.yml lists them, each starting connected to fixture as the
+      # image's entrypoint would.
+      - name: Load the fixtures
+        env:
+          PGPASSWORD: dbtruth
+        run: |
+          for file in $(grep -o 'test/fixtures/[A-Za-z0-9_]*\.sql' docker-compose.yml); do
+            echo "loading $file"
+            psql -v ON_ERROR_STOP=1 --no-psqlrc -h localhost -p 54329 -U dbtruth -d fixture -f "$file"
+          done
+      - run: npm run verify

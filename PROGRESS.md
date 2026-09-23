@@ -120,5 +120,24 @@ of each lost point, in the format of section 4.7 of the plan.
   `judge()` that passes a manual item whatever its evidence (A2's 100 depends
   on empty evidence failing), was not run: this session was not allowed to
   make the edit.
-- Commit: not made, because this run may not touch git. Its message is
-  `T0.1: Verification harness and scoring script (score 100)`.
+- Commit: `T0.1: Verification harness and scoring script (score 100)`,
+  3e910f0, made by the lead after rerunning the score (100/100).
+
+## T0.2 CI for this repository
+### Iteration 1
+- `.github/workflows/ci.yml`: Postgres 12, 14, 16, 18 by Node 20, 22, a
+  service container per cell on port 54329, fixtures loaded with `psql` in the
+  order `docker-compose.yml` lists them, then `npm run verify`. Actions pinned
+  by commit (checkout v7.0.1, setup-node v7.0.0).
+- `test/ci.test.ts` (in `test:unit`): the matrix starts at the README's minimum
+  Postgres and Node, and every fixture file is mounted in `docker-compose.yml`,
+  where CI reads the load order.
+- Sabotage: dropped "12" from the Postgres matrix; "CI runs the oldest Postgres
+  and Node the README promises, and the newest" failed with "Expected values to
+  be strictly deep-equal". Removed the scale.sql mount from docker-compose.yml;
+  "every fixture file is an init script of docker-compose.yml, which CI loads
+  in the same order" failed ("a fixture file that is not mounted is loaded
+  neither by docker compose nor by CI"). Both files restored from copies; `git
+  diff` showed nothing for docker-compose.yml.
+- A1 and A2 need GitHub: the branch is pushed so CI runs; A1 is earned only on
+  `main`, after a merge.

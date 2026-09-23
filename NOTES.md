@@ -385,6 +385,22 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   them out of the top level, and what can still leak is a stray file under
   `dist/`, which no build cleans.
 
+- **CI runs every Postgres the README promises.** `.github/workflows/ci.yml`
+  runs `npm run verify` on Postgres 12, 14, 16 and 18 and Node 20 and 22, on
+  every push and pull request. 12 is the documented minimum (see 0.1.6) and
+  behaves differently where it matters: it reports a never-analyzed table as
+  `reltuples = 0` rather than `-1`, which T2.1 depends on. 18 is the newest
+  release; 14 and 16 cover the versions between. Node 20 is
+  the `engines` minimum and 22 the current LTS. A service container cannot
+  mount init scripts, so CI loads the fixture files with `psql` in the order
+  `docker-compose.yml` lists them, read from that file rather than repeated;
+  `test/ci.test.ts` fails when a fixture file is not mounted there, or when
+  the matrix no longer starts at the README's minimum versions. Third-party
+  actions are pinned by commit. Not done: caching the fixture databases
+  between runs (loading them takes seconds) and a Windows runner (the
+  database is Linux in every supported setup; the CLI's Windows paths are
+  exercised on the maintainer's machine).
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values

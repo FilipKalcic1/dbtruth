@@ -1,5 +1,7 @@
 # dbtruth
 
+[![ci](https://github.com/FilipKalcic1/dbtruth/actions/workflows/ci.yml/badge.svg)](https://github.com/FilipKalcic1/dbtruth/actions/workflows/ci.yml)
+
 Connects read-only to your Postgres database and writes context an AI coding
 agent can trust: what each table is for, which entities live where, and how
 tables relate, with every relationship checked against the actual data before

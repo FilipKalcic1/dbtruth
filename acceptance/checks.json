@@ -16,5 +16,12 @@
   { "task": "T0.1", "id": "notes", "part": "docs", "file": "NOTES.md", "expectFile": "^## 0\\.2\\.0 \\(unreleased\\)$[\\s\\S]*^- \\*\\*The score is computed\\.\\*\\*" },
   { "task": "T0.1", "id": "changelog", "part": "docs", "file": "CHANGELOG.md", "expectFile": "^## 0\\.2\\.0 \\(unreleased\\)$[\\s\\S]*npm run acceptance" },
   { "task": "T0.1", "id": "structure", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/structure.test.ts", "expectStdout": "^ok \\d+ - dependency direction matches the spec$", "timeoutSeconds": 60 },
-  { "task": "T0.1", "id": "canary-stdout", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/integration.test.ts", "expectStdout": "^ok \\d+ - the whole loop on the fixture, offline: .*no personal data sent$", "timeoutSeconds": 120 }
+  { "task": "T0.1", "id": "canary-stdout", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/integration.test.ts", "expectStdout": "^ok \\d+ - the whole loop on the fixture, offline: .*no personal data sent$", "timeoutSeconds": 120 },
+  { "task": "T0.2", "id": "matrix", "part": "tests", "cmd": "node --import tsx --test --test-reporter=tap test/ci.test.ts", "expectStdout": "^ok \\d+ - CI runs the oldest Postgres and Node the README promises, and the newest$", "timeoutSeconds": 60 },
+  { "task": "T0.2", "id": "fixtures", "part": "tests", "cmd": "node --import tsx --test --test-reporter=tap test/ci.test.ts", "expectStdout": "^ok \\d+ - every fixture file is an init script of docker-compose\\.yml, which CI loads in the same order$", "timeoutSeconds": 60 },
+  { "task": "T0.2", "id": "verify", "part": "gates", "cmd": "npm run verify", "timeoutSeconds": 600 },
+  { "task": "T0.2", "id": "badge", "part": "docs", "file": "README.md", "expectFile": "^\\[!\\[ci\\]\\(https://github\\.com/FilipKalcic1/dbtruth/actions/workflows/ci\\.yml/badge\\.svg\\)\\]" },
+  { "task": "T0.2", "id": "notes", "part": "docs", "file": "NOTES.md", "expectFile": "^## 0\\.2\\.0 \\(unreleased\\)$[\\s\\S]*^- \\*\\*CI runs every Postgres the README promises\\.\\*\\*" },
+  { "task": "T0.2", "id": "structure", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/structure.test.ts", "expectStdout": "^ok \\d+ - dependency direction matches the spec$", "timeoutSeconds": 60 },
+  { "task": "T0.2", "id": "canary-stdout", "part": "invariants", "cmd": "node --import tsx --test --test-reporter=tap test/integration.test.ts", "expectStdout": "^ok \\d+ - the whole loop on the fixture, offline: .*no personal data sent$", "timeoutSeconds": 120 }
 ]
