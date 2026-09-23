@@ -141,6 +141,24 @@ of each lost point, in the format of section 4.7 of the plan.
   diff` showed nothing for docker-compose.yml.
 - A1 and A2 need GitHub: the branch is pushed so CI runs; A1 is earned only on
   `main`, after a merge.
+### Iteration 2: 100/100
+- A1: https://github.com/FilipKalcic1/dbtruth/actions/runs/35908505808, all
+  eight cells green on `main` after PR #3 merged; 82 tests pass and the 2 live
+  tests are skipped in each.
+- A2: https://github.com/FilipKalcic1/dbtruth/actions/runs/35907874085, branch
+  `ci-sabotage` with one assertion in `test/config.test.ts` changed from "low"
+  to "high": red in all eight cells, each on "effort follows schema size ...",
+  expected 'high', actual 'low'. The branch is deleted, locally and on GitHub.
+- CI found a flaky test at once. The pull request run of the same commit
+  (https://github.com/FilipKalcic1/dbtruth/actions/runs/35908401679) failed
+  one cell, Postgres 14 and Node 22, on T0.1's "a check that hangs is killed
+  with its whole process tree at its timeout, and fails": "Missing expected
+  exception: the sleeping node, two levels down, was killed with the shell".
+  Cause: under Linux a killed process stays a zombie until its new parent
+  reaps it, and the test asked once, right after the run returned. It now
+  waits up to 5 s for the process to be gone; a sleeper that was not killed
+  lives 60 s, so the test still tells the two apart.
+
 
 ## T1.2 `--version`
 ### Iteration 1: 80/100

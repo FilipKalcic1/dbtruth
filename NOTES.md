@@ -400,7 +400,6 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   between runs (loading them takes seconds) and a Windows runner (the
   database is Linux in every supported setup; the CLI's Windows paths are
   exercised on the maintainer's machine).
-
 - **`--version` reads `package.json` at run time.** `dbtruth --version`, or
   `-v` as node and npm spell it (commander's default is `-V`), prints the
   version to stdout, the data this command asks for (R6), and exits 0. Tools

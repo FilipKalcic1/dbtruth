@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { score } from "../scripts/acceptance.mjs";
 
@@ -48,7 +49,18 @@ test("a failing gate or invariant caps the score at 40", () => {
   assert.equal(score([{ part: "gates", pass: false }, { part: "acceptance", pass: false }]), 0, "the cap is a ceiling, not a floor");
 });
 
-test("a check that hangs is killed with its whole process tree at its timeout, and fails", () => {
+/** process.kill(pid, 0) sends nothing: it throws ESRCH once the process is gone. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw e;
+  }
+}
+
+test("a check that hangs is killed with its whole process tree at its timeout, and fails", async () => {
   const dir = mkdtempSync(join(tmpdir(), "dbtruth-acceptance-"));
   // The shell starts node, which starts a sleeping node and writes down its pid.
   writeFileSync(
@@ -62,8 +74,10 @@ test("a check that hangs is killed with its whole process tree at its timeout, a
   assert.ok(seconds < 20, `took ${seconds.toFixed(1)}s: the hanging command was waited out, not killed at its timeout`);
   assert.match(r.stdout, /^FAIL T9\.1 hang tests: timed out after 2s$/m);
   const pid = Number(readFileSync(join(dir, "hang.pid"), "utf8"));
-  // Under Linux a killed process is a zombie until reaped, so a container needs an init that reaps (docker run --init).
-  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "the sleeping node, two levels down, was killed with the shell");
+  // Killed is not gone at once: under Linux the process is a zombie until its new parent reaps it, which can lag the
+  // run by a moment (CI caught that once), and never happens in a container without an init (docker run --init).
+  for (let waited = 0; alive(pid) && waited < 5_000; waited += 100) await delay(100);
+  assert.equal(alive(pid), false, "the sleeping node, two levels down, was killed with the shell");
 });
 
 test("a process the kill cannot reach does not keep the run past the timeout", () => {
