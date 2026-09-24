@@ -23,6 +23,12 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
 - A missing API key is told in dbtruth's words only: "no API key found" is no
   longer followed by the SDK's sentence, which named ways to sign in dbtruth
   does not use. A key that is set but cannot be sent keeps its reason.
+- A table never analyzed, and a partitioned table, which autovacuum never
+  analyzes, are sampled across all their pages and partitions. Their size was
+  unknown, and the sample then read the oldest rows or the first partition;
+  their size now comes from the partitions' estimates or is scaled up from a
+  count over a few pages (`--pilot-pages`), and the per-table file says when
+  it was estimated from a sample. Temporary tables are no longer listed.
 - README: a quick start that runs `doctor` before the first run, a
   troubleshooting table with a row for every message dbtruth prints when
   something is wrong, and the commands, with those not built yet marked as

@@ -1310,3 +1310,271 @@ of each lost point, in the format of section 4.7 of the plan.
   version it saw, 0.1.8, against "older than 0.2.0 has no `doctor`", is this
   unreleased build's number, not a defect (iteration 3). A person should
   repeat the walkthrough before release.
+
+## T2.1 Unbiased sampling without a catalog estimate
+### Iteration 1: 80/100
+- Fixture first: `test/fixtures/sampling.sql`, database `sampling`, mounted as
+  `50-sampling.sql` after the existing files. Before relying on it, it was
+  loaded into throwaway `postgres:12-alpine` and `postgres:18` containers:
+  `ev`'s parent reads `reltuples` 0 on 12 and -1 on 18, `fresh_big` 0 and -1,
+  each with `relpages` 0 over 1,637 pages by `pg_relation_size`, and the
+  leaves 100,000 each. On both, `SELECT * FROM fresh_big LIMIT 50000` held
+  batches 1 to 5 and no `introduced_late`, `SELECT * FROM ev LIMIT 50000` the
+  dates 2024-01-01 to 2024-12-30 and no `only_2026`, and `TABLESAMPLE SYSTEM
+  (16.67) REPEATABLE (1)` found all 30 batches and both values. Also checked
+  by hand on both: `pg_relation_size` is 0 for a view and a partitioned table;
+  `pg_partition_tree` lists every level of a two-level tree, the partitioned
+  table itself included, and a `file_fdw` partition as relkind `f`;
+  `TABLESAMPLE` on a parent with that foreign leaf works (the leaf is read
+  whole); another session's temporary table sits in `pg_temp_N`, where
+  `pg_is_other_temp_schema` is true.
+- Tests first, against a stub `estimateRows` that kept 0.1.8's behaviour (the
+  catalog's number, whatever it is):
+  - `test/sampling.test.ts` (new, in `test:db`): "a never-analyzed large table
+    is sized by a pilot sample and sampled across its whole file" failed with
+    `status ["active","closed","paused"]: the value of the last 5% of rows`;
+    "a partitioned table whose parent was never analyzed ..." with `kind
+    ["buy","click","view"]: the value only the 2026 leaf holds`. Those are the
+    first assertions of each, the bias itself; the source and the estimate
+    come after. The per-table file test failed on `undefined` for `'pilot'`;
+    the temporary-table test with `pg_temp_3.scratch` listed beside `ev` and
+    `fresh_big`. The fixture precondition and "two runs give the same
+    estimates and the same values" passed: the fixture is what it should be,
+    and 0.1.8's plain path is deterministic too.
+  - `test/extract.test.ts`: the five rule tests failed on the missing source
+    or the missing pilot (`{ rowEstimate: -1, asked: [] }` for `{ rowEstimate:
+    50000, estimateSource: 'pilot', asked: [ 10 ] }`); the four tests through
+    `extract()` with a fake `Db` on `7000` for `60000`, `1` statement for 2,
+    and so on. `test/config.test.ts`, `write.test.ts`, `verdict.test.ts`:
+    `pilotPages` undefined, no `(estimated from a sample)`, no source in
+    `assemble()`. Every existing test passed.
+  - Numbers of 0.1.8 on the fixture, for NOTES: both tables sized -1 and
+    sampled with the plain form; `ev.happened_on` years 2024 to 2024.
+- Built: `estimateRows` in `extract.ts`, the plan's five rules in order, with
+  the pilot statement handed in by `extract()`; pages and each partitioned
+  table's leaves in `listRelations`; `estimateSource` on `Table` and
+  `TableFacts`, set in `assemble()` and printed by `write.ts`; `profile()`
+  dropping the source wherever the scan decides the size; `pilotPages` in
+  `config.ts`; `pg_is_other_temp_schema` in `DESCRIBED_RELATIONS`.
+- Found on the way, each with a test written first:
+  - `deadTableQuery` labelled a count taken from the estimate
+    `pg_class.reltuples`, which a pilot or the partitions may now have stood
+    in for; "a dead-table count taken from the row estimate says so ..."
+    failed with `'-- from the schema: pg_class.reltuples for fresh_big; ...'`
+    before the label became `-- from the extract: the row estimate of
+    fresh_big; ...`.
+- Written after the implementation: "a partitioned table is not one of its
+  own leaves: the fixture's events, analyzed whole, is the sum of its
+  partitions". Nothing tested the SQL's leaf filter: `ev`'s parent is never
+  analyzed, so counting it among its leaves adds nothing. With the filter
+  removed (`WHERE true`) the test failed with `actual: 600` for 300; restored
+  and matched byte for byte (`cmp`). A check of the test, not the sabotage
+  record. With it, `t.isleaf` came out of the SQL: beside `relkind = 'r'` it
+  says the same thing, only a partitioned table having partitions, and no
+  test could tell the two apart.
+- The same tests pass on Postgres 12 and 18 as on 16, against throwaway
+  containers loaded with every fixture file in compose order, as CI loads
+  them: `sampling`, `extract`, `integration`, `doctor`, `safety` and `scale`,
+  63 tests, 61 pass, the 2 live tests skipped, on each. The estimates are the
+  same on all three: `fresh_big` 279,812 from a pilot (6.7% low; the pilot at
+  6.1% of 1,637 pages counted 17,093 rows), `ev` 300,000 from its leaves.
+- `acceptance/checks.json`: A5's first pattern put `^# fail 0$` after the
+  lookaheads, so they looked ahead from the end of the run and failed on a
+  green suite. It is a lookahead now, and was checked on a saved `verify`
+  output: true for the run, false with `# fail 1`, false with one of the named
+  tests failing.
+- `npm run verify` exits 0: 136 tests, 134 pass, the 2 live tests skipped, and
+  the package smoke test passes. `npm run acceptance -- --task T2.1` prints
+  `T2.1: 80/100`, every check passing. `npm run acceptance` over every task:
+  T0.1, T0.2, T1.1, T1.2, T1.3 and T1.5 still 100/100.
+- Existing tests: `git diff --numstat -- test/` shows only added lines in the
+  four existing test files, besides the import line of
+  `test/extract.test.ts`.
+- Lost Tests (-20): `FAIL T2.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead, no point depends on either:
+  - Rule 3 names the source `partitions` and sends a partitioned table with
+    no known leaf to the pilot. Its source is `pilot` here, since the number
+    came from a sample and the per-table file says so; `partitions` is the
+    other reading.
+  - `pg_relation_size` takes the lock a `SELECT` takes, so a table under an
+    exclusive lock holds the relation listing until the statement timeout,
+    and the run stops with `could not list relations`. Tables a view reads
+    already did, through `pg_get_viewdef`. A lock timeout would be a new
+    number; left as is, and named in NOTES.
+### Iteration 2: 80/100
+- Seventeen review findings, each checked against the code and the plan
+  first. Tests were written or changed before each fix, and the four new ones
+  failed on iteration 1's code for the reason they name.
+- Fixed, a foreign partition (major): the listing kept only `relkind = 'r'`
+  leaves, so a parent with a foreign partition and no known local leaf was
+  piloted, and Postgres reads a foreign partition whole under `TABLESAMPLE`
+  instead of failing, as the plan expected. New fixture relation `mixed`: a
+  `file_fdw` partition over `seq 1 1000` and a local one of 59,000 rows never
+  analyzed. Iteration 1 sized it 64,237 from a pilot that counted 24,518 rows
+  on 38% of the local pages, the 1,000 remote ones among them. A tree with a
+  foreign table now gets no leaves, and the parent is sized and sampled as in
+  0.1.8. "a partitioned table with a foreign partition is sized and sampled
+  as before 0.2.0 ..." failed with `actual: 'pilot'`, `expected: undefined`.
+  The mocked test that claimed a foreign leaf makes `TABLESAMPLE` fail is
+  retitled to what it tests, a refused sampled form.
+- Fixed, the listing's locks: `pg_relation_size` ran on every relation, so a
+  table under another session's `ACCESS EXCLUSIVE` lock held the listing
+  until the statement timeout. It now runs only for a table or materialized
+  view with no estimate; others take `relpages`, from the same `ANALYZE` as
+  `reltuples`. Found on the way: `pg_partition_tree` locks every partition it
+  lists (not the root), so a locked partition still holds the listing; named
+  in NOTES as not done. New fixture table `analyzed`. "the listing opens no
+  file the catalog has sized ..." (`LOCK TABLE ONLY ev, analyzed`) failed
+  with `could not list relations: canceling statement due to statement
+  timeout`.
+- Fixed, sub-partitions without a test (major): new fixture table `nested`,
+  two levels deep. "a sub-partitioned table is the sum of its leaves at every
+  level ..." asserts 200,000 rows, source `partitions`, and `only_deep`, found
+  only in a second-level leaf. It passed on iteration 1's code, which already
+  counted every level; filtering the leaves to `t.level = 1` makes it fail
+  with `actual: 100000`, `expected: 200000`.
+- Fixed, this session's own temporary schema: `n.oid <> pg_my_temp_schema()`
+  beside `pg_is_other_temp_schema`, so it matches the plan's rule, which
+  leaves out every temporary schema. The temp-table test now also runs the
+  condition in the session that made the table, and failed with `actual: 1`.
+- Fixed, R7: the dead-table label names where the estimate came from, as it
+  did before T2.1 for the catalog: `pg_class.reltuples`, the leaf partitions'
+  `pg_class.reltuples`, or a pilot sample, or says there is none. The test,
+  which had set a source the label ignored, pins all four. It failed with
+  `'-- from the extract: the row estimate of big; ...'`.
+- Fixed, `profile()`: the one decision, whether the estimate stands, is named
+  once (`stands`), and gives both the estimate and its source. NOTES now
+  gives the rule as the code has it: a source stays with a random sample, a
+  plain scan that filled up under the estimate, or statistics that could not
+  be taken.
+- Fixed, the pilot formula: `n * 100 / percent`, with the pages that
+  cancelled removed, and a comment that says why. Same numbers.
+- Fixed, the checks: A4 is now a check of `src/config.ts` that needs the
+  comment, `pilotPages: 100,` and its `overridable` range, and it absorbs the
+  docs-part `config-comment` check, which the plan's Docs item does not name.
+  The `notes` check needs the reproduction numbers (`LIMIT 50000` covering
+  2024 only, 1,664 pages, ids 1 to 50,000 of 300,000). Both were run against
+  copies with the comment, the range or a number removed, and failed on each.
+  New checks: `sub-partitions`, `listing-lock` and `foreign-partition`.
+  `sampled-form-refused` replaces `foreign-leaf-fallback`.
+- Fixed, wording: README and CHANGELOG say the size is scaled up from a count
+  over a few pages, not the count itself. The CHANGELOG sentence no longer
+  has an unclear "it". The `extract.ts` header paragraph is wrapped to the
+  header's width, and "the leaf partitions'" now ends on its noun. The NOTES
+  lock paragraph is rewritten around what was fixed and what was not.
+  `pilots` and its regex lookup are gone from the count-drops-source test.
+- Rejected, the A5 check comparing test files with 3169a2e: the check would
+  judge history, not a run. It would fail T2.1 the first time a later task
+  changes an existing test, which section 4.4 allows when an A-item changes
+  the behavior, and a release needs every task at 100. Pinning three
+  assertion lines by regex repeats the tests' numbers in a second place and
+  still leaves the rest unguarded. "Unchanged" is kept by 4.4 and by the diff
+  record: `git diff --numstat 3169a2e -- test/*.test.ts` still shows only
+  added lines in the files that existed, besides the import line of
+  `test/extract.test.ts`.
+- Rejected, the dead-table test setting a source the label never read: after
+  the R7 fix the label reads it, and the test pins every source.
+- Checks of the new tests, not the sabotage record, each file restored and
+  compared with `cmp`: the foreign check made to match nothing failed the
+  `mixed` test (`'pilot'`); the listing's `reltuples <= 0` removed, and
+  separately its `relkind IN ('r', 'm')`, each failed the lock test with
+  `could not list relations`; `pg_my_temp_schema()` removed failed the
+  temp-table test; `estimateSource` kept whatever `stands` says failed "a
+  size the plain scan counted ..." and "a pilot that finds no rows ...";
+  `stands` without `n >= sampleRows` failed "the row estimate after the
+  scan" (`60000` for `0`); the pilot scaled the wrong way failed the rule
+  tests.
+- The database tests (`sampling`, `extract`, `integration`, `doctor`,
+  `safety`, `scale`: 67 tests, 65 pass, the 2 live tests skipped) pass on
+  Postgres 12 (`12-alpine`) and 18, in throwaway containers loaded with every
+  fixture file in compose order, as they do on 16. All three give the same
+  sizes: `analyzed` 1,000, `ev` 300,000 and `nested` 200,000 from their
+  leaves, `fresh_big` 279,812 from a pilot, `mixed` -1.
+- `npm run verify` exits 0: 139 tests, 137 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.1`
+  prints `T2.1: 80/100`, every check passing.
+- Lost Tests (-20): `FAIL T2.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead, no point depends on it: rule 3 names the source
+  `partitions` and sends a partitioned table with no known leaf to the pilot,
+  whose source is `pilot` here (iteration 1).
+- The sabotage check of the task. `src/extract.ts`, `src/write.ts` and
+  `src/safety.ts` were copied outside the repository first; the task's test
+  files (`sampling`, `extract`, `config`, `write`, `verdict`: 54 tests, all
+  passing before) were run under each sabotage.
+- Sabotage: `estimateRows` returned `-1` before the pilot (`return {
+  rowEstimate: -1 }` ahead of rule 4); "a never-analyzed large table is
+  sized by a pilot sample and sampled across its whole file" failed with
+  "status ["active","closed","paused"]: the value of the last 5% of rows",
+  and "a relation without an estimate is sized by a pilot over about
+  pilotPages pages ..." with "never analyzed, Postgres 14 and later": `{
+  rowEstimate: -1, asked: [] }` where `{ rowEstimate: 50000, estimateSource:
+  'pilot', asked: [ 10 ] }` was expected; 8 tests failed. Restored.
+- Sabotage: `listRelations` no longer handed on a partitioned table's leaves
+  (the `leaves` line removed), `estimateRows` untouched; "a partitioned table
+  whose parent was never analyzed is sized by its leaves and sampled across
+  all partitions" failed with "kind ["buy","click","view"]: the value only
+  the 2026 leaf holds", and "a sub-partitioned table is the sum of its leaves
+  at every level ..." with "nested_1, and nested_2a and nested_2b one level
+  further down": `-1 !== 200000`; 6 tests failed, while the rule tests of
+  `estimateRows`, which hand the leaves in, stayed green. Restored.
+- Sabotage: `isUnknown` took only `-1` as unknown (`s.estimate < 0`, without
+  the Postgres 12 and 13 form, `0` over pages on disk). The fixture tests
+  stay green on Postgres 16, which reports `-1`; "a relation without an
+  estimate is sized by a pilot over about pilotPages pages ..." failed with
+  "never analyzed on 12 and 13, or analyzed empty and loaded since": `{
+  rowEstimate: 0, estimateSource: 'catalog', asked: [] }` where `{
+  rowEstimate: 50000, estimateSource: 'pilot', asked: [ 10 ] }` was
+  expected, and "leaves without an estimate take the known leaves' rows per
+  page ..." with "0 over pages on disk is unknown too": `100000` for
+  `150000`. Restored.
+- Sabotage: the listing read pages from `c.relpages` alone, without
+  `pg_relation_size` for a table with no estimate; "a never-analyzed large
+  table is sized by a pilot sample and sampled across its whole file" failed
+  with "status ["active","closed","paused"]: the value of the last 5% of
+  rows", and "the per-table file says when a size was estimated from a
+  sample, and only then" with `undefined` where `'pilot'` was expected. The
+  unit tests, which hand pages in, stayed green. Restored.
+- Sabotage: `tableFile` inverted its condition (`t.estimateSource !==
+  "pilot"`); "a size estimated from a sample says so; one from the catalog,
+  from the partitions or counted does not" failed with `'# fresh_big\n\ntable,
+  ~279815 rows, primary key: none\n'` where the line with `(estimated from a
+  sample)` was expected, and "the per-table file says when a size was
+  estimated from a sample, and only then" with "The input did not match the
+  regular expression /\ntable, ~279812 rows \(estimated from a sample\),
+  primary key: none\n/". Two existing tests of `test/write.test.ts` failed
+  with it, on `~500 rows (estimated from a sample)` for a size with no
+  source. Restored.
+- Sabotage: `DESCRIBED_RELATIONS` lost its temporary-schema condition (`AND
+  NOT pg_is_other_temp_schema(n.oid) AND n.oid <> pg_my_temp_schema()`); "a
+  temporary table is not the user's schema: neither the extract nor doctor
+  lists another session's, nor the listing its own session's" failed with
+  "Expected values to be strictly deep-equal": `'pg_temp_3.scratch'` listed
+  after `'nested'`. Restored.
+- Sabotage: the pilot statement lost `REPEATABLE (${cfg.sampleSeed})`; "two
+  runs give the same estimates and the same values" failed with "fresh_big:
+  the pilot reads the same pages every run": `305481 !== 316612`. The catch
+  rests on two unseeded pilots counting different rows, so the test was run
+  three more times under the sabotage and failed each time (`327351 !==
+  312209`, `330379 !== 335978`, `327809 !== 268615`). Restored.
+- Sabotage: `estimateRows` trusted a partitioned table's own `reltuples`
+  before its leaves (`if (!isUnknown(rel)) return { rowEstimate:
+  rel.estimate, estimateSource: "catalog" }` ahead of the leaves); "a
+  partitioned table is not one of its own leaves: the fixture's events,
+  analyzed whole, is the sum of its partitions" failed with "Expected values
+  to be strictly equal": `'catalog'` where `'partitions'` was expected, and
+  "a partitioned table whose leaves all have an estimate is their sum,
+  whatever its own reltuples says" with "never analyzed, Postgres 12 and
+  13": `{ rowEstimate: 0, estimateSource: 'catalog' }` where `{ rowEstimate:
+  300000, estimateSource: 'partitions' }` was expected. Restored.
+- `src/extract.ts` (the first to fourth, seventh and eighth), `src/write.ts`
+  (the fifth) and `src/safety.ts` (the sixth) were restored each time from
+  the copy and matched it byte for byte (`cmp`), and `git diff HEAD --
+  <file>` printed the same diff as before. No sabotage left every test green,
+  so no test was changed.
+- After the record, `npm run verify` exits 0: 139 tests, 137 pass, the 2
+  live tests skipped, and the package smoke test passes. `npm run acceptance
+  -- --task T2.1` prints `T2.1: 100/100`, every check and item passing.

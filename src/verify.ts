@@ -83,7 +83,14 @@ export function deadTableQuery(table: Table, cfg: Pick<Config, "sampleRows">): {
   const age = timeColumns.length > 0 ? `EXTRACT(EPOCH FROM (now() - greatest(${timeColumns.map((c) => `max(${q(c.name)})`).join(", ")}))) / ${SECONDS_PER_DAY}.0` : null;
   if (!exact && age === null) {
     const numbers: Record<string, number> = table.rowEstimate >= 0 ? { count: table.rowEstimate, exact: 0 } : { exact: 0 };
-    return { query: `-- from the schema: pg_class.reltuples for ${table.name}; no date or timestamp column to date it by`, exact, fromSchema: numbers };
+    // No statement reruns an estimate, so the label says where to look it up.
+    const from = {
+      catalog: `from the schema: pg_class.reltuples for ${table.name}`,
+      partitions: `from the schema: pg_class.reltuples of the leaf partitions of ${table.name}`,
+      pilot: `from a pilot sample: count(*) over TABLESAMPLE SYSTEM on a few of the pages of ${table.name}, scaled to all of them`,
+    };
+    const label = table.estimateSource ? from[table.estimateSource] : `no row estimate for ${table.name}`;
+    return { query: `-- ${label}; no date or timestamp column to date it by`, exact, fromSchema: numbers };
   }
   const count = exact ? "count(*)::float8" : table.rowEstimate >= 0 ? `${Math.round(table.rowEstimate)}::float8` : "NULL::float8";
   return { query: `SELECT ${count} AS count, ${age ?? "NULL::float8"} AS age_days FROM ${qualified(table)}`, exact };

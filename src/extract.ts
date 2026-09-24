@@ -15,6 +15,12 @@
 // A partitioned table stands for its partitions: one logical table, with the number
 // of partitions and how many carry foreign keys of their own.
 //
+// The sample is sized from the row estimate. Where the catalog has none, as for a
+// table never analyzed or a partitioned table, which autovacuum never analyzes, the
+// estimate comes from the leaf partitions' estimates or from a pilot sample, so the
+// sample is spread over the whole file instead of read from the oldest pages or the
+// first partition.
+//
 // The three catalog reads (relations, columns, keys) run outside the time budget so a
 // tiny budget still yields a complete schema; sampling stops at its share of the budget
 // so that verifying claims keeps the rest.
@@ -53,6 +59,11 @@ export async function extract(db: Db, cfg: Config, opts: ExtractOptions): Promis
       continue;
     }
     const partitions = partitionsByParent.get(rel.oid);
+    // The pilot, when the rules need one, is a measurement like any other: inside the budget, and any failure leaves the size unknown.
+    const size = await estimateRows(rel, cfg.pilotPages, async (percent) => {
+      const counted = await db.query(`SELECT count(*) AS n FROM ${qualified({ schema: rel.schema, name })} TABLESAMPLE SYSTEM (${percent}) REPEATABLE (${cfg.sampleSeed})`);
+      return counted.ok ? Number(counted.rows[0]!.n) : undefined;
+    });
     const base: Table = {
       name,
       schema: rel.schema,
@@ -61,7 +72,7 @@ export async function extract(db: Db, cfg: Config, opts: ExtractOptions): Promis
       ...(rel.definition ? { definition: rel.definition } : {}),
       ...(rel.populated !== undefined ? { populated: rel.populated } : {}),
       ...(partitions ? { partitions } : {}),
-      rowEstimate: rel.rowEstimate,
+      ...size,
       primaryKey: keysByOid.get(rel.oid)?.primaryKey ?? null,
       foreignKeys: keysByOid.get(rel.oid)?.foreignKeys ?? [],
       columns: (columnsByOid.get(rel.oid) ?? []).map(({ attnum: _attnum, ...c }) => ({
@@ -108,7 +119,10 @@ export function fitToContext(extract: Extract, cfg: Config): { extract: Extract;
 
 // ---------- catalog queries ----------
 
-type Relation = {
+/** A relation's size as the catalog has it: reltuples, and relpages from the same ANALYZE, or with no estimate the pages its file holds now. */
+export type Size = { estimate: number; pages: number };
+
+type Relation = Size & {
   oid: number;
   schema: string;
   table: string;
@@ -118,15 +132,35 @@ type Relation = {
   comment?: string;
   definition?: string;
   populated?: boolean;
-  rowEstimate: number;
+  /** A partitioned table's leaf tables, at every level of sub-partitioning: it has no storage of its own. */
+  leaves?: Size[];
 };
 
 async function listRelations(db: Db): Promise<Relation[]> {
+  // Pages are relpages, counted by the ANALYZE that gave reltuples. With no estimate relpages is 0 too, and only then is
+  // the file read: pg_relation_size waits on a lock another session holds, and the listing would wait with it. A view or
+  // a partitioned table has no file.
+  // A partitioned table's leaves are the ordinary tables in its tree, at any depth, since only a partitioned table has
+  // partitions. A tree with a foreign table in it gets none: TABLESAMPLE reads a foreign partition whole, so a pilot
+  // or a sample over it is not what it says, and the parent is sized and sampled as a plain relation, as before.
   const r = await db.catalog(
     `SELECT c.oid::bigint AS oid, n.nspname AS schema, c.relname AS "table", c.relkind::text AS relkind,
             c.relispartition AS is_partition, i.inhparent::bigint AS parent, c.relispopulated AS populated,
-            c.reltuples::float8 AS estimate, obj_description(c.oid, 'pg_class') AS comment,
-            CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid, true) END AS definition
+            c.reltuples::float8 AS estimate,
+            CASE WHEN c.relkind IN ('r', 'm') AND c.reltuples <= 0 THEN pg_relation_size(c.oid) / current_setting('block_size')::int
+                 ELSE c.relpages END AS pages,
+            obj_description(c.oid, 'pg_class') AS comment,
+            CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid, true) END AS definition,
+            CASE WHEN c.relkind = 'p' AND NOT EXISTS (
+              SELECT FROM pg_partition_tree(c.oid) t JOIN pg_class f ON f.oid = t.relid WHERE f.relkind = 'f'
+            ) THEN (
+              SELECT coalesce(json_agg(json_build_object('estimate', l.reltuples::float8, 'pages',
+                       CASE WHEN l.reltuples <= 0 THEN pg_relation_size(l.oid) / current_setting('block_size')::int
+                            ELSE l.relpages END)), '[]')
+                FROM pg_partition_tree(c.oid) t
+                JOIN pg_class l ON l.oid = t.relid
+               WHERE l.relkind = 'r'
+            ) END AS leaves
        FROM pg_class c
        JOIN pg_namespace n ON n.oid = c.relnamespace
        LEFT JOIN pg_inherits i ON i.inhrelid = c.oid AND c.relispartition
@@ -147,10 +181,56 @@ async function listRelations(db: Db): Promise<Relation[]> {
       ...(row.comment ? { comment: String(row.comment) } : {}),
       ...(row.definition ? { definition: String(row.definition).trim() } : {}),
       ...(kind === "materialized view" ? { populated: Boolean(row.populated) } : {}),
-      // A plain view has no rows of its own; a never-analyzed table reports -1. The sample decides.
-      rowEstimate: kind === "view" ? -1 : Number(row.estimate),
+      // A plain view has no rows of its own; the sample decides.
+      estimate: kind === "view" ? -1 : Number(row.estimate),
+      pages: Number(row.pages),
+      ...(row.leaves ? { leaves: row.leaves as Size[] } : {}),
     };
   });
+}
+
+/**
+ * The row estimate of a relation, and where it came from, by the first of these rules that applies:
+ *   1. a table or materialized view whose estimate is known: the catalog's;
+ *   2. a partitioned table whose leaf tables all have one: their sum, whatever its own reltuples says;
+ *   3. one whose leaves do not: the known leaves' sum, plus the other leaves' pages at the known leaves' rows per
+ *      page; with no known leaf that has pages to give that, the parent is piloted over all of its leaves' pages;
+ *   4. an unknown estimate over pages on disk: a pilot, a count of the rows on about pilotPages of those pages, scaled to all;
+ *   5. no pages, or a pilot that failed: -1, and the sample takes the plain form, as it always has for an unknown size.
+ * The pilot's statement is handed in, so the rules run without a database.
+ */
+export async function estimateRows(
+  rel: Size & { leaves?: Size[] },
+  pilotPages: number,
+  pilot: (percent: number) => Promise<number | undefined>,
+): Promise<Pick<Table, "rowEstimate" | "estimateSource">> {
+  let pages = rel.pages;
+  if (rel.leaves) {
+    const total = (list: Size[], key: keyof Size) => list.reduce((sum, leaf) => sum + leaf[key], 0);
+    const known = rel.leaves.filter((leaf) => !isUnknown(leaf));
+    const rows = total(known, "estimate");
+    const knownPages = total(known, "pages");
+    pages = total(rel.leaves, "pages");
+    if (known.length === rel.leaves.length) return { rowEstimate: rows, estimateSource: "partitions" };
+    if (knownPages > 0) return { rowEstimate: Math.round(rows + (pages - knownPages) * (rows / knownPages)), estimateSource: "partitions" };
+  } else if (!isUnknown(rel)) {
+    return { rowEstimate: rel.estimate, estimateSource: "catalog" };
+  }
+  if (pages > 0) {
+    const percent = Math.min(100, (100 * pilotPages) / pages);
+    const n = await pilot(percent);
+    // The pilot read about percent of the pages, so it saw about percent of the rows.
+    if (n !== undefined) return { rowEstimate: Math.round((n * 100) / percent), estimateSource: "pilot" };
+  }
+  return { rowEstimate: -1 };
+}
+
+/**
+ * No estimate: reltuples is -1 before the first ANALYZE on Postgres 14 and later, and 0 on 12 and 13, as on any version
+ * for a table analyzed while empty and loaded since. Pages on disk tell that 0 from an empty table.
+ */
+function isUnknown(s: Size): boolean {
+  return s.estimate < 0 || (s.estimate === 0 && s.pages > 0);
 }
 
 type ColumnBase = Pick<Column, "name" | "type" | "nullable" | "comment"> & { attnum: number };
@@ -275,15 +355,19 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
     source = sampleSource(table, cfg, false);
     stats = await db.query(statsQuery(source));
   }
-  // Statistics unavailable: keep the schema, show only declared keys, sample nothing. The catalog's estimate stands, except a 0 that nothing confirmed.
-  if (!stats.ok) return { ...keysOnly(), rowEstimate: table.rowEstimate === 0 ? -1 : table.rowEstimate };
+  // Statistics unavailable: keep the schema, show only declared keys, sample nothing. The estimate stands, except a 0 that
+  // nothing confirmed, which becomes unknown and so has no source.
+  if (!stats.ok) return table.rowEstimate === 0 ? { ...keysOnly(), rowEstimate: -1, estimateSource: undefined } : keysOnly();
 
   const row = stats.rows[0] as Row;
   const n = Number(row.n);
-  // A random sample keeps the catalog's estimate. A plain LIMIT that came back short counted the whole relation;
+  // A random sample keeps the estimate. A plain LIMIT that came back short counted the whole relation;
   // one that filled up proves at least n rows, so an estimate below that (stale, or unknown) is "at least the sample size".
+  // Only an estimate that stands keeps its source: a count is not an estimate, even one that agrees with it.
   const plain = source === sampleSource(table, cfg, false);
-  const rowEstimate = !plain ? table.rowEstimate : n < cfg.sampleRows ? n : table.rowEstimate >= n ? table.rowEstimate : -1;
+  const stands = !plain || (n >= cfg.sampleRows && table.rowEstimate >= n);
+  const rowEstimate = stands ? table.rowEstimate : n < cfg.sampleRows ? n : -1;
+  const estimateSource = stands ? table.estimateSource : undefined;
   const columns: Column[] = cols.map((c, i) => {
     const s: ColumnStats = { nonNull: Number(row[`nn${i}`]), distinct: Number(row[`d${i}`]), maxLength: Number(row[`l${i}`] ?? 0) };
     const visible = isCategorical(s, cfg) || shownRegardless(c);
@@ -293,7 +377,7 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
     return { ...c, nullRate: n === 0 ? 0 : 1 - s.nonNull / n, distinct: s.distinct, maxLength: s.maxLength, visible, ...(years ? { years: [y0, y1] as [number, number] } : {}) };
   });
 
-  if (!opts.samples || n === 0) return { ...table, rowEstimate, columns };
+  if (!opts.samples || n === 0) return { ...table, rowEstimate, estimateSource, columns };
 
   // One statement over the same sample: every distinct value of each categorical column, and a few
   // rows with only the visible columns selected. Hidden values never leave the database.
@@ -315,7 +399,7 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
     }
   }
 
-  return { ...table, rowEstimate, columns, samples };
+  return { ...table, rowEstimate, estimateSource, columns, samples };
 }
 
 // ---------- helpers ----------

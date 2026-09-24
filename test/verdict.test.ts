@@ -140,3 +140,18 @@ test("fitsInContext is measured in tokens against config, and never true when ta
   assert.equal(fitsInContext(e(config.fitsInContextTokens + 1), config), false);
   assert.equal(fitsInContext(e(10, ["big"]), config), false);
 });
+
+test("assemble carries where each row estimate came from to the writer, and nothing for a size with no source", () => {
+  const claims: Claims = { entities: [], tables: [], relationships: [], suspicions: [], questions: [] };
+  const extract: Extract = {
+    database: "shop",
+    tables: [{ ...relation("fresh_big", "table"), rowEstimate: 279_815, estimateSource: "pilot" }, { ...relation("ev", "table"), rowEstimate: 300_000, estimateSource: "partitions" }, relation("orders", "table")],
+    skipped: [],
+    schemaTokens: 10,
+    unmatchedReveal: [],
+  };
+  const [pilot, partitions, counted] = assemble(extract, claims, [], config).tables;
+  assert.equal(pilot!.estimateSource, "pilot");
+  assert.equal(partitions!.estimateSource, "partitions");
+  assert.ok(!("estimateSource" in counted!), "a count, or an unknown size, has none");
+});

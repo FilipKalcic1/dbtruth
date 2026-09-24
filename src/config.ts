@@ -29,6 +29,7 @@ export type Config = {
   charsPerToken: number;
   sampleOversample: number;
   sampleSeed: number;
+  pilotPages: number;
 };
 
 export const config: Config = {
@@ -103,7 +104,7 @@ export const config: Config = {
   charsPerToken: 4,
 
   // TABLESAMPLE SYSTEM returns whole pages in file order, so a LIMIT that cuts a sample keeps its oldest pages.
-  // The sample is sized to sampleRows from the catalog's estimate and cut only when the estimate was low by more
+  // The sample is sized to sampleRows from the row estimate and cut only when the estimate was low by more
   // than this factor. Too low: an accurate sample is cut to its oldest pages. Too high: a table that grew since
   // its last ANALYZE is read far past sampleRows.
   sampleOversample: 3,
@@ -111,6 +112,10 @@ export const config: Config = {
   // Seed for TABLESAMPLE ... REPEATABLE, so the statistics and the value lists of one table come from the same pages.
   // Any value works; changing it changes which pages a large table is sampled from.
   sampleSeed: 1,
+
+  // Pages a pilot sample reads, spread over the file, to count the rows of a relation the catalog has no estimate for.
+  // Too low: a table with uneven fill gives a noisy rows-per-page. Too high: the pilot reads a large share of a mid-sized table.
+  pilotPages: 100,
 };
 
 /** The effort for one run: the fixed setting, or by schema size. */
@@ -125,6 +130,7 @@ export function effortFor(schemaTokens: number, cfg: Config): Effort {
 export const overridable = [
   { path: "sampleRows", env: "DBTRUTH_SAMPLE_ROWS", flag: "sample-rows", min: 1, integer: true },
   { path: "sampleRowsShown", env: "DBTRUTH_SAMPLE_ROWS_SHOWN", flag: "sample-rows-shown", min: 0, integer: true },
+  { path: "pilotPages", env: "DBTRUTH_PILOT_PAGES", flag: "pilot-pages", min: 1, integer: true },
   { path: "budgetSeconds", env: "DBTRUTH_BUDGET_SECONDS", flag: "budget-seconds", min: 0 },
   { path: "extractBudgetShare", env: "DBTRUTH_EXTRACT_BUDGET_SHARE", flag: "extract-budget-share", min: 0, max: 1 },
   { path: "statementTimeoutSeconds", env: "DBTRUTH_STATEMENT_TIMEOUT_SECONDS", flag: "statement-timeout-seconds", min: 0.001 },

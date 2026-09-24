@@ -65,7 +65,8 @@ export function tableFile(v: Verified, t: TableFacts): string {
   });
 
   const values = Object.entries(t.categorical).map(([column, list]) => `- ${column}: ${list.map((x) => JSON.stringify(x)).join(", ")}`);
-  const size = t.rowEstimate < 0 ? "size unknown" : t.rowEstimate === 0 ? "no rows" : `~${Math.round(t.rowEstimate)} rows`;
+  const sampled = t.estimateSource === "pilot" ? " (estimated from a sample)" : "";
+  const size = t.rowEstimate < 0 ? "size unknown" : t.rowEstimate === 0 ? "no rows" : `~${Math.round(t.rowEstimate)} rows${sampled}`;
   const facts = `${t.kind}${t.partitions ? `, ${t.partitions.count} partitions` : ""}, ${size}, primary key: ${t.primaryKey?.join(", ") ?? "none"}`;
   const section = (title: string, lines: string[]) => (lines.length ? ["", `## ${title}`, "", ...lines] : []);
   return [

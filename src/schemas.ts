@@ -28,7 +28,8 @@ export type Table = {
   definition?: string; // the SQL of a view or materialized view
   populated?: boolean; // materialized view: false when it has never been refreshed
   partitions?: { count: number; withLocalForeignKeys: number }; // a partitioned table stands for its partitions
-  rowEstimate: number; // -1 when unknown: a view, or a never-analyzed table, holding at least the sample size of rows
+  rowEstimate: number; // -1 when unknown: a view, or a table nothing could size, holding at least the sample size of rows
+  estimateSource?: "catalog" | "partitions" | "pilot"; // where rowEstimate came from; none when it is a count, or unknown
   primaryKey: string[] | null;
   foreignKeys: { column: string; refTable: string; refColumn: string }[];
   columns: Column[];
@@ -171,7 +172,7 @@ export type Verdict = {
 };
 
 /** Per-relation facts the writer needs that claims do not carry: kind, key, size, categorical values. */
-export type TableFacts = Pick<Table, "name" | "kind" | "partitions" | "rowEstimate" | "primaryKey"> & {
+export type TableFacts = Pick<Table, "name" | "kind" | "partitions" | "rowEstimate" | "estimateSource" | "primaryKey"> & {
   categorical: Record<string, unknown[]>;
 };
 

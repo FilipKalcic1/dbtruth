@@ -655,6 +655,112 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   should read, usually the repository root; the nested-package test in
   `integration.test.ts` checks where the files land. Not done: an option to
   write `context/` elsewhere.
+- **A relation the catalog cannot size is still sampled across its whole
+  file.** The sample is sized from the row estimate, and with none it took the
+  plain `LIMIT`, which reads the oldest pages or the first partition: the bias
+  of "Every sample of a large table came from its oldest pages" (0.1.8),
+  reached by another door. The plan's reproduction (section 1, defects 1 and
+  2, Postgres 16): a 300,000-row table partitioned by year, its leaves
+  analyzed and its parent not, as autovacuum leaves it, where `SELECT * FROM
+  ev LIMIT 50000` covered 2024 only and `TABLESAMPLE SYSTEM` on the parent
+  2024 to 2026; and a table loaded since its last `ANALYZE`, `reltuples = -1`
+  and `relpages = 0` over 1,664 pages, where the `LIMIT` read ids 1 to 50,000
+  of 300,000. The new `sampling` database holds both, and the edge cases
+  below. On it 0.1.8 gave `ev` the years 2024 to 2024 and no `only_2026`, and
+  `fresh_big` batches 1 to 5 of 30 and no `introduced_late`, both sized -1.
+  Now `ev` is 300,000 rows from its leaves and `fresh_big` 279,812 from a
+  pilot over 1,637 pages, both are sampled with `TABLESAMPLE`, and every
+  year, batch and value is found, the same on Postgres 12, 16 and 18.
+  - `listRelations` reads each relation's pages: `relpages`, which the
+    `ANALYZE` that gave `reltuples` counted, or, where there is no estimate
+    and `relpages` is 0 as well, the file's size, `pg_relation_size` over
+    `block_size`. For a partitioned table it reads its leaves' `reltuples` and
+    pages the same way, from `pg_partition_tree`, every level deep. That is a
+    subquery in the listing rather than the plan's one more statement per
+    parent: the listing already visits every partitioned table, and the
+    leaves come back in the shape the rules take. The leaves are the tree's
+    ordinary tables, `relkind = 'r'`, without the plan's `isleaf` beside it:
+    only a partitioned table has partitions, so the two say the same. The
+    tree also lists the partitioned table itself, which an `ANALYZE` of the
+    whole database sizes on Postgres 16 and 18 (on 12 it stays 0); the
+    fixture's `events` is the test that its 300 rows are not counted twice,
+    and `nested`, partitioned two levels deep, that the leaves one level
+    further down are counted.
+  - A partition tree with a foreign table in it gets no leaves, and the
+    parent is sized and sampled by its own `reltuples`, as in 0.1.8. The plan
+    expected `TABLESAMPLE` on such a parent to fail and fall back to the
+    plain form. It does not fail: Postgres reads a foreign partition whole and
+    samples the rest, so a pilot there counts every remote row as a sampled
+    one. On the fixture's `mixed`, 1,000 rows a `file_fdw` program prints
+    beside 59,000 local rows never analyzed, the pilot read 38% of the local
+    pages, counted 24,518 rows, the 1,000 remote ones among them, and made
+    64,237; in review a 200,000-row remote partition beside a 300,000-row
+    local one made 2,953,127. Now `mixed` is -1, read with the plain form.
+  - `estimateRows` applies the plan's five rules in order. An estimate is
+    unknown when `reltuples` is -1 (Postgres 14 and later) or 0 over pages on
+    disk (12 and 13 before the first `ANALYZE`, and any version for a table
+    analyzed while empty and loaded since). The pilot, a count over
+    `TABLESAMPLE SYSTEM (min(100, 100 * pilotPages / pages)) REPEATABLE
+    (sampleSeed)`, goes through `db.query`, inside the budget; any failure
+    leaves the size -1 and the plain path as before. The function takes the
+    pilot as an argument, so the rules read in one place and are tested
+    without a database, and `extract()` hands it the statement. The pilot's
+    count is scaled by 100 / p: the plan's rows per page times the pages, with
+    the pages cancelled. A pilot's or an extrapolation's estimate is rounded
+    to whole rows. A database restored from a dump has no statistics until
+    autovacuum reaches it, so every table in it takes a pilot then: one count
+    over about `pilotPages` pages each.
+  - A partitioned table with no known leaf is piloted over its leaves' pages,
+    with the source `pilot`: rule 3 sends it to rule 4, and the number did
+    come from a sample. A known leaf with no pages has no rows per page to
+    lend: with only such leaves known, the parent is piloted too.
+  - The source travels with the number. `estimateSource` is set with the
+    estimate, and `profile()` keeps it only where the estimate stands: a
+    random sample, a plain scan that filled up under it, or statistics that
+    could not be taken. A plain scan that came back short counted the
+    relation, even when the count equals the estimate, as it does after a
+    pilot over a table of 100 pages or fewer, which read it all; one that
+    filled past a low estimate says "at least the sample size"; a 0 the
+    statistics could not confirm becomes -1. Every small table is counted, so
+    it has none. No `count` source was added: no source already says "not an
+    estimate", and the plan gives three values. The per-table file adds
+    `(estimated from a sample)` for `pilot`.
+  - The dead-table measurement of a large table with no date column takes its
+    count from the estimate, and its label named `pg_class.reltuples`, which
+    the leaves or a pilot may now stand in for. No statement reruns an
+    estimate, so the label names where to look it up: `pg_class.reltuples`,
+    as before, the leaf partitions' `pg_class.reltuples`, or a pilot sample;
+    and says when there is no estimate.
+  - `DESCRIBED_RELATIONS` leaves out the temporary schemas by catalog facts,
+    not a `LIKE` on the name: other sessions' by `pg_is_other_temp_schema`,
+    this session's own by `pg_my_temp_schema()`. Other sessions' tables were
+    listed, and every read of them failed. dbtruth creates no temporary table,
+    but behind a pooler that shares server sessions its session can hold
+    another client's. `pg_toast_temp_*` was already left out by `pg_toast%`.
+    `doctor` counts over the same condition.
+  - The test first asserts, from the catalog, that both estimates are unknown
+    on the server it runs on: an index built after the load, or an `ANALYZE`
+    of the whole database, would fill them in, and it would prove nothing.
+    Postgres 12 reports 0 for both, 16 and 18 report -1.
+  - The fixture's `events` is now the sum of its two leaves, 300, the number
+    its own `ANALYZE` gave, and the plain scan counts it as before.
+  - The listing opens a file only where the catalog has no estimate.
+    `pg_relation_size` takes the lock a `SELECT` takes, and called on every
+    relation it let one table under an exclusive lock, by a `VACUUM FULL` or a
+    long migration, hold the whole listing until the statement timeout, and
+    the run stopped with `could not list relations`. An analyzed table, and a
+    partitioned table itself, are now sized from the catalog alone, and under
+    such a lock lose only their statistics, as any read of them does; the
+    test holds `analyzed` and `ev` under one.
+  - Not done: analyzing anything, which is a write; and a lock timeout for
+    the listing, which would be a new number. The listing still waits on a
+    table under an exclusive lock that has no estimate, whose file it must
+    read; on a partition under one, since `pg_partition_tree` takes the
+    `SELECT` lock on every member of the tree; and on a table a view reads,
+    through `pg_get_viewdef`, as it did before. A large partitioned table with
+    a foreign partition and an estimate of its own, from an `ANALYZE` of the
+    parent on 14 and later, is still sampled with `TABLESAMPLE`, which reads
+    that partition whole, as in 0.1.8.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

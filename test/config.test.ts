@@ -39,3 +39,11 @@ test("every override is checked against its range, and the invariants between tu
   assert.equal(resolveConfig({ DBTRUTH_EXTRACT_BUDGET_SHARE: "0.9" }).extractBudgetShare, 0.9);
   assert.throws(() => resolveConfig({ DBTRUTH_EXTRACT_BUDGET_SHARE: "2" }), /above the maximum/);
 });
+
+test("pilotPages is a whole number of at least 1, from DBTRUTH_PILOT_PAGES or --pilot-pages, and 100 by default", () => {
+  assert.equal(config.pilotPages, 100);
+  assert.equal(resolveConfig({ DBTRUTH_PILOT_PAGES: "20" }).pilotPages, 20);
+  assert.equal(resolveConfig({ DBTRUTH_PILOT_PAGES: "20" }, { pilotPages: "300" }).pilotPages, 300, "the flag wins");
+  assert.throws(() => resolveConfig({ DBTRUTH_PILOT_PAGES: "0" }), /^Error: DBTRUTH_PILOT_PAGES \/ --pilot-pages: 0 is below the minimum 1$/, "a pilot that reads no page measures nothing");
+  assert.throws(() => resolveConfig({}, { pilotPages: "2.5" }), /--pilot-pages: 2\.5 must be a whole number/);
+});

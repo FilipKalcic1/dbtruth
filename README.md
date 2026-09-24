@@ -211,7 +211,12 @@ directly, so every number in it is the measured number; the model writes
 
 Views and materialized views are included, with their SQL, so the model knows
 what they read. A partitioned table stands for its partitions: one entry, with
-the number of partitions and how many declare foreign keys of their own.
+the number of partitions and how many declare foreign keys of their own. A
+table's size is the catalog's estimate; where Postgres has none, as for a
+table never analyzed or a partitioned table, it comes from the partitions'
+estimates, or is scaled up from a count of the rows on a few of its pages
+(`--pilot-pages`), so the sample of a large table is drawn from all of it, not
+from its oldest rows.
 Human-readable lines go to stderr; with `--json`, stdout is the analysis and
 nothing else, so it can be piped.
 
@@ -299,7 +304,7 @@ refused before anything runs.
 ## Development
 
 ```bash
-docker compose up -d --wait         # fixture, clean and scale databases on port 54329
+docker compose up -d --wait         # fixture, clean, scale and sampling databases on port 54329
 npm test                            # every test file
 npm run test:unit                   # only the tests that need no database
 npm run test:db                     # only the tests that need the databases

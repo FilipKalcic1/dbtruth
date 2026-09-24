@@ -327,16 +327,19 @@ export function qualified(t: { schema: string; name: string }): string {
 
 /**
  * The relations dbtruth describes, as a condition on pg_class c joined to pg_namespace n: tables, partitioned tables,
- * views and materialized views outside the system schemas. Partitions match too; the extract folds them into their parent.
+ * views and materialized views outside the system schemas and the temporary schemas, whose tables are not the user's
+ * schema: another session's cannot be read from this one, and this session's own, behind a pooler that shares server
+ * sessions, are another client's. Partitions match too; the extract folds them into their parent.
  */
 export const DESCRIBED_RELATIONS =
-  "c.relkind IN ('r', 'p', 'v', 'm') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%'";
+  "c.relkind IN ('r', 'p', 'v', 'm') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' " +
+  "AND NOT pg_is_other_temp_schema(n.oid) AND n.oid <> pg_my_temp_schema()";
 
 export type SampleConfig = { sampleRows: number; sampleOversample: number; sampleSeed: number };
 
 /**
  * A bounded source of rows, wrapped in parentheses: a plain LIMIT when the table is no larger than
- * the sample or when random is false, otherwise TABLESAMPLE SYSTEM sized from the catalog's estimate
+ * the sample or when random is false, otherwise TABLESAMPLE SYSTEM sized from the row estimate
  * to yield about sampleRows rows, repeatable so two statements see the same pages, and cut only
  * when the estimate was low by more than sampleOversample (pages come in file order, so a cut keeps
  * the oldest).

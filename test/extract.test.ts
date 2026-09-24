@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { config } from "../src/config.js";
-import { extract, fitToContext, isCategorical } from "../src/extract.js";
+import { estimateRows, extract, fitToContext, isCategorical, type Size } from "../src/extract.js";
 import type { Db, QueryResult, Row } from "../src/safety.js";
 import type { Extract, Table } from "../src/schemas.js";
 import { deadTableQuery } from "../src/verify.js";
@@ -108,4 +108,134 @@ test("fitToContext drops sample rows, then value lists, then tables, until the e
   assert.match(fewer.reduced!, /1 tables dropped/);
   assert.deepEqual(fewer.extract.skipped, ["c"], "tables go from the end of the list into skipped");
   assert.equal(fewer.extract.tables.length, 2);
+});
+
+/** estimateRows at 100 pilot pages, with a pilot that counts n rows, or fails when n is undefined; and the percents it was asked for. */
+async function estimate(size: Size & { leaves?: Size[] }, n?: number) {
+  const asked: number[] = [];
+  const sized = await estimateRows(size, 100, async (percent) => {
+    asked.push(percent);
+    return n;
+  });
+  return { ...sized, asked };
+}
+
+test("a table or materialized view whose estimate is known keeps the catalog's, and no pilot runs", async () => {
+  assert.deepEqual(await estimate({ estimate: 500_000, pages: 3_000 }), { rowEstimate: 500_000, estimateSource: "catalog", asked: [] });
+  assert.deepEqual(await estimate({ estimate: 0, pages: 0 }), { rowEstimate: 0, estimateSource: "catalog", asked: [] }, "0 with nothing on disk is an empty table, not an unknown one");
+});
+
+test("a partitioned table whose leaves all have an estimate is their sum, whatever its own reltuples says", async () => {
+  const leaves = [{ estimate: 100_000, pages: 541 }, { estimate: 100_000, pages: 541 }, { estimate: 100_000, pages: 565 }];
+  const partitions = { rowEstimate: 300_000, estimateSource: "partitions", asked: [] };
+  assert.deepEqual(await estimate({ estimate: -1, pages: 0, leaves }), partitions, "never analyzed, Postgres 14 and later");
+  assert.deepEqual(await estimate({ estimate: 0, pages: 0, leaves }), partitions, "never analyzed, Postgres 12 and 13");
+  assert.deepEqual(await estimate({ estimate: 1_234, pages: 0, leaves }), partitions, "analyzed once, long ago");
+  assert.deepEqual(await estimate({ estimate: -1, pages: 0, leaves: [] }), { rowEstimate: 0, estimateSource: "partitions", asked: [] }, "no partitions, no rows");
+});
+
+test("leaves without an estimate take the known leaves' rows per page, or a pilot over every leaf's pages when no known leaf has one", async () => {
+  const analyzed = { estimate: 100_000, pages: 500 };
+  assert.deepEqual(await estimate({ estimate: -1, pages: 0, leaves: [analyzed, { estimate: -1, pages: 250 }] }), { rowEstimate: 150_000, estimateSource: "partitions", asked: [] });
+  assert.deepEqual(await estimate({ estimate: -1, pages: 0, leaves: [analyzed, { estimate: 0, pages: 250 }] }), { rowEstimate: 150_000, estimateSource: "partitions", asked: [] }, "0 over pages on disk is unknown too");
+  assert.deepEqual(
+    await estimate({ estimate: -1, pages: 0, leaves: [{ estimate: -1, pages: 300 }, { estimate: 0, pages: 200 }] }, 20_000),
+    { rowEstimate: 100_000, estimateSource: "pilot", asked: [20] },
+    "no known leaf: the parent's pages are its leaves'",
+  );
+  assert.deepEqual(
+    await estimate({ estimate: -1, pages: 0, leaves: [{ estimate: 0, pages: 0 }, { estimate: -1, pages: 400 }] }, 10_000),
+    { rowEstimate: 40_000, estimateSource: "pilot", asked: [25] },
+    "an empty leaf has no rows per page to lend",
+  );
+});
+
+test("a relation without an estimate is sized by a pilot over about pilotPages pages: rows per page on the pages read, times the pages", async () => {
+  assert.deepEqual(await estimate({ estimate: -1, pages: 1_000 }, 5_000), { rowEstimate: 50_000, estimateSource: "pilot", asked: [10] }, "never analyzed, Postgres 14 and later");
+  assert.deepEqual(await estimate({ estimate: 0, pages: 1_000 }, 5_000), { rowEstimate: 50_000, estimateSource: "pilot", asked: [10] }, "never analyzed on 12 and 13, or analyzed empty and loaded since");
+  assert.deepEqual(await estimate({ estimate: -1, pages: 40 }, 7_000), { rowEstimate: 7_000, estimateSource: "pilot", asked: [100] }, "fewer pages than the pilot reads: all of them");
+  assert.deepEqual(await estimate({ estimate: -1, pages: 100_000 }, 5), { rowEstimate: 5_000, estimateSource: "pilot", asked: [0.1] }, "a file left large by a mass delete: the rows are counted, not assumed from the pages");
+  assert.deepEqual(await estimate({ estimate: -1, pages: 1_000 }, 0), { rowEstimate: 0, estimateSource: "pilot", asked: [10] }, "no rows on the pages read");
+});
+
+test("no pages, or a pilot that failed, leaves the size unknown", async () => {
+  assert.deepEqual(await estimate({ estimate: -1, pages: 0 }), { rowEstimate: -1, asked: [] }, "a view, an empty table never analyzed, or a partitioned table the listing gave no leaves for a foreign partition: nothing to read");
+  assert.deepEqual(await estimate({ estimate: -1, pages: 1_000 }), { rowEstimate: -1, asked: [10] });
+  assert.deepEqual(await estimate({ estimate: -1, pages: 0, leaves: [{ estimate: -1, pages: 0 }] }), { rowEstimate: -1, asked: [] });
+});
+
+/** A database listing the given relations, each with one integer column and no keys; answer replies to every statement, and asked collects them. */
+function listing(relations: Row[], answer: (sql: string) => QueryResult): { db: Db; asked: string[] } {
+  const asked: string[] = [];
+  const catalog: Row[][] = [relations, relations.map((r) => ({ oid: r.oid, attnum: 1, name: "id", type: "integer", nullable: false, comment: null })), []];
+  const db: Db = {
+    database: "x",
+    readOnlyProven: true,
+    catalog: async () => ({ ok: true, rows: catalog.shift()! }),
+    query: async (sql) => {
+      asked.push(sql);
+      return answer(sql);
+    },
+    budget: () => ({ budgetMs: 1000, spentMs: 0, remainingMs: 1000, exhausted: false }),
+    close: async () => {},
+  };
+  return { db, asked };
+}
+const relation = (oid: number, name: string, estimate: number, pages: number, extra: Row = {}): Row =>
+  ({ oid, schema: "public", table: name, relkind: "r", is_partition: false, parent: null, populated: true, estimate, pages, leaves: null, comment: null, definition: null, ...extra });
+const isPilot = (sql: string) => /^SELECT count\(\*\) AS n FROM "public"\."\w+" TABLESAMPLE/.test(sql);
+const tablesOf = async (db: Db) => (await extract(db, config, { samples: false, reveal: new Set() })).tables;
+const plainForm = new RegExp(`FROM \\(SELECT \\* FROM "public"\\."\\w+" LIMIT ${config.sampleRows}\\) s$`);
+
+test("a size the plain scan counted is a count, not an estimate: it drops the pilot's source, which a random sample keeps", async () => {
+  // small fits in the pilot's 100 pages, so the pilot counts all of it; the plain scan then counts it again.
+  const { db } = listing([relation(1, "large", -1, 1_000), relation(2, "small", -1, 40)], (sql) =>
+    isPilot(sql) ? { ok: true, rows: [{ n: sql.includes('"large"') ? 6_000 : 7_000 }] } : counted(7_000),
+  );
+  const [large, small] = await tablesOf(db);
+  assert.equal(large!.rowEstimate, 60_000);
+  assert.equal(large!.estimateSource, "pilot", "sampled at random, the size is still the pilot's");
+  assert.equal(small!.rowEstimate, 7_000);
+  assert.equal(small!.estimateSource, undefined, "counted, even though the pilot had the same number");
+});
+
+test("with the budget spent before the pilot, the size stays unknown and the sample takes the plain form, as before", async () => {
+  const { db, asked } = listing([relation(1, "t", -1, 1_000)], () => ({ ok: false, reason: "budget", message: "time budget exhausted" }));
+  const [t] = await tablesOf(db);
+  assert.equal(t!.rowEstimate, -1);
+  assert.equal(t!.estimateSource, undefined);
+  assert.equal(asked.length, 2, "the pilot, then the statistics");
+  assert.ok(isPilot(asked[0]!), asked[0]!);
+  assert.match(asked[1]!, plainForm);
+});
+
+test("a pilot that finds no rows leaves the size to the plain scan, which counts it", async () => {
+  const { db, asked } = listing([relation(1, "t", -1, 1_000)], (sql) => (isPilot(sql) ? { ok: true, rows: [{ n: 0 }] } : counted(1_234)));
+  const [t] = await tablesOf(db);
+  assert.equal(t!.rowEstimate, 1_234);
+  assert.equal(t!.estimateSource, undefined);
+  assert.match(asked[1]!, plainForm, "an estimate of 0 reads the plain form, which counts the relation");
+});
+
+test("when the sampled form is refused, the plain form measures the table, and an estimate the scan fills up under keeps its source", async () => {
+  const leaves = [{ estimate: 40_000, pages: 200 }, { estimate: 30_000, pages: 150 }];
+  const { db, asked } = listing([relation(1, "p", -1, 0, { relkind: "p", leaves })], (sql) =>
+    /TABLESAMPLE/.test(sql) ? { ok: false, reason: "error", message: "this relation does not support TABLESAMPLE", sqlState: "0A000" } : counted(config.sampleRows),
+  );
+  const [p] = await tablesOf(db);
+  assert.equal(p!.rowEstimate, 70_000);
+  assert.equal(p!.estimateSource, "partitions");
+  assert.deepEqual(asked.map((sql) => /TABLESAMPLE/.test(sql)), [true, false], "the sampled form, then the plain one");
+  assert.match(asked[1]!, plainForm);
+});
+
+test("a dead-table count taken from the row estimate says where the estimate came from, or that there is none", () => {
+  const big = (rowEstimate: number, estimateSource?: Table["estimateSource"]) =>
+    deadTableQuery({ ...table("big", rowEstimate, [{ name: "id", type: "integer" }]), ...(estimateSource ? { estimateSource } : {}) }, config);
+  assert.deepEqual(big(279_812, "pilot").fromSchema, { count: 279_812, exact: 0 });
+  const undated = "; no date or timestamp column to date it by";
+  assert.equal(big(279_812, "catalog").query, `-- from the schema: pg_class.reltuples for big${undated}`);
+  assert.equal(big(279_812, "partitions").query, `-- from the schema: pg_class.reltuples of the leaf partitions of big${undated}`);
+  assert.equal(big(279_812, "pilot").query, `-- from a pilot sample: count(*) over TABLESAMPLE SYSTEM on a few of the pages of big, scaled to all of them${undated}`);
+  assert.equal(big(-1).query, `-- no row estimate for big${undated}`);
 });

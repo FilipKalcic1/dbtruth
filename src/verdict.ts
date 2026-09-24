@@ -76,6 +76,7 @@ export function assemble(extract: Extract, claims: Claims, measurements: Measure
       kind: t.kind,
       ...(t.partitions ? { partitions: t.partitions } : {}),
       rowEstimate: t.rowEstimate,
+      ...(t.estimateSource ? { estimateSource: t.estimateSource } : {}),
       primaryKey: t.primaryKey,
       categorical: Object.fromEntries(t.columns.filter((c) => c.values !== undefined).map((c) => [c.name, c.values!])),
     })),
