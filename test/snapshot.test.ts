@@ -254,6 +254,8 @@ test("parseSnapshot refuses what is not a snapshot, each with its own sentence",
   assert.equal(settings({ sampleRows: 0 }), `${FILE} is not a dbtruth snapshot: measuredWith: DBTRUTH_SAMPLE_ROWS / --sample-rows: 0 is below the minimum 1`);
   assert.equal(settings({ pilotPages: 1.5 }), `${FILE} is not a dbtruth snapshot: measuredWith: DBTRUTH_PILOT_PAGES / --pilot-pages: 1.5 must be a whole number`);
   assert.equal(settings({ join: { confirmed: 0.5, broken: 0.9 } }), `${FILE} is not a dbtruth snapshot: measuredWith: join.broken (0.9) must not exceed join.confirmed (0.5)`);
+  // No flag sets the oversampling; at 0 every sample would be LIMIT 0, and every claim on a sampled table empty.
+  assert.equal(settings({ sampleOversample: 0 }), `${FILE} is not a dbtruth snapshot: measuredWith.sampleOversample: Too small: expected number to be >=1`);
   assert.equal(typeof settings({ sampleRows: 10 }), "object", "a sample smaller than the rows a run shows by default: check shows none");
 });
 

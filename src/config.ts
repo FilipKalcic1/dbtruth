@@ -21,6 +21,7 @@ export type Config = {
   join: { confirmed: number; broken: number };
   staleAfterDays: number;
   duplicateOverlap: number;
+  checkHitRateTolerance: number;
   fitsInContextTokens: number;
   modelMaxOutputTokens: number;
   modelMaxInputTokens: number;
@@ -75,6 +76,10 @@ export const config: Config = {
   // Share of one table's distinct sampled rows found in the other for the pair to count as duplicates.
   // Too low: parent/child lookalikes are called duplicates. Too high: partial copies are missed.
   duplicateOverlap: 0.7,
+
+  // How far a join's hit rate may move under the same status before check reports it as drift.
+  // Too low: normal growth flags drift on every pull request. Too high: a slow decay goes unnoticed.
+  checkHitRateTolerance: 0.01,
 
   // If the schema alone serializes to fewer tokens than this, the README says you probably
   // do not need this tool. Too low: never said. Too high: said for schemas an agent cannot hold.
@@ -140,6 +145,7 @@ export const overridable = [
   { path: "join.broken", env: "DBTRUTH_JOIN_BROKEN", flag: "join-broken", min: 0, max: 1 },
   { path: "staleAfterDays", env: "DBTRUTH_STALE_AFTER_DAYS", flag: "stale-after-days", min: 0 },
   { path: "duplicateOverlap", env: "DBTRUTH_DUPLICATE_OVERLAP", flag: "duplicate-overlap", min: 0, max: 1 },
+  { path: "checkHitRateTolerance", env: "DBTRUTH_CHECK_HIT_RATE_TOLERANCE", flag: "check-hit-rate-tolerance", min: 0, max: 1 },
   { path: "fitsInContextTokens", env: "DBTRUTH_FITS_IN_CONTEXT_TOKENS", flag: "fits-in-context-tokens", min: 0 },
   { path: "modelMaxOutputTokens", env: "DBTRUTH_MODEL_MAX_OUTPUT_TOKENS", flag: "model-max-output-tokens", min: 1, integer: true },
   { path: "modelMaxInputTokens", env: "DBTRUTH_MODEL_MAX_INPUT_TOKENS", flag: "model-max-input-tokens", min: 1, integer: true },

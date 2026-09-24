@@ -913,8 +913,9 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     snapshot does not record it and `check` shows no rows, and at its default
     of 15 its rule would refuse a snapshot written with `--sample-rows 10`.
     `sampleOversample` and `sampleSeed` have no range in `config.ts` (T2.1),
-    so any finite number passes; a number prints as a numeric literal, so it
-    cannot become other SQL. Claims are read with the model reply's own
+    so any finite number passes, until T3.2 (below) holds the oversampling to
+    at least 1; a number prints as a numeric literal, so it cannot become
+    other SQL. Claims are read with the model reply's own
     schema, so a claim stated twice is one. Each sentence has a
     troubleshooting row, as `test/readme.test.ts` requires, worded for
     `check`, which is coming.
@@ -957,6 +958,141 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     `citext` columns resolves to text equality, which found 0 of 1 matching
     rows where `citext`'s own found 1, a relationship reported broken. Left
     for T3.2, where `check` compares a snapshot with the database.
+- **`dbtruth check` re-measures the snapshot without a model.** Every pull
+  request can measure again what the context claims, with no model and no API
+  key, and fail the build when the data contradicts it. `check [--snapshot
+  <path>] [--fail-on regression|change|never] [--url <url>] [--dotenv <path>]`
+  also takes every tunable after its name, which `doctor` does not. `--dotenv`
+  is the plan's `--env-file`, as since T1.1. As for `doctor`, options given
+  before `check` are the program's and are merged under its own; a spawned
+  test gives options on both sides. It reads the settings as a full run does (`setup()` in `cli.ts`, the full run's
+  first step moved as it was and now shared by both), then the snapshot,
+  before anything connects, then connects with the read-only proof;
+  `remeasure` in `check.ts` reads the whole catalog, profiles only the
+  relations the claims name, with `samples: false`, verifies the snapshot's
+  claims, decides their verdicts with `verdicts()` (the plan's flow says
+  `assemble`, which adds only what the writer needs) and compares them with
+  `diff`. The report goes to stderr; stdout stays empty. On
+  the fixture it takes a tenth of a second, and the command 1.2 seconds
+  started through `tsx`. Exit 0 when it passes under
+  `--fail-on`, 2 when it fails, 1 when it cannot run.
+  - **Stored queries are never run, or printed.** A pull request can edit the
+    snapshot, so it is untrusted input (R8): every statement is built again by
+    `extract` and `verify` from the catalog read now, through `q()` and
+    `qualified()`, as in a full run, and a name a claim holds is only a key
+    `findTable` looks up there. A name the catalog lacks is unverifiable
+    without a statement, as it always was. A test turns a real snapshot
+    hostile, a relationship from `orders"; DROP TABLE customers; --` and a
+    suspicion on the column `status" FROM orders; SELECT pg_sleep(60); --`,
+    both confirmed, and every stored query `SELECT pg_sleep(60)`; of the
+    statements `remeasure` sends, none holds `pg_sleep`, `DROP` or either name,
+    both claims are stale, and the check exits 2 in well under the statement
+    timeout. The plan's `extractRelations` is `readCatalog` and `extract` over
+    the entries the claims name (T3.1); a second test checks a single claim and
+    finds only `orders` and `customers` in every statement inside the budget.
+  - **Measured with the snapshot's settings; everything else is this run's.**
+    `measuredWith` is laid over this run's config, so a default changed in a
+    later release cannot pass for a change in the data; the budget, the
+    statement timeout, `extractBudgetShare` and `checkHitRateTolerance` come
+    from this run. The plan asks for a note when `measuredWith` differs from
+    the current defaults; it is compared with this run's resolved settings
+    instead, which are what the claims would be measured with without the
+    snapshot's: a team that runs with `--join-confirmed 0.9` everywhere would
+    otherwise read the note on every pull request. The note names each setting
+    with both values. `parseSnapshot` holds each setting a flag sets to that
+    flag's range (T3.1). Two have no flag: the seed stays any number, as
+    `REPEATABLE` takes any, and the schema now holds the oversampling to at
+    least 1, since at 0 every sample was `LIMIT 0` and every claim on a
+    sampled table read as empty, a change no default build fails on. All of
+    them reach SQL only as numbers, as flags do.
+  - **The rules, in the order that resolves the plan's table.** A claim is
+    stale when the database lacks a table or column it names, unless the model
+    invented it (next bullet); then the same status is unchanged, or drift
+    once a join's hit rate moved by `checkHitRateTolerance` (0.01; R5, with its
+    range, variable and flag; a tolerance of 0 still needs a move, and only
+    relationships have a hit rate). The move is given `Number.EPSILON` of
+    slack: each rate is a quotient rounded to a double, and 410/500 - 405/500,
+    one point from 81% to 82%, comes out a hair under 0.01. Then the plan's
+    regressions (a relationship
+    confirmed to broken or rejected, or broken to rejected; a suspicion
+    rejected to confirmed) and improvements (the reverse moves); then a status
+    unverifiable on either side is not measured; any other move is changed.
+    Where the table has gaps or overlaps: a relationship rejected before and
+    confirmed or broken now is changed; a suspicion marked broken, which only a
+    hand edit can write, is changed both ways; unverifiable wins over the
+    table's "empty to anything"; and a claim the full run could not measure
+    (its budget ran out, or the claim's table was dropped to fit the model)
+    that `check`, profiling fewer relations, can measure is not measured, not
+    changed, since under `--fail-on change` that would fail every build on an
+    unchanged database and no rerun could fix it. The unit tests hold the
+    plan's table row by row, and the five by five matrix of statuses for each
+    kind of claim.
+  - **Stale needs a name that was there.** Read as written, "a claim naming
+    something that does not exist is stale" fails every check, forever, for a
+    table the model invented, which the full run already reported as
+    unverifiable. So a claim with a name missing now is stale unless the
+    snapshot's schema lacked one of its names too and the snapshot could not
+    measure it. A claim the full run could not measure on names its schema
+    had, past the statement timeout on a large table or over budget, is stale
+    once one of them is gone; and one the snapshot says it measured is stale
+    on a missing name even when its schema lacks the name, which only a hand
+    edit writes, as the hostile test does.
+  - **A relation gone from the database is stale too.** The plan's table has a
+    relation in the database that the snapshot lacks; its mirror, one in the
+    snapshot that the database lacks, is stale as well, since the context still
+    describes it. Names are compared exactly, and a relation the full run
+    listed without examining it (T3.1's `examined: false`) is in the context
+    all the same.
+  - **One line per item that is not unchanged.** The plan prints a line per
+    regression and stale item. `--fail-on change` fails on drift and
+    improvements as well, and a failed build must say which claim, so every
+    item but the unchanged ones gets its line: the class, the claim, its status
+    and hit rate in the snapshot and now, and why it could not be measured now
+    when it could not. The line holds no query, and a suspicion's line no
+    numbers: the verdict measured now carries both in `CheckReport` (R7), for
+    T3.3's `--json`, and a full run writes them into `context/`. Then the
+    count of each class, and the fix, `run npx dbtruth and commit context/`,
+    when anything but unchanged or not measured was found, which is what
+    `--fail-on change` fails on. Another database's name, other settings and a
+    changed fingerprint are `note` lines, which never fail.
+  - `CheckReport` lands here as a TypeScript type in `schemas.ts`; T3.3 makes
+    it a zod schema for `--json`.
+  - `check.ts` imports `type Db` from `safety`, so `safety` joins its entry in
+    `structure.test.ts` for that type alone, as `write.ts` imports `model` for
+    its types; decided by the lead. A new structure test walks the imports from
+    `check.ts` and `snapshot.ts` and fails if either reaches `model.ts`.
+  - This path has no transport for the plan's "a transport that throws" to
+    replace. A spawned `check` with `ANTHROPIC_BASE_URL` set to a local server
+    that records every request exits 0, and the server records none. It runs
+    with a key, as in a CI job that also runs a full run, since without one the
+    SDK sends nothing whatever `check` does; a second run with no key exits 0
+    too. With the structure test, that is the proof of R9.
+  - `doctor`'s line for a missing key is now `note no API key: a full run needs
+    ANTHROPIC_API_KEY; doctor and check do not`, as the entry on doctor's
+    `note` marker said it would be (0.2.0), and `NO_KEY` in `doctor.test.ts`
+    with it.
+  - Test changes, none to an assertion: the canned claims, files and fake model
+    moved from `integration.test.ts` to `test/canned.ts`, which the new
+    database tests share; `copyOfFixture` also returns the copy's name, which
+    the report's last line prints; the structure map and `NO_KEY` above; and
+    the two test lists in `package.json`. In `acceptance/checks.json`, T1.5's
+    check of the commands list no longer expects `check` to be coming. One
+    assertion is added to `snapshot.test.ts`: an oversampling of 0 is refused.
+  - The session's `search_path`, left here by T3.1: `check` looks names up to
+    decide what is stale and never compares types, which enter only the
+    fingerprint, so a role whose path spells a type another way gets the note
+    that the schema changed, never a failure. The path itself is still not
+    fixed.
+  - Not done: escaping names on stderr, where a name holding a newline could
+    forge a report line (T3.3's Markdown must escape them); a note when the
+    server's version differs; `verify` saying that a relation was not examined
+    rather than `unknown table <name>` when the budget skipped it, a reason
+    every `not measured` line of a budget-starved check now prints; `--json`
+    and `--markdown`, which are T3.3's. Two limits stay: the pull request
+    controls the snapshot it is checked against, which the README says to
+    review like code, and a claim the snapshot never measured fails a build
+    only once a name it uses is gone, so any other break on it waits for the
+    next full run.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

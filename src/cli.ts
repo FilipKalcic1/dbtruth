@@ -1,20 +1,21 @@
 #!/usr/bin/env node
-// cli.ts: orchestrates one run, in order, and hands `doctor` to doctor.ts. Nothing else.
+// cli.ts: orchestrates one run, or one check, in order, and hands `doctor` to doctor.ts. Nothing else.
 
-import { Command, type OptionValues } from "commander";
+import { Command, Option, type OptionValues } from "commander";
 import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Overrides } from "./config.js";
+import { FAIL_ON, fails, remeasure, reportLines, type FailOn } from "./check.js";
+import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Config, type Overrides } from "./config.js";
 import { contextualize } from "./contextualize.js";
 import { doctor } from "./doctor.js";
 import { extract, fitToContext, readCatalog } from "./extract.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
 import { connect, readSettings, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
-import { serialize, toSnapshot } from "./snapshot.js";
-import { assemble, describeKinds, EXIT_FAILURE, EXIT_OK, exitCode } from "./verdict.js";
+import { readSnapshot, serialize, toSnapshot } from "./snapshot.js";
+import { assemble, describeKinds, EXIT_FAILURE, EXIT_FINDINGS, EXIT_OK, exitCode } from "./verdict.js";
 import { verify } from "./verify.js";
 import { OUTPUT_DIR, persist, SNAPSHOT_FILE, write } from "./write.js";
 
@@ -42,21 +43,10 @@ export type RunDeps = {
 };
 
 export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number> {
-  // 1. DATABASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL and DBTRUTH_* from the environment, else from the settings
-  //    file: --dotenv, or the .env nearest to cwd up to the repository root.
-  const settings = readSettings(opts.cwd, opts.dotenv, opts.env, opts.err);
-  if (typeof settings === "string") {
-    opts.err(settings);
-    return EXIT_FAILURE;
-  }
-  if (settings.elsewhere) opts.err(`reading settings from ${settings.file}`);
-  const env = settings.env;
-  const cfg = resolveConfig(env, opts.flags);
-  const url = resolveDatabaseUrl(opts.url, env);
-  if (!url) {
-    for (const line of noDatabaseUrl(settings.file, settings.searched)) opts.err(line);
-    return EXIT_FAILURE;
-  }
+  // 1. The settings, the tunables and the database URL.
+  const found = setup(opts);
+  if (!found) return EXIT_FAILURE;
+  const { env, cfg, url } = found;
 
   // 1. Prove the API is reachable with this key and model before touching the database. Sends only the model id.
   const model = env.ANTHROPIC_MODEL || DEFAULT_MODEL;
@@ -121,6 +111,59 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
   } finally {
     await db.close();
   }
+}
+
+export type CheckOptions = {
+  url?: string;
+  /** The settings file to read instead of looking for .env, relative to cwd. */
+  dotenv?: string;
+  /** The snapshot to check, relative to cwd. */
+  snapshot: string;
+  failOn: FailOn;
+  flags: Overrides;
+  cwd: string;
+  env: Record<string, string | undefined>;
+  err: (line: string) => void;
+};
+
+/** Measures again what the snapshot claims, with no model: 0 when it passes under failOn, 2 when it fails, 1 when it cannot run. */
+export async function runCheck(opts: CheckOptions): Promise<number> {
+  const found = setup(opts);
+  if (!found) return EXIT_FAILURE;
+  // Read and checked before anything connects.
+  const snapshot = readSnapshot(opts.cwd, opts.snapshot);
+  if (typeof snapshot === "string") {
+    opts.err(snapshot);
+    return EXIT_FAILURE;
+  }
+  const db = await connect(found.url, { ...found.cfg, warn: (message) => opts.err(`WARNING: ${message}`) });
+  try {
+    const report = await remeasure(db, found.cfg, snapshot);
+    for (const line of reportLines(report)) opts.err(line);
+    return fails(report, opts.failOn) ? EXIT_FINDINGS : EXIT_OK;
+  } finally {
+    await db.close();
+  }
+}
+
+/**
+ * DATABASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL and DBTRUTH_* from the environment, else from the settings file:
+ * --dotenv, or the .env nearest to cwd up to the repository root. Undefined once it has said why a run cannot start.
+ */
+function setup(opts: Pick<RunOptions, "url" | "dotenv" | "flags" | "cwd" | "env" | "err">): { env: Record<string, string | undefined>; cfg: Config; url: string } | undefined {
+  const settings = readSettings(opts.cwd, opts.dotenv, opts.env, opts.err);
+  if (typeof settings === "string") {
+    opts.err(settings);
+    return undefined;
+  }
+  if (settings.elsewhere) opts.err(`reading settings from ${settings.file}`);
+  const cfg = resolveConfig(settings.env, opts.flags);
+  const url = resolveDatabaseUrl(opts.url, settings.env);
+  if (!url) {
+    for (const line of noDatabaseUrl(settings.file, settings.searched)) opts.err(line);
+    return undefined;
+  }
+  return { env: settings.env, cfg, url };
 }
 
 /** Where DATABASE_URL was looked for, then one way to set it per line. */
@@ -214,6 +257,19 @@ export async function main(argv: string[]): Promise<number> {
       const ready = await doctor({ url: o.url, dotenv: o.dotenv, flags: overrides(o), cwd: process.cwd(), env: process.env, node: process.version, err });
       code = ready ? EXIT_OK : EXIT_FAILURE;
     });
+  const check = program
+    .command("check")
+    .description("measure again what context/snapshot.json claims, without a model or an API key")
+    .option("--snapshot <path>", "the snapshot to check, relative to the current directory", SNAPSHOT)
+    .addOption(new Option("--fail-on <when>", "exit 2 on a regression or a stale item, on any change, or never").choices(FAIL_ON).default("regression"))
+    .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
+    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root");
+  for (const o of overridable) check.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
+  check.action(async (own) => {
+    // As for doctor: the program's options before `check`, and its own after the name, which win.
+    const o = { ...program.opts(), ...own };
+    code = await runCheck({ url: o.url, dotenv: o.dotenv, snapshot: o.snapshot, failOn: o.failOn, flags: overrides(o), cwd: process.cwd(), env: process.env, err });
+  });
   try {
     await program.parseAsync(argv);
   } catch (e) {
