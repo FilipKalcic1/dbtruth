@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { config } from "../src/config.js";
-import { estimateRows, extract, fitToContext, isCategorical, type Size } from "../src/extract.js";
+import { estimateRows, extract, fitToContext, isCategorical, readCatalog, type Size } from "../src/extract.js";
 import type { Db, QueryResult, Row } from "../src/safety.js";
 import type { Extract, Table } from "../src/schemas.js";
 import { deadTableQuery } from "../src/verify.js";
@@ -68,7 +68,10 @@ function oneTable(estimate: number, stats: QueryResult): Db {
 }
 const counted = (n: number): QueryResult => ({ ok: true, rows: [{ n, nn0: n, d0: n, l0: 5 }] });
 const failed: QueryResult = { ok: false, reason: "timeout", message: "canceling statement due to statement timeout" };
-const sized = async (estimate: number, stats: QueryResult) => (await extract(oneTable(estimate, stats), config, { samples: false, reveal: new Set() })).tables[0]!.rowEstimate;
+const sized = async (estimate: number, stats: QueryResult) => {
+  const db = oneTable(estimate, stats);
+  return (await extract(db, config, await readCatalog(db), { samples: false, reveal: new Set() })).tables[0]!.rowEstimate;
+};
 
 test("the row estimate after the scan: a short plain scan counts, a full one proves at least the sample size, a random sample keeps the catalog's word", async () => {
   assert.equal(await sized(0, counted(7)), 7, "a plain scan that came back short counted the relation");
@@ -184,7 +187,7 @@ function listing(relations: Row[], answer: (sql: string) => QueryResult): { db: 
 const relation = (oid: number, name: string, estimate: number, pages: number, extra: Row = {}): Row =>
   ({ oid, schema: "public", table: name, relkind: "r", is_partition: false, parent: null, populated: true, estimate, pages, leaves: null, comment: null, definition: null, ...extra });
 const isPilot = (sql: string) => /^SELECT count\(\*\) AS n FROM "public"\."\w+" TABLESAMPLE/.test(sql);
-const tablesOf = async (db: Db) => (await extract(db, config, { samples: false, reveal: new Set() })).tables;
+const tablesOf = async (db: Db) => (await extract(db, config, await readCatalog(db), { samples: false, reveal: new Set() })).tables;
 const plainForm = new RegExp(`FROM \\(SELECT \\* FROM "public"\\."\\w+" LIMIT ${config.sampleRows}\\) s$`);
 
 test("a size the plain scan counted is a count, not an estimate: it drops the pilot's source, which a random sample keeps", async () => {
@@ -238,4 +241,50 @@ test("a dead-table count taken from the row estimate says where the estimate cam
   assert.equal(big(279_812, "partitions").query, `-- from the schema: pg_class.reltuples of the leaf partitions of big${undated}`);
   assert.equal(big(279_812, "pilot").query, `-- from a pilot sample: count(*) over TABLESAMPLE SYSTEM on a few of the pages of big, scaled to all of them${undated}`);
   assert.equal(big(-1).query, `-- no row estimate for big${undated}`);
+});
+
+test("readCatalog reads three catalog statements and nothing inside the budget", async () => {
+  const statements: string[] = [];
+  const replies: Row[][] = [
+    [relation(1, "events", 300, 0, { relkind: "p", leaves: [{ estimate: 300, pages: 3 }] }), relation(2, "events_2025", 300, 3, { is_partition: true, parent: 1 })],
+    [1, 2].map((oid) => ({ oid, attnum: 1, name: "id", type: "integer", nullable: false, comment: null })),
+    [{ oid: 1, contype: "p", conkey: [1], refoid: 0, confkey: null, local: true }],
+  ];
+  const db: Db = {
+    database: "x",
+    readOnlyProven: true,
+    catalog: async (sql) => {
+      statements.push(sql);
+      return { ok: true, rows: replies.shift()! };
+    },
+    query: async (sql) => assert.fail(`a statement inside the budget: ${sql}`),
+    budget: () => ({ budgetMs: 0, spentMs: 0, remainingMs: 0, exhausted: true }),
+    close: async () => {},
+  };
+  assert.deepEqual(
+    await readCatalog(db),
+    [
+      {
+        name: "events",
+        schema: "public",
+        kind: "table",
+        partitions: { count: 1, withLocalForeignKeys: 0 },
+        primaryKey: ["id"],
+        foreignKeys: [],
+        columns: [{ name: "id", type: "integer", nullable: false }],
+        size: { estimate: 300, pages: 0, leaves: [{ estimate: 300, pages: 3 }] },
+      },
+    ],
+    "the partition folded into its parent, the columns and keys as the catalog has them, and the size not yet estimated",
+  );
+  assert.equal(statements.length, 3);
+});
+
+test("extract profiles only the relations of the catalog it is given", async () => {
+  const { db, asked } = listing([relation(1, "a", 10, 1), relation(2, "b", 10, 1), relation(3, "c", 10, 1)], () => counted(10));
+  const catalog = await readCatalog(db);
+  const extracted = await extract(db, config, catalog.filter((r) => r.name === "b"), { samples: false, reveal: new Set() });
+  assert.deepEqual(extracted.tables.map((t) => t.name), ["b"]);
+  assert.deepEqual(extracted.skipped, [], "a relation left out of the catalog is not skipped: it was never asked for");
+  assert.ok(asked.length > 0 && asked.every((sql) => sql.includes('"public"."b"')), asked.join("\n"));
 });

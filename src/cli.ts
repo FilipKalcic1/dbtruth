@@ -9,13 +9,18 @@ import { fileURLToPath } from "node:url";
 import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Overrides } from "./config.js";
 import { contextualize } from "./contextualize.js";
 import { doctor } from "./doctor.js";
-import { extract, fitToContext } from "./extract.js";
+import { extract, fitToContext, readCatalog } from "./extract.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
 import { connect, readSettings, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
+import { serialize, toSnapshot } from "./snapshot.js";
 import { assemble, describeKinds, EXIT_FAILURE, EXIT_OK, exitCode } from "./verdict.js";
 import { verify } from "./verify.js";
-import { OUTPUT_DIR, persist, write } from "./write.js";
+import { OUTPUT_DIR, persist, SNAPSHOT_FILE, write } from "./write.js";
+
+// package.json is one level up from both src/ under tsx and dist/ once installed.
+const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+const SNAPSHOT = `${OUTPUT_DIR}/${SNAPSHOT_FILE}`;
 
 export type RunOptions = {
   url?: string;
@@ -67,8 +72,12 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
   // 2. Connect through safety, prove read-only.
   const db = await connect(url, { ...cfg, warn: (message) => opts.err(`WARNING: ${message}`) });
   try {
-    // 3. Extract, then trim to what the model can take.
-    const raw = await extract(db, cfg, { samples: opts.samples, reveal: new Set(opts.reveal) });
+    // 3. The catalog and the server's version, outside the budget; then extract, and trim to what the model can take.
+    const catalog = await readCatalog(db);
+    const version = await db.catalog("SELECT current_setting('server_version_num')::int AS num");
+    if (!version.ok) throw new Error(`could not read the server version: ${version.message}`);
+    const serverVersionNum = Number(version.rows[0]!.num);
+    const raw = await extract(db, cfg, catalog, { samples: opts.samples, reveal: new Set(opts.reveal) });
     for (const miss of raw.unmatchedReveal) opts.err(`--reveal ${miss}: no such column, nothing revealed`);
     const { extract: extracted, reduced } = fitToContext(raw, cfg);
     const effort = effortFor(extracted.schemaTokens, cfg);
@@ -99,8 +108,9 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
     const modelMs = { contextualize: t1 - t0, write: performance.now() - t2 };
     opts.err(`write: ${Object.keys(files).length} files, ${seconds(modelMs.write)}`);
 
-    // 8. Write files, print the summary, exit.
-    const saved = persist(opts.cwd, files);
+    // 8. Write the files and the snapshot, print the summary, exit. The snapshot lists every relation of the catalog.
+    const snapshot = serialize(toSnapshot(verified, catalog, cfg, { toolVersion: VERSION, serverVersionNum }));
+    const saved = persist(opts.cwd, { ...files, [SNAPSHOT]: snapshot });
     for (const f of saved.failed) opts.err(`could not write ${f.path}: ${f.error}`);
     if (opts.json) opts.out(JSON.stringify(verified, null, 2));
     for (const line of summary(verified, saved.written.length, db.budget().spentMs, modelMs)) opts.err(line);
@@ -163,15 +173,13 @@ function emptyClaims(v: Verified): string[] {
 }
 
 export async function main(argv: string[]): Promise<number> {
-  // package.json is one level up from both src/ under tsx and dist/ once installed.
-  const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
   const err = (line: string) => process.stderr.write(line + "\n");
   // Set by the action commander runs; --help and --version exit before any does.
   let code = EXIT_FAILURE;
   const program = new Command()
     .name("dbtruth")
     .description("Verified database context for AI coding agents. Read-only, Postgres.")
-    .version(version, "-v, --version")
+    .version(VERSION, "-v, --version")
     // Options after a subcommand's name are its own, so doctor's --url is not taken for the full run's.
     .enablePositionalOptions()
     .option("--url <url>", "database URL (else DATABASE_URL, else .env)")

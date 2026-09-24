@@ -3,6 +3,24 @@
 Releases from 0.2.0 on. What earlier releases changed, and why, is in
 `NOTES.md`.
 
+## 0.3.0 (unreleased)
+
+- Every full run also writes `context/snapshot.json`: the claims, each
+  verdict with its query and numbers, the settings they were measured with,
+  and the schema with a fingerprint, for `check` to measure again. It is
+  written in a fixed order and without a timestamp, so it changes only when
+  the data, the schema or the claims do; commit it with the rest of
+  `context/`. A dead table's age is now counted in whole days, rounded up, so
+  that it stays the same from run to run until the data is a day older; a
+  table is dead, as before, once its newest row is more than `staleAfterDays`
+  days old.
+- A file of the last run under `context/` is replaced by the new one, and
+  only a file this run does not write again, such as a renamed table's, is
+  removed. One that cannot be removed, held open by another program on
+  Windows or in a directory this user cannot write, is reported like a file
+  that cannot be written, and the other files are still written. It used to
+  stop the run, after the model calls.
+
 ## 0.2.0 (unreleased)
 
 - `npx dbtruth --version`, or `-v`, prints the version.

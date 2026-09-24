@@ -555,13 +555,13 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   `sslmode=no-verify` both get past; a key with a curly quote in it gives
   "could not send a request to the Anthropic API" with `Cannot convert argument
   to a ByteString`; `init`,
-  `check` and `mcp` give commander's `too many arguments`. Not done: `persist`
-  removes the last run's files before it writes the new ones, outside its
-  per-file `try`, so a file it cannot remove (held open on Windows, `EBUSY`;
-  in a directory this user cannot write, `EACCES`) stops the run after the
-  model calls, with the files removed before it gone. The table gives that
-  failure a row in the system's words; reporting it with the other files that
-  could not be written is a change of behaviour, not of the README.
+  `check` and `mcp` give commander's `too many arguments`. Left for later,
+  and done in T3.1 (below): `persist` removed the last run's files outside its
+  per-file `try`, so a file it could not remove (held open on Windows,
+  `EBUSY`; in a directory this user cannot write, `EACCES`) stopped the run
+  after the model calls, with the files removed before it gone. The table gave
+  that failure a row in the system's words; reporting it with the other files
+  that could not be written was a change of behaviour, not of the README.
 - **`test/readme.test.ts` reads the errors out of `src/`.** A list of error ids
   is kept by whoever adds an error, the one person the test is there to catch,
   so it reads the source with regular expressions, as `structure.test.ts`
@@ -761,6 +761,202 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     a foreign partition and an estimate of its own, from an `ANALYZE` of the
     parent on 14 and later, is still sampled with `TABLESAMPLE`, which reads
     that partition whole, as in 0.1.8.
+
+## 0.3.0 (unreleased)
+
+Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
+`PROGRESS.md`.
+
+- **Every full run writes `context/snapshot.json`.** `check` (T3.2) needs to
+  know what the context claimed and what was measured, in a file that lives in
+  git next to the markdown. The snapshot holds its format number, `dbtruth` and
+  its version, the database's name, `server_version_num`, the settings a
+  measurement depends on (`measuredWith`: the sample size, oversampling and
+  seed, `pilotPages`, the join bands, `staleAfterDays`, `duplicateOverlap` and
+  the two categorical limits; the plan's example has `denseKeyShare` too,
+  which comes with T2.2; the schema's `measuredWith` lists them once, and
+  parsing the config with it keeps just those), the schema, and `Verified`'s
+  claims and verdicts as they are. Nothing from `Verified.tables` goes in, so
+  neither the value lists nor the sizes; a test runs with `--reveal
+  customers.email`, finds the canary in what the model was sent, and not in
+  the file.
+  - **The same bytes for the same database and claims.** Keys are sorted at
+    every level; entities and table meanings by name, relationships and
+    suspicions by id, questions by their text and relations by name, a tie by
+    the whole canonical text, all in UTF-16 code-unit order (`B`, `Z`, `a`,
+    `b`, `ä`), never `localeCompare`, whose order is the locale's. An array
+    inside a claim keeps its order: a suspicion's tables are part of its id,
+    and a key's columns and a table's notes mean something in order. Two
+    spaces, a final newline, no timestamp. Two offline runs whose replies list
+    every kind of claim in opposite orders write the same bytes.
+  - **Copies of one claim come to the same claim in any order.** `claimsSchema`
+    kept the first copy of a relationship unless a later one was stated, and
+    extended the first suspicion's detail with each later one not already
+    inside it, so a reply that gave a claim twice in other words wrote other
+    bytes in another order. Of two copies of a relationship with one basis,
+    the one whose JSON sorts first is kept, and the stated copy still wins; a
+    suspicion's details are each kept once and joined in code-unit order, so
+    a detail inside another, `empty` beside `empty beside vehicles`, is no
+    longer dropped. The byte-stability test gives a relationship and a
+    suspicion twice in other words. The details are gathered and joined once:
+    extending a string copy by copy took time in the square of the copies,
+    22 seconds for forty thousand copies of one suspicion in a hand-edited
+    snapshot, and now well under one.
+  - **A dead table's age is whole days, rounded up.** The age was a fraction
+    of a day that grew with `now()`, so no two runs wrote the same number and
+    no snapshot with a dated dead-table claim was byte-stable. Rather than
+    accept a snapshot that changes on every run, `deadTableQuery` rounds up in
+    SQL, `ceil(EXTRACT(EPOCH FROM (now() - greatest(...))) / 86400)`, so the
+    number kept is the one the query reruns to, and a snapshot of an unchanged
+    database stays the same until the data is a day older, which is a real
+    change. Up, not down: for a whole `staleAfterDays`, the rounded age is
+    over it exactly when the age is, so the verdict does not move, and at the
+    default of 90 a table 90 days and an hour old is dead, as before; rounding
+    down would have kept it alive until 91. A fraction in `staleAfterDays`
+    now counts as the whole days below it: 90.5 acts as 90. The
+    byte-stability test adds a dead-table claim on `vehicles` and checks its
+    age is a whole number.
+  - **An age that is not a finite number is left out.** On Postgres 17 and
+    later `now()` less an infinite timestamp is an infinite interval, the age
+    comes back as `-Infinity`, `JSON.stringify` writes it as `null`, and the
+    schema would refuse the file dbtruth had just written. `measureDeadTable`
+    keeps an age only when it is finite, as `extract` does for year ranges. A
+    defect this task found.
+  - **The schema comes from the catalog, not the extract.** Each relation is
+    listed with its schema, its kind and its columns as `[name, type]` in the
+    table's order; the schema is there so that `check` can look a claim's table
+    up with `findTable`, as `verify` does. A relation skipped over budget or
+    dropped to fit the model is listed too, marked `"examined": false`, so that
+    `check` does not call it missing; a partition is not listed, its parent
+    stands for it. The extract has no columns for a skipped relation, so
+    `toSnapshot` takes the catalog, not the plan's extract.
+  - **The fingerprint** is `sha256:` and the hex SHA-256 of the canonical JSON
+    of `schemaOnly()` over the whole catalog, sorted by name. The budget, the
+    fitting and a role that may only read cannot move it: a test compares a
+    full run with a run that examined nothing, one that sent the model only
+    some, and one as the `reader` role, which also prints no warning, as
+    section 5.3 of the plan asks of every new output. The same test checks
+    `serverVersionNum` against the server's own setting and `toolVersion`
+    against `package.json`. A comment, a view's text, whether a materialized
+    view is populated and a partition count do move it; rows, statistics, and
+    a foreign key dropped and added again under its name do not, tested on a
+    copy of `fixture_template`.
+  - **`readCatalog(db)` and `extract(db, cfg, catalog, opts)` stand for the
+    plan's `extractRelations`.** The three catalog statements moved out of
+    `extract()` into `readCatalog`, unchanged and in the same order, which
+    returns each relation as the catalog describes it, its size still to be
+    estimated; `extract` profiles the entries it is given. A full run reads the
+    catalog once, for the extract and the snapshot; `check` (T3.2) and `mcp`
+    (T5.1) will hand `extract` the entries their claims name, so there is one
+    way to call it. The new signature reaches five test call sites, each now
+    reading the catalog first with no assertion changed, as the lead approved:
+    `sized` and `tablesOf` in `extract.test.ts`, and three in
+    `sampling.test.ts`. Inside a `Table` the row estimate now comes after the
+    keys; no test depends on the order, and only the JSON sent to the model
+    shows it.
+  - `schemaOnly` moved to `schemas.ts`, typed over the catalog's relations,
+    since `snapshot.ts` imports only `schemas` and `config`; `extract` imports
+    it back for `schemaTokens`. `RelationKind` and `Verdict` are now inferred
+    from the zod schemas the snapshot is read with, so their literals are
+    written once.
+  - `listKeys` reads `ORDER BY conrelid, conname`. It had no order, so the rows
+    came back as they lay in `pg_constraint`, and a foreign key dropped and
+    added again moved to the end of its table's list and changed the
+    fingerprint. Constraint names are unique per relation and compared in the
+    C collation. On Postgres 16 the fingerprint test fails without the order;
+    a planner that read through the index on the name would keep it green.
+  - The full run reads `SELECT current_setting('server_version_num')::int`
+    once, through `db.catalog`, after the catalog and before anything is sent
+    to the model; a failure stops it with doctor's sentence, `could not read
+    the server version: <message>`, which has a row. The package version is
+    read once, at module scope in `cli.ts`, and handed to `.version()` and to
+    the snapshot, as the note on `--version` said it would be.
+  - `cli.ts` adds the serialized snapshot to the files it hands `persist`, so
+    `write.ts` does not import `snapshot.ts`. `write: 13 files` on the fixture
+    still counts what the model and the renderer wrote; `files written` counts
+    the snapshot too, 14. `--json` still prints `Verified` alone.
+    `snapshot.json` is one of the last run's files `persist` knows, as the
+    plan asks, so it is cleared like the others when a run does not write it
+    again; a full run always does, and a failure to write it is reported like
+    any other file's.
+  - **A file of the last run that cannot be removed no longer stops the run.**
+    T1.5 left it undone (above), and the lead asked for it here, where
+    `previousOutputs` changes anyway. The removal was outside the per-file
+    `try`, so a file held open on Windows (`EBUSY`) or in a directory this
+    user cannot write (`EACCES`) threw after both model calls. Only a file
+    this run does not write again, a renamed or dropped table's, is removed
+    now; one it writes again is replaced by the write. Removing those too
+    reported one problem twice, once as found on disk and once as written, and
+    a writable file in a directory this user cannot write was replaced and
+    still reported as not removed. A file that cannot be removed is reported
+    in `failed`, as a file that cannot be written is, by the path as found on
+    disk, and the other files are still written. The line is `could not write
+    <path>: <error>`, whose error names `unlink` or `rm`, and the README's row
+    for the system's error went into that line's row. The tests put a
+    directory with a file in it where a table's file was, which `rmSync`
+    without `recursive` refuses on every system, once for a table the run no
+    longer has and once for one it writes again.
+  - **Reading it back.** `parseSnapshot` and `readSnapshot` land here, since
+    the full run's test reads the file it wrote; `check` prints their
+    sentences. `readSnapshot` looks at the path before it reads a byte:
+    missing, not a file (a directory, or a device a symbolic link points at),
+    larger than 10 MB, or unreadable, each with its own sentence.
+    `parseSnapshot` then refuses text that is not JSON without the parser's
+    message, which quotes the text, and a snapshot can be a link to any file; a
+    format newer than it knows, with its number; and anything `SnapshotSchema`
+    refuses, naming the path to the first wrong value. Unknown keys are
+    dropped, so a key an older reader would misread must raise
+    `SNAPSHOT_FORMAT`. `check` will measure with `measuredWith`, so those
+    settings go through `resolveConfig` as flags would: a value outside its
+    range, or join bands out of order, is refused with the flag's own
+    sentence after `measuredWith:`. `sampleRowsShown` goes in as 0: the
+    snapshot does not record it and `check` shows no rows, and at its default
+    of 15 its rule would refuse a snapshot written with `--sample-rows 10`.
+    `sampleOversample` and `sampleSeed` have no range in `config.ts` (T2.1),
+    so any finite number passes; a number prints as a numeric literal, so it
+    cannot become other SQL. Claims are read with the model reply's own
+    schema, so a claim stated twice is one. Each sentence has a
+    troubleshooting row, as `test/readme.test.ts` requires, worded for
+    `check`, which is coming.
+  - The 10 MB limit and the format number are constants, an exception to R5,
+    which puts every number in `config.ts` with a variable and a flag. The
+    plan sets the limit in T3.2's rule for untrusted input and lists no
+    tunable for it in Appendix C, and the file is written on one machine and
+    read on another, where a limit set on one would refuse what the other
+    wrote. The fixture's snapshot is 6 KB, and the `scale` database's 145 KB
+    for 300 tables of five columns: about half a kilobyte a relation, so the
+    limit is reached at some twenty thousand relations, whose snapshot `check`
+    refuses with its own sentence.
+  - **`fixture_template` lands in T3.1, not T3.2,** since the fingerprint test
+    needs a copy to change. `test/fixtures/template.sql`, mounted last as
+    `90-template.sql`, connects to `postgres` and runs `CREATE DATABASE
+    fixture_template TEMPLATE fixture IS_TEMPLATE true ALLOW_CONNECTIONS
+    false`: a template that `DROP DATABASE` refuses and no session can connect
+    to, so none can hold it while a copy is made. No step ends other sessions
+    first: `CREATE DATABASE` signals the autovacuum workers in its source and
+    waits for other sessions, and during init there are none. `test/copies.ts`
+    makes a copy under a random name, runs each statement on a connection of
+    its own, and drops the copy after the test without `FORCE`, which Postgres
+    12 lacks, so a session a test leaves open fails that test. `ci.test.ts`
+    checks the file is mounted last, by line, the order CI loads in, and by
+    name, the order the image runs them in. A volume made before this has no
+    template: `docker compose down -v && docker compose up -d --wait`, as the
+    helper's error says.
+  - Not done: storing the value lists; a warning when a run writes a snapshot
+    over the limit, which would still leave no way to check it; and any
+    history of snapshots, which is git's.
+  - Not done either: a schema text that does not depend on the session's
+    `search_path`. `format_type` and `pg_get_viewdef` qualify only what the
+    path cannot see, so a role whose path differs, such as one set to `app,
+    public`, writes other column types and another fingerprint for the same
+    schema. Fixing the path in `connect`, to `public` say, would change more
+    than the text. On a scratch database on the fixture server with `citext`
+    in an `extensions` schema, as Supabase installs it, a column's type then
+    reads `extensions.citext`, which `typeFamily` does not take for text, so a
+    `citext` key column would be shown to the model; and `=` between two
+    `citext` columns resolves to text equality, which found 0 of 1 matching
+    rows where `citext`'s own found 1, a relationship reported broken. Left
+    for T3.2, where `check` compares a snapshot with the database.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

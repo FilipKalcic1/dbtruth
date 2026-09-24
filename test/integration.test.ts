@@ -6,8 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { run, type RunOptions } from "../src/cli.js";
+import { config } from "../src/config.js";
+import { readCatalog } from "../src/extract.js";
 import type { Transport } from "../src/model.js";
-import type { Extract, Verified } from "../src/schemas.js";
+import { connect } from "../src/safety.js";
+import { relationshipId, suspicionId, type Claims, type Extract, type Verified } from "../src/schemas.js";
+import { parseSnapshot, readSnapshot, schemaOf } from "../src/snapshot.js";
+import { copyOfFixture } from "./copies.js";
 import { writeUnreadable } from "./unreadable.js";
 
 const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
@@ -48,11 +53,11 @@ const cannedFiles = {
   "../escape.md": "must not be written",
 };
 
-function fakeModel(): { transport: Transport; requests: string[] } {
+function fakeModel(claims: object = cannedClaims): { transport: Transport; requests: string[] } {
   const requests: string[] = [];
   const transport: Transport = async (system, messages) => {
     requests.push(JSON.stringify({ system, messages }));
-    return system.includes("writing reference files") ? JSON.stringify(cannedFiles) : JSON.stringify(cannedClaims);
+    return system.includes("writing reference files") ? JSON.stringify(cannedFiles) : JSON.stringify(claims);
   };
   return { transport, requests };
 }
@@ -377,6 +382,138 @@ test("a clean database, offline: declared keys confirmed, nothing broken, fits i
   assert.equal(statuses.filter((s) => s === "confirmed" ).length, 11, "eleven declared foreign keys, all at 100%");
   assert.ok(!statuses.includes("broken"));
   assert.equal(verified.verdicts["suspicion:inconsistent_values:posts.state"]!.status, "rejected");
+});
+
+/** One offline run into a new directory, with the model replying the given claims; what it printed, and where it wrote. */
+async function offline(claims: object, opts: Partial<RunOptions> = {}): Promise<{ cwd: string; out: string[]; err: string[]; requests: string[] }> {
+  const cwd = mkdtempSync(join(tmpdir(), "dbtruth-it-"));
+  const out: string[] = [];
+  const err: string[] = [];
+  const model = fakeModel(claims);
+  await run({ url: FIXTURE_URL, samples: true, reveal: [], json: false, flags: {}, cwd, env: {}, out: (l) => out.push(l), err: (l) => err.push(l), ...opts }, { transport: model.transport });
+  return { cwd, out, err, requests: model.requests };
+}
+
+const SNAPSHOT = "context/snapshot.json";
+
+test("every full run writes context/snapshot.json, and it validates", { timeout: 60_000 }, async () => {
+  const snapshotOf = async (claims: object, opts: Partial<RunOptions> = {}) => {
+    const { cwd, err, requests } = await offline(claims, opts);
+    const snapshot = readSnapshot(cwd, SNAPSHOT);
+    if (typeof snapshot === "string") assert.fail(snapshot);
+    return { snapshot, err, requests };
+  };
+  const full = await snapshotOf(cannedClaims);
+  const { schema, claims, verdicts } = full.snapshot;
+  const names = schema.relations.map((r) => r.name);
+  assert.equal(names.length, 11);
+  assert.ok(!names.includes("events_2025") && !names.includes("events_2026"), "a partition is its parent's");
+  assert.deepEqual(Object.keys(verdicts).sort(), [...claims.relationships.map(relationshipId), ...claims.suspicions.map(suspicionId)].sort());
+  assert.ok(full.err.includes("files written: 14 under ./context/"), full.err.join("\n"));
+
+  // The server's own number, asked for apart from the run, and the version in package.json.
+  const db = await connect(FIXTURE_URL, config);
+  try {
+    const server = await db.catalog("SELECT current_setting('server_version_num')::int AS num");
+    assert.equal(full.snapshot.serverVersionNum, server.ok ? server.rows[0]!.num : server.message);
+  } finally {
+    await db.close();
+  }
+  const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  assert.equal(full.snapshot.toolVersion, version);
+
+  // Without claims, with the budget spent before the first relation, with most relations dropped to fit the model, and
+  // as the reader role, which may only SELECT.
+  const unclaimed = await snapshotOf({});
+  assert.deepEqual(unclaimed.snapshot.claims, { entities: [], tables: [], relationships: [], suspicions: [], questions: [] });
+  const skipped = await snapshotOf(cannedClaims, { flags: { budgetSeconds: 0 } });
+  assert.ok(skipped.snapshot.schema.relations.every((r) => r.examined === false && r.columns.length > 0), "every relation listed, with its columns, and none examined");
+  const fitted = await snapshotOf(cannedClaims, { flags: { modelMaxInputTokens: 500 } });
+  const sent = (JSON.parse((JSON.parse(fitted.requests[0]!) as { messages: { content: string }[] }).messages[0]!.content) as Extract).tables.map((t) => t.name);
+  assert.ok(sent.length < 11, `${sent.length} relations sent`);
+  assert.deepEqual(fitted.snapshot.schema.relations.filter((r) => r.examined === undefined).map((r) => r.name), [...sent].sort(), "those the model was sent, and no others");
+  const reader = await snapshotOf(cannedClaims, { url: FIXTURE_URL.replace("dbtruth:dbtruth@", "reader:reader@") });
+  assert.deepEqual(reader.err.filter((line) => line.startsWith("WARNING:")), []);
+
+  const listed = (s: typeof schema) => s.relations.map(({ examined: _examined, ...r }) => r);
+  for (const other of [unclaimed, skipped, fitted, reader]) {
+    assert.equal(other.snapshot.schema.fingerprint, schema.fingerprint);
+    assert.deepEqual(listed(other.snapshot.schema), listed(schema));
+  }
+});
+
+test("two runs whose claims come in different orders write byte-identical snapshots", { timeout: 60_000 }, async () => {
+  // More than one of each kind of claim, a relationship and a suspicion given twice in other words, and a dead table
+  // dated by its newest timestamp, whose age moves with now().
+  const vehicles = (detail: string) => ({ kind: "dead_table", tables: ["vehicles"], detail });
+  const claims = {
+    ...cannedClaims,
+    tables: [...cannedClaims.tables, { name: "customers", purpose: "One row per customer.", grain: "customer", basis: "inferred", confidence: 0.9, notes: [] }],
+    relationships: [...cannedClaims.relationships, { ...cannedClaims.relationships[0]!, confidence: 0.9, reason: "orders belong to customers" }],
+    suspicions: [...cannedClaims.suspicions, vehicles("replaced cars, and itself replaced?"), vehicles("no new rows lately")],
+    questions: [...cannedClaims.questions, "Who still reads products_legacy?"],
+  };
+  const reversed = Object.fromEntries(Object.entries(claims).map(([key, list]) => [key, [...list].reverse()]));
+  const written = async (reply: object) => readFileSync(join((await offline(reply)).cwd, SNAPSHOT));
+  const [first, second] = [await written(claims), await written(reversed)];
+
+  assert.equal(second.toString("utf8"), first.toString("utf8"));
+  assert.ok(first.equals(second));
+  const snapshot = parseSnapshot(first.toString("utf8"), SNAPSHOT);
+  if (typeof snapshot === "string") assert.fail(snapshot);
+  const age = snapshot.verdicts["suspicion:dead_table:vehicles"]?.measurement.numbers.ageDays;
+  assert.ok(Number.isInteger(age), `ageDays ${age}: whole days, so it holds still from one run to the next`);
+});
+
+test("the snapshot carries only what Verified carries, and no hidden value, even with --reveal", { timeout: 60_000 }, async () => {
+  const { cwd, out, requests } = await offline(cannedClaims, { json: true, reveal: ["customers.email"] });
+  const verified = JSON.parse(out.join("\n")) as Verified;
+  const text = readFileSync(join(cwd, SNAPSHOT), "utf8");
+  // As written, not as parsed, which would drop a key the schema does not know.
+  const written = JSON.parse(text) as { claims: Claims; verdicts: Verified["verdicts"]; schema: { relations: object[] } };
+
+  assert.deepEqual(written.verdicts, verified.verdicts);
+  const unordered = (c: Claims) => Object.fromEntries(Object.entries(c).map(([key, list]) => [key, new Set<unknown>(list)]));
+  assert.deepEqual(unordered(written.claims), unordered(verified.claims));
+  assert.deepEqual(Object.keys(written).sort(), ["claims", "database", "measuredWith", "schema", "serverVersionNum", "snapshot", "tool", "toolVersion", "verdicts"]);
+  for (const relation of written.schema.relations) {
+    assert.deepEqual(Object.keys(relation).filter((key) => !["name", "schema", "kind", "columns", "examined"].includes(key)), [], JSON.stringify(relation));
+  }
+  assert.match(requests[0]!, CANARY, "the model was shown the revealed column");
+  assert.doesNotMatch(text, CANARY);
+});
+
+test("the fingerprint changes when a column is added in a copy of fixture_template, and not otherwise", { timeout: 60_000 }, async (t) => {
+  const fingerprint = async (url: string) => {
+    const db = await connect(url, config);
+    try {
+      return schemaOf(await readCatalog(db)).fingerprint;
+    } finally {
+      await db.close();
+    }
+  };
+  const copy = await copyOfFixture(t);
+  const original = await fingerprint(copy.url);
+  assert.equal(original, await fingerprint(FIXTURE_URL), "a copy has the fixture's schema");
+
+  await copy.sql("INSERT INTO products VALUES (81, 'SKU-00081', 'Product 81', 'tools', 12150)");
+  await copy.sql("ANALYZE products");
+  assert.equal(await fingerprint(copy.url), original, "new rows and new statistics are not a new schema");
+  await copy.sql("ALTER TABLE order_items DROP CONSTRAINT order_items_order_id_fkey");
+  await copy.sql("ALTER TABLE order_items ADD CONSTRAINT order_items_order_id_fkey FOREIGN KEY (order_id) REFERENCES orders (id)");
+  assert.equal(await fingerprint(copy.url), original, "a key dropped and added again under its name is the same key");
+  await copy.sql("ALTER TABLE customers ADD COLUMN nickname text");
+  assert.notEqual(await fingerprint(copy.url), original);
+});
+
+test("a relation whose name needs quoting is listed as the catalog names it", { timeout: 60_000 }, async (t) => {
+  const copy = await copyOfFixture(t);
+  await copy.sql('CREATE SCHEMA "odd schema"');
+  await copy.sql('CREATE TABLE "odd schema"."Mixed; Case" ("a""b" integer)');
+  const { cwd } = await offline(cannedClaims, { url: copy.url });
+  const snapshot = readSnapshot(cwd, SNAPSHOT);
+  if (typeof snapshot === "string") assert.fail(snapshot);
+  assert.deepEqual(snapshot.schema.relations.find((r) => r.schema === "odd schema"), { name: "odd schema.Mixed; Case", schema: "odd schema", kind: "table", columns: [['a"b', "integer"]] });
 });
 
 const liveKey = process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN;

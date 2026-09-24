@@ -147,3 +147,24 @@ test("a reference that is null on every sampled row is empty, and says how many 
   assert.equal(m?.skipped, "no non-null rows to test");
   assert.deepEqual(m?.numbers, { total: 0, nulls: 50 });
 });
+
+/** vehicles, dated by one timestamp column, and the suspicion that it is dead. */
+const vehicles = table("vehicles", 120, {
+  columns: [{ name: "registered_at", type: "timestamp with time zone", nullable: false, nullRate: 0, distinct: 0, maxLength: 0, visible: false }],
+});
+const deadVehicles = claims({ suspicions: [{ kind: "dead_table", tables: ["vehicles"], detail: "replaced by a newer table" }] });
+
+test("the dead-table age is counted in whole days by the statement, so the number kept is the number it reruns to", async () => {
+  const db = fakeDb(answer({ count: 120, age_days: "3" }));
+  const [m] = await verify(db, config, extractOf(vehicles), deadVehicles);
+  // Rounded up: a whole number over staleAfterDays exactly when the age is, so a table 90 days and an hour old is dead at 90.
+  assert.equal(m?.query, 'SELECT count(*)::float8 AS count, ceil(EXTRACT(EPOCH FROM (now() - greatest(max("registered_at")))) / 86400) AS age_days FROM "public"."vehicles"');
+  assert.deepEqual(m?.numbers, { exact: 1, count: 120, ageDays: 3 });
+});
+
+test("a dead-table age that is not a finite number is left out", async () => {
+  // On Postgres 17 and later, now() less an infinite timestamp is an infinite interval, and its age -Infinity, which
+  // JSON writes as null.
+  const [m] = await verify(fakeDb(answer({ count: 120, age_days: "-Infinity" })), config, extractOf(vehicles), deadVehicles);
+  assert.deepEqual(m?.numbers, { exact: 1, count: 120 });
+});

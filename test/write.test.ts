@@ -139,6 +139,42 @@ test("a file that cannot be written is reported, and the others are still writte
   assert.equal(r.failed[0]!.path, "context/tables/orders.md");
 });
 
+test("a file of the last run that cannot be removed is reported, and the new files are still written", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "dbtruth-"));
+  // Where the last run wrote held.md, a directory with a file in it: removing it without recursion fails on every
+  // system, as a file another program holds open does on Windows (EBUSY).
+  mkdirSync(join(cwd, "context", "tables", "held.md"), { recursive: true });
+  writeFileSync(join(cwd, "context", "tables", "held.md", "keep"), "");
+
+  const r = persist(cwd, { "context/README.md": "# a", "context/tables/orders.md": "# o" });
+
+  assert.deepEqual(r.written, ["context/README.md", "context/tables/orders.md"]);
+  assert.deepEqual(r.failed.map((f) => f.path), [join("context", "tables", "held.md")], "named as the system spells a path it found");
+});
+
+test("a file this run writes again is replaced, not removed first, so one that cannot be is reported once", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "dbtruth-"));
+  mkdirSync(join(cwd, "context", "tables", "orders.md"), { recursive: true });
+  writeFileSync(join(cwd, "context", "tables", "orders.md", "keep"), "");
+
+  const r = persist(cwd, { "context/README.md": "# a", "context/tables/orders.md": "# o" });
+
+  assert.deepEqual(r.written, ["context/README.md"]);
+  assert.deepEqual(r.failed.map((f) => f.path), ["context/tables/orders.md"]);
+});
+
+test("the last run's snapshot is cleared like its other files, and only the one at the top of context/", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "dbtruth-"));
+  mkdirSync(join(cwd, "context", "tables"), { recursive: true });
+  writeFileSync(join(cwd, "context", "snapshot.json"), "{}");
+  writeFileSync(join(cwd, "context", "tables", "snapshot.json"), "not ours");
+
+  persist(cwd, { "context/README.md": "# a" });
+
+  assert.ok(!existsSync(join(cwd, "context", "snapshot.json")), "the last run's snapshot does not survive a run that writes none");
+  assert.ok(existsSync(join(cwd, "context", "tables", "snapshot.json")), "only the one at the top of context/ is the tool's");
+});
+
 test("a size estimated from a sample says so; one from the catalog, from the partitions or counted does not", () => {
   const pilot = facts("fresh_big", { rowEstimate: 279_815, estimateSource: "pilot", primaryKey: null });
   assert.equal(tableFile(nothing, pilot), "# fresh_big\n\ntable, ~279815 rows (estimated from a sample), primary key: none\n");

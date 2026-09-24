@@ -2,16 +2,18 @@
 // validated; one file per relation rendered from the measurements, no call at all.
 //
 // This module owns the output directory. Paths are confined to context/ and made
-// safe for every filesystem, files from a previous run are cleared so a renamed or
-// dropped table leaves nothing stale behind, and one file that cannot be written is
-// reported instead of aborting the rest.
+// safe for every filesystem, files from a previous run that this one does not write
+// again are cleared so a renamed or dropped table leaves nothing stale behind, and one
+// file that cannot be removed or written is reported instead of aborting the rest.
 
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type { AskOptions, Model } from "./model.js";
 import { FilesSchema, relationshipId, suspicionId, type Files, type TableFacts, type Verified } from "./schemas.js";
 
 export const OUTPUT_DIR = "context";
+/** cli.ts adds the snapshot to the files it hands persist, so this module need not know what it holds. */
+export const SNAPSHOT_FILE = "snapshot.json";
 
 export async function write(model: Model, verified: Verified, options?: AskOptions): Promise<Files> {
   const written = await model.ask("write", verified, FilesSchema, options);
@@ -104,11 +106,19 @@ export function confine(path: string): string | undefined {
 
 export type Persisted = { written: string[]; failed: { path: string; error: string }[] };
 
-/** Clears what a previous run wrote under cwd/context, then writes every file, collecting failures. */
+/** Clears what a previous run wrote under cwd/context and this one does not write again, then writes every file, collecting failures. */
 export function persist(cwd: string, files: Files): Persisted {
-  const dir = join(cwd, OUTPUT_DIR);
-  for (const stale of previousOutputs(dir)) rmSync(stale, { force: true });
   const out: Persisted = { written: [], failed: [] };
+  // A file written again is replaced by the write, which reports it if it cannot be. Any other, held open on Windows or
+  // in a directory this user cannot write, stays, and is named as found on disk.
+  const rewritten = new Set(Object.keys(files).map((path) => join(cwd, path)));
+  for (const stale of previousOutputs(join(cwd, OUTPUT_DIR)).filter((path) => !rewritten.has(path))) {
+    try {
+      rmSync(stale, { force: true });
+    } catch (e) {
+      out.failed.push({ path: relative(cwd, stale), error: e instanceof Error ? e.message : String(e) });
+    }
+  }
   for (const [path, markdown] of Object.entries(files)) {
     const full = join(cwd, path);
     try {
@@ -122,10 +132,10 @@ export function persist(cwd: string, files: Files): Persisted {
   return out;
 }
 
-/** Only the files this tool writes: the two top-level files, per-table files, and raw-reply dumps. */
+/** Only the files this tool writes: the two top-level files, the snapshot, per-table files, and raw-reply dumps. */
 function previousOutputs(dir: string): string[] {
   if (!isDirectory(dir)) return [];
-  const top = readdirSync(dir).filter((f) => f === "README.md" || f === "ENTITIES.md" || /^\.raw-.*\.json$/.test(f)).map((f) => join(dir, f));
+  const top = readdirSync(dir).filter((f) => f === "README.md" || f === "ENTITIES.md" || f === SNAPSHOT_FILE || /^\.raw-.*\.json$/.test(f)).map((f) => join(dir, f));
   const tables = join(dir, "tables");
   const perTable = isDirectory(tables) ? readdirSync(tables).filter((f) => f.endsWith(".md")).map((f) => join(tables, f)) : [];
   return [...top, ...perTable];

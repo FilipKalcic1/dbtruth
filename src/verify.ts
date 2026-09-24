@@ -80,7 +80,10 @@ async function measureSuspicion(db: Db, cfg: Config, extract: Extract, claimId: 
 export function deadTableQuery(table: Table, cfg: Pick<Config, "sampleRows">): { query: string; exact: boolean; fromSchema?: Record<string, number> } {
   const timeColumns = table.columns.filter((c) => typeFamily(c.type) === "time");
   const exact = table.rowEstimate >= 0 && table.rowEstimate <= cfg.sampleRows;
-  const age = timeColumns.length > 0 ? `EXTRACT(EPOCH FROM (now() - greatest(${timeColumns.map((c) => `max(${q(c.name)})`).join(", ")}))) / ${SECONDS_PER_DAY}.0` : null;
+  // Whole days, so the number kept is the one the statement reruns to on the same day, and a snapshot of an unchanged
+  // database stays the same until the data is a day older. Rounded up, so it is over a whole staleAfterDays exactly when
+  // the age is.
+  const age = timeColumns.length > 0 ? `ceil(EXTRACT(EPOCH FROM (now() - greatest(${timeColumns.map((c) => `max(${q(c.name)})`).join(", ")}))) / ${SECONDS_PER_DAY})` : null;
   if (!exact && age === null) {
     const numbers: Record<string, number> = table.rowEstimate >= 0 ? { count: table.rowEstimate, exact: 0 } : { exact: 0 };
     // No statement reruns an estimate, so the label says where to look it up.
@@ -117,7 +120,8 @@ async function measureDeadTable(db: Db, cfg: Config, extract: Extract, claimId: 
   if (!row) return skip(claimId, kind, "the measurement returned no row", query);
   const numbers: Record<string, number> = { exact: exact ? 1 : 0 };
   if (row.count !== null && row.count !== undefined) numbers.count = Number(row.count);
-  if (row.age_days !== null && row.age_days !== undefined) numbers.ageDays = Number(row.age_days);
+  // On Postgres 17 and later an infinite timestamp gives an infinite age, which JSON cannot carry: left out, as a missing one is.
+  if (row.age_days !== null && Number.isFinite(Number(row.age_days))) numbers.ageDays = Number(row.age_days);
   return { claimId, kind, query, numbers };
 }
 

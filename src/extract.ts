@@ -21,13 +21,14 @@
 // sample is spread over the whole file instead of read from the oldest pages or the
 // first partition.
 //
-// The three catalog reads (relations, columns, keys) run outside the time budget so a
-// tiny budget still yields a complete schema; sampling stops at its share of the budget
-// so that verifying claims keeps the rest.
+// readCatalog makes the three catalog reads (relations, columns, keys) outside the time
+// budget, so a tiny budget still yields a complete schema. extract profiles the relations
+// of the catalog it is given, and stops at its share of the budget so that verifying
+// claims keeps the rest.
 
 import type { Config } from "./config.js";
 import { bareName, DESCRIBED_RELATIONS, q, qualified, querySampled, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
-import type { Column, Extract, RelationKind, Table } from "./schemas.js";
+import { schemaOnly, type CatalogRelation, type Column, type Extract, type RelationKind, type Table } from "./schemas.js";
 
 
 export type ExtractOptions = {
@@ -39,49 +40,57 @@ export type ExtractOptions = {
 
 export const HIDDEN = "[hidden]";
 
-export async function extract(db: Db, cfg: Config, opts: ExtractOptions): Promise<Extract> {
+/** The relations dbtruth describes, each with what the catalog says of its size, which extract turns into a row estimate. */
+export type Catalog = (CatalogRelation & { size: Size & { leaves?: Size[] } })[];
+
+/** Every relation dbtruth describes, partitions folded into their parent: the three catalog statements, outside the budget. */
+export async function readCatalog(db: Db): Promise<Catalog> {
   const all = await listRelations(db);
   const oids = all.map((r) => r.oid);
   const columnsByOid = await listColumns(db, oids);
   const keysByOid = await listKeys(db, oids, all, columnsByOid);
   const partitionsByParent = summarizePartitions(all, keysByOid);
+  return all
+    .filter((rel) => !rel.isPartition)
+    .map((rel) => {
+      const partitions = partitionsByParent.get(rel.oid);
+      return {
+        name: displayName(rel.schema, rel.table),
+        schema: rel.schema,
+        kind: rel.kind,
+        ...(rel.comment ? { comment: rel.comment } : {}),
+        ...(rel.definition ? { definition: rel.definition } : {}),
+        ...(rel.populated !== undefined ? { populated: rel.populated } : {}),
+        ...(partitions ? { partitions } : {}),
+        primaryKey: keysByOid.get(rel.oid)?.primaryKey ?? null,
+        foreignKeys: keysByOid.get(rel.oid)?.foreignKeys ?? [],
+        columns: (columnsByOid.get(rel.oid) ?? []).map(({ attnum: _attnum, ...c }) => c),
+        size: { estimate: rel.estimate, pages: rel.pages, ...(rel.leaves ? { leaves: rel.leaves } : {}) },
+      };
+    });
+}
+
+export async function extract(db: Db, cfg: Config, catalog: Catalog, opts: ExtractOptions): Promise<Extract> {
   const extractBudgetMs = db.budget().budgetMs * cfg.extractBudgetShare;
   const matchedReveal = new Set<string>();
 
   const tables: Table[] = [];
   const skipped: string[] = [];
 
-  for (const rel of all) {
-    if (rel.isPartition) continue;
-    const name = displayName(rel.schema, rel.table);
+  for (const { size, columns, ...relation } of catalog) {
     if (db.budget().spentMs >= extractBudgetMs) {
-      skipped.push(name);
+      skipped.push(relation.name);
       continue;
     }
-    const partitions = partitionsByParent.get(rel.oid);
     // The pilot, when the rules need one, is a measurement like any other: inside the budget, and any failure leaves the size unknown.
-    const size = await estimateRows(rel, cfg.pilotPages, async (percent) => {
-      const counted = await db.query(`SELECT count(*) AS n FROM ${qualified({ schema: rel.schema, name })} TABLESAMPLE SYSTEM (${percent}) REPEATABLE (${cfg.sampleSeed})`);
+    const estimate = await estimateRows(size, cfg.pilotPages, async (percent) => {
+      const counted = await db.query(`SELECT count(*) AS n FROM ${qualified(relation)} TABLESAMPLE SYSTEM (${percent}) REPEATABLE (${cfg.sampleSeed})`);
       return counted.ok ? Number(counted.rows[0]!.n) : undefined;
     });
     const base: Table = {
-      name,
-      schema: rel.schema,
-      kind: rel.kind,
-      ...(rel.comment ? { comment: rel.comment } : {}),
-      ...(rel.definition ? { definition: rel.definition } : {}),
-      ...(rel.populated !== undefined ? { populated: rel.populated } : {}),
-      ...(partitions ? { partitions } : {}),
-      ...size,
-      primaryKey: keysByOid.get(rel.oid)?.primaryKey ?? null,
-      foreignKeys: keysByOid.get(rel.oid)?.foreignKeys ?? [],
-      columns: (columnsByOid.get(rel.oid) ?? []).map(({ attnum: _attnum, ...c }) => ({
-        ...c,
-        nullRate: 0,
-        distinct: 0,
-        maxLength: 0,
-        visible: false,
-      })),
+      ...relation,
+      ...estimate,
+      columns: columns.map((c) => ({ ...c, nullRate: 0, distinct: 0, maxLength: 0, visible: false })),
       samples: [],
     };
     tables.push(await profile(db, cfg, opts, base, matchedReveal));
@@ -264,11 +273,13 @@ async function listColumns(db: Db, oids: number[]): Promise<Map<number, ColumnBa
 type Keys = { primaryKey: string[] | null; foreignKeys: Table["foreignKeys"]; localForeignKeys: number };
 
 async function listKeys(db: Db, oids: number[], relations: Relation[], columnsByOid: Map<number, ColumnBase[]>): Promise<Map<number, Keys>> {
+  // By name, not in the order the rows lie in, which a key dropped and added again changes: the snapshot's fingerprint reads the keys.
   const r = await db.catalog(
     `SELECT conrelid::bigint AS oid, contype::text AS contype, conkey, confrelid::bigint AS refoid, confkey,
             (conparentid = 0) AS local
        FROM pg_constraint
-      WHERE contype IN ('p', 'f') AND conrelid = ANY($1::oid[])`,
+      WHERE contype IN ('p', 'f') AND conrelid = ANY($1::oid[])
+      ORDER BY conrelid, conname`,
     [oids],
   );
   if (!r.ok) throw new Error(`could not list constraints: ${r.message}`);
@@ -406,19 +417,4 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
 
 export function displayName(schema: string, table: string): string {
   return schema === "public" ? table : `${schema}.${table}`;
-}
-
-/** The schema-only view used to measure whether the database fits in an agent's context. */
-export function schemaOnly(tables: Table[]) {
-  return tables.map((t) => ({
-    name: t.name,
-    kind: t.kind,
-    comment: t.comment,
-    definition: t.definition,
-    populated: t.populated,
-    partitions: t.partitions,
-    primaryKey: t.primaryKey,
-    foreignKeys: t.foreignKeys,
-    columns: t.columns.map((c) => ({ name: c.name, type: c.type, nullable: c.nullable, comment: c.comment })),
-  }));
 }

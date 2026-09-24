@@ -28,7 +28,7 @@ test("every module loads without side effects (cli.ts is the entry point and is 
 
 test("dependency direction matches the spec", () => {
   const allowed: Record<string, string[]> = {
-    "cli.ts": ["config", "safety", "extract", "contextualize", "verify", "verdict", "write", "schemas", "model", "doctor"],
+    "cli.ts": ["config", "safety", "extract", "contextualize", "verify", "verdict", "write", "schemas", "model", "doctor", "snapshot"],
     "config.ts": [],
     "safety.ts": [],
     "model.ts": ["config"],
@@ -39,6 +39,7 @@ test("dependency direction matches the spec", () => {
     "write.ts": ["model", "schemas"],
     "schemas.ts": [],
     "doctor.ts": ["safety", "model", "config"],
+    "snapshot.ts": ["schemas", "config"],
   };
   for (const file of modules) {
     const source = readFileSync(join(srcDir, file), "utf8");

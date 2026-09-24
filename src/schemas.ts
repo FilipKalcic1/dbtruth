@@ -1,5 +1,6 @@
-// schemas.ts: the four objects that flow through the loop, and the zod schemas
-// for the two the model produces (Claims, Files).
+// schemas.ts: the four objects that flow through the loop, the zod schemas for
+// the two the model produces (Claims, Files), and the one for the snapshot, which
+// dbtruth reads back.
 
 import { z } from "zod";
 
@@ -18,7 +19,8 @@ export type Column = {
   years?: [number, number]; // hidden date or timestamp columns: the years of the oldest and newest value
 };
 
-export type RelationKind = "table" | "view" | "materialized view";
+const RelationKindSchema = z.enum(["table", "view", "materialized view"]);
+export type RelationKind = z.infer<typeof RelationKindSchema>;
 
 export type Table = {
   name: string; // "table" in schema public, otherwise "schema.table"
@@ -43,6 +45,26 @@ export type Extract = {
   schemaTokens: number; // size of the schema-only serialization
   unmatchedReveal: string[]; // --reveal entries that named no column
 };
+
+/** A relation as the catalog alone describes it, before it is sized or sampled. */
+export type CatalogRelation = Omit<Table, "rowEstimate" | "estimateSource" | "columns" | "samples"> & {
+  columns: Pick<Column, "name" | "type" | "nullable" | "comment">[];
+};
+
+/** The schema-only view: what sizes the schema against an agent's context, and what the snapshot's fingerprint is taken over. */
+export function schemaOnly(relations: CatalogRelation[]) {
+  return relations.map((t) => ({
+    name: t.name,
+    kind: t.kind,
+    comment: t.comment,
+    definition: t.definition,
+    populated: t.populated,
+    partitions: t.partitions,
+    primaryKey: t.primaryKey,
+    foreignKeys: t.foreignKeys,
+    columns: t.columns.map((c) => ({ name: c.name, type: c.type, nullable: c.nullable, comment: c.comment })),
+  }));
+}
 
 // ---------- Claims: what the model thinks it means (hypotheses) ----------
 
@@ -120,7 +142,9 @@ export function findTable<T extends { name: string; schema: string }>(tables: T[
  * Claims are validated, every table they name is spelled as the extract spells it (a name the
  * extract does not have is kept, and verify reports it), and then they are deduplicated by id,
  * so each identity is measured exactly once and every verdict maps back to one claim. A
- * relationship stated twice keeps the "stated" copy; suspicions with the same id merge their details.
+ * relationship stated twice keeps the "stated" copy, and of two with one basis the one whose text
+ * sorts first; suspicions with the same id merge their details, each once, in code-unit order. So
+ * the order of the copies never decides what is kept.
  */
 export function claimsSchema(tables: { name: string; schema: string }[]) {
   const spell = (name: string) => findTable(tables, name)?.name ?? name;
@@ -130,22 +154,23 @@ export function claimsSchema(tables: { name: string; schema: string }[]) {
       const named = { ...r, from: { ...r.from, table: spell(r.from.table) }, to: { ...r.to, table: spell(r.to.table) } };
       const id = relationshipId(named);
       const prev = relationships.get(id);
-      if (!prev || (prev.basis === "inferred" && named.basis === "stated")) relationships.set(id, named);
+      if (!prev || (prev.basis === named.basis ? JSON.stringify(named) < JSON.stringify(prev) : named.basis === "stated")) relationships.set(id, named);
     }
-    const suspicions = new Map<string, Suspicion>();
+    // Gathered, then joined once: time in proportion to the copies, however many a hand-edited snapshot holds.
+    const suspicions = new Map<string, { claim: Suspicion; details: Set<string> }>();
     for (const s of c.suspicions) {
       const named = { ...s, tables: s.tables.map(spell) };
       const id = suspicionId(named);
       const prev = suspicions.get(id);
-      if (!prev) suspicions.set(id, named);
-      else if (!prev.detail.includes(s.detail)) prev.detail = `${prev.detail}; ${s.detail}`;
+      if (prev) prev.details.add(s.detail);
+      else suspicions.set(id, { claim: named, details: new Set([s.detail]) });
     }
     return {
       ...c,
       entities: c.entities.map((e) => ({ ...e, primaryTable: spell(e.primaryTable), referencedIn: e.referencedIn.map(spell) })),
       tables: c.tables.map((t) => ({ ...t, name: spell(t.name) })),
       relationships: [...relationships.values()],
-      suspicions: [...suspicions.values()],
+      suspicions: [...suspicions.values()].map(({ claim, details }) => ({ ...claim, detail: [...details].sort().join("; ") })),
     };
   });
 }
@@ -165,11 +190,12 @@ export type Measurement = {
   empty?: boolean;
 };
 
-export type Verdict = {
-  status: "confirmed" | "broken" | "rejected" | "unverifiable" | "empty";
-  measurement: { query: string; numbers: Record<string, number> };
-  skipped?: string;
-};
+const VerdictSchema = z.object({
+  status: z.enum(["confirmed", "broken", "rejected", "unverifiable", "empty"]),
+  measurement: z.object({ query: z.string(), numbers: z.record(z.string(), z.number()) }),
+  skipped: z.string().optional(),
+});
+export type Verdict = z.infer<typeof VerdictSchema>;
 
 /** Per-relation facts the writer needs that claims do not carry: kind, key, size, categorical values. */
 export type TableFacts = Pick<Table, "name" | "kind" | "partitions" | "rowEstimate" | "estimateSource" | "primaryKey"> & {
@@ -192,3 +218,48 @@ export type Verified = {
 /** The two files the model writes. The per-table files are rendered from Verified, not asked of it. */
 export const FilesSchema = z.object({ "context/README.md": z.string(), "context/ENTITIES.md": z.string() });
 export type Files = Record<string, string>;
+
+// ---------- Snapshot: Verified as check reads it back (untrusted: a pull request can edit it) ----------
+
+/**
+ * Raised whenever a reader of an older format would misread the file. A key an older reader can ignore does not
+ * raise it: unknown keys are dropped when the file is read.
+ */
+export const SNAPSHOT_FORMAT = 1;
+
+export const SnapshotSchema = z.object({
+  snapshot: z.literal(SNAPSHOT_FORMAT),
+  tool: z.literal("dbtruth"),
+  toolVersion: z.string(),
+  database: z.string(),
+  serverVersionNum: z.number().int(),
+  // The settings a measurement depends on, so check measures as the run that wrote the file did.
+  measuredWith: z.object({
+    sampleRows: z.number(),
+    sampleOversample: z.number(),
+    sampleSeed: z.number(),
+    pilotPages: z.number(),
+    join: z.object({ confirmed: z.number(), broken: z.number() }),
+    staleAfterDays: z.number(),
+    duplicateOverlap: z.number(),
+    categoricalMaxDistinct: z.number(),
+    categoricalMaxValueLength: z.number(),
+  }),
+  schema: z.object({
+    fingerprint: z.string(),
+    relations: z.array(
+      z.object({
+        name: z.string(),
+        schema: z.string(),
+        kind: RelationKindSchema,
+        columns: z.array(z.tuple([z.string(), z.string()])), // [name, type], in the table's order
+        examined: z.literal(false).optional(), // skipped over budget, or dropped to fit the model's input
+      }),
+    ),
+  }),
+  // The model reply's own schema: with no tables to spell against, names stay as written, and a claim stated twice is one.
+  claims: claimsSchema([]),
+  verdicts: z.record(z.string(), VerdictSchema),
+});
+
+export type Snapshot = z.output<typeof SnapshotSchema>;
