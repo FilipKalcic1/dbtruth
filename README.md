@@ -205,6 +205,28 @@ file as it reads any input it did not write: no larger than 10 MB, checked
 against its schema before anything else, its names only looked up in the
 database's own catalog, and its stored queries never run.
 
+## Team tier
+
+The Team tier is the GitHub Action on private repositories. The Action is
+coming: on a pull request it will run `dbtruth check` against the database
+the workflow gives it, write what moved into one comment on the pull request,
+updated in place, and by default fail the job on a regression or a stale
+item.
+
+These stay free forever: the CLI (`dbtruth`, `doctor`, `check`, and the
+coming `init` and `mcp`); the skill, also coming, that tells an agent when to
+read the context and measure a join; and the Action on public repositories.
+
+No database content passes through a server of ours, on either tier. You
+bring your own model access: a full run calls the Anthropic API with your
+key, and `check` needs no model at all. The Action will run `check` in your
+own CI job. On a private repository it will also check a license key,
+sending the key and the repository's id and nothing else, and an outage of
+that check will never fail the job.
+
+The Team tier will cost PRICE_TBD per team per month.
+[Join the waitlist](WAITLIST_URL) to hear when it opens.
+
 ## What it sends, and what it never does
 
 **Database.** `DATABASE_URL` comes from the environment, `.env`, or `--url`; it

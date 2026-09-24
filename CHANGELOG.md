@@ -32,6 +32,10 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   Windows or in a directory this user cannot write, is reported like a file
   that cannot be written, and the other files are still written. It used to
   stop the run, after the model calls.
+- README: a Team tier section. It says what a team will pay for (the GitHub
+  Action on private repositories, which is coming), what stays free forever,
+  and that no database content passes through a server of ours. The price and
+  the waitlist link are placeholders for now.
 
 ## 0.2.0 (unreleased)
 
