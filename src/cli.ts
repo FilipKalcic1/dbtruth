@@ -209,7 +209,7 @@ export async function main(argv: string[]): Promise<number> {
   try {
     await program.parseAsync(argv);
   } catch (e) {
-    process.stderr.write(`dbtruth: ${e instanceof Error ? e.message : String(e)}\n`);
+    err(`dbtruth: ${e instanceof Error ? e.message : String(e)}`);
     return EXIT_FAILURE;
   }
   return code;

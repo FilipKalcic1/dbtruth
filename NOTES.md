@@ -537,6 +537,124 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     be verified is named by its OpenSSL code alone; the fixes
     (`sslrootcert=<file>`, `sslmode=no-verify`) belong in the troubleshooting
     table of T1.5.
+- **The README opens with the quick start the plan orders, and every error
+  has a row.** Requirements; two settings in `.env` at the repository root,
+  `npx dbtruth doctor`, `npx dbtruth`; the Monorepos paragraph; a
+  troubleshooting table; the commands. The plan offers `npx dbtruth init` as a
+  way to write the settings, but it is not built and today prints commander's
+  `too many arguments`, so the quick start names it only as coming; the
+  commands list marks `init`, `check` and `mcp` with the release the plan's
+  T7.1 puts them in. The table shows each message as it is printed, `<...>`
+  for a value, so a person can search it for the line they got; messages with
+  one fix share a row. Checked by running them as well as by reading the code:
+  a `#` in the password gives `ERR_INVALID_URL` and an `@` the authentication
+  sentence; a missing `sslrootcert` file gives `ENOENT`; a URL without a
+  password, or `sslmode` against a server without SSL, the bare sentence; a
+  self-signed certificate under `verify-full` gives
+  `DEPTH_ZERO_SELF_SIGNED_CERT`, which `sslrootcert=<file>` and
+  `sslmode=no-verify` both get past; a key with a curly quote in it gives
+  "could not send a request to the Anthropic API" with `Cannot convert argument
+  to a ByteString`; `init`,
+  `check` and `mcp` give commander's `too many arguments`. Not done: `persist`
+  removes the last run's files before it writes the new ones, outside its
+  per-file `try`, so a file it cannot remove (held open on Windows, `EBUSY`;
+  in a directory this user cannot write, `EACCES`) stops the run after the
+  model calls, with the files removed before it gone. The table gives that
+  failure a row in the system's words; reporting it with the other files that
+  could not be written is a change of behaviour, not of the README.
+- **`test/readme.test.ts` reads the errors out of `src/`.** A list of error ids
+  is kept by whoever adds an error, the one person the test is there to catch,
+  so it reads the source with regular expressions, as `structure.test.ts`
+  does; TypeScript 7 ships no stable parser API. A message reaches the user in
+  one of six ways, and the test takes the literal after each: thrown (`new
+  Error(`), printed (`err(`), warned (`warn(`), a connection failure's cause
+  (`because(`), a sentence a function returns for its caller to throw or print
+  (`return`), and the note `fitToContext` returns when it trims the model's
+  input (`reduced:`). The plan also names `process.stderr`: `main` wrote its
+  last line, `dbtruth: <error>`, there directly, and now hands it to its `err`
+  like every other line. A literal without two words in a row is punctuation,
+  a prefix such as `FAIL`, or SQL, which this code writes in capitals; doctor's
+  `ok` and `note` lines and the full run's progress lines are named as not
+  errors. Each
+  message must match a whole code span in the table's first column, a
+  placeholder standing for any value; a cause need only end one, since it
+  follows `could not connect to the database: `, and the read-only warning may
+  follow `WARNING: `. A first version looked for the words between the
+  placeholders anywhere in the section, and `could not read <path> (<error>)`
+  passed on the `--dotenv` row's. The pattern reads a literal up to a template
+  nested in it, and `connectFailure`'s last line nested its code in the
+  message, which left `could not connect to the database`, the start of every
+  connection row; it is now two returns, one per message, printing what it
+  printed, and `doctor.test.ts` runs both, which no test did. Two pieces sit
+  inside a longer line or a list of lines, where the pattern cannot see them,
+  and are listed by hand: the full run's "no database URL" line and "not
+  examined"; each must still be in `src/` and in the table's first column. The
+  note that the input was trimmed was listed too, by the words its three
+  versions share, which let two of them lose their row unnoticed; it is now
+  read as the sixth way. The test also fails when one of the six ways matches
+  nothing, so an edit that breaks the pattern cannot pass by finding less.
+  Not done: a message worded a seventh way, through a new helper
+  like `because` or a direct write to `process.stderr`, is not seen until the
+  pattern learns it; a message cut short by a nested template, as the
+  read-only session's still is, is matched only up to the cut, which no other
+  row starts with; a message that is a known start and a value, such as a new
+  `could not connect to the database: <detail>`, passes on any row that starts
+  the same way; commander's own errors have a row but are not in `src/`; and a
+  row whose message is gone is not caught, though a reworded message fails the
+  test until its row has the new words.
+- **The quick start's `.env` had a comment the parser keeps.**
+  `ANTHROPIC_MODEL=claude-sonnet-5     # optional; this is the default`, copied
+  as shown, set the model id to the rest of the line, and the key check then
+  said that model does not exist. `readEnvFile` reads a value to the end of its
+  line, as in 0.1.8. The example now holds the two settings only, and the text
+  says a comment goes on a line of its own. `test/readme.test.ts` reads the
+  example with `readEnvFile` and fails on a value with a space in it, which no
+  setting has; no test did. Not done: dropping a trailing `#
+  comment` in the parser, which would cut a password that holds ` #`, and is a
+  change of behaviour outside this task.
+- **`doctor` has a third marker, `note`, for what only informs.** The plan's
+  doctor prints `ok` or `FAIL`, and T1.3 printed a missing key as `ok no API
+  key: a full run needs ANTHROPIC_API_KEY; check and mcp do not`. In the
+  lead's walkthrough of the quick start (T1.5, A2) a newcomer without a key saw
+  every line say `ok`, and the full run then stopped at the key; the line also
+  named `check`, which does not exist yet and gave commander's `too many
+  arguments`. A missing key is neither a pass nor a failure, and neither are
+  relations the role cannot read, the other finding doctor only informs of,
+  which the README already named with the key: both are now `note` lines,
+  `note no API key: a full run needs ANTHROPIC_API_KEY; doctor does not` and
+  `note 2 relations readable, 9 not: measurements on those will be skipped`. A
+  key the API rejects is still a `FAIL`, and the exit code is the plan's: 1
+  only when one of checks 1 to 6 fails. The quick start's comment for `doctor`
+  says what the three markers and the exit code mean. The key's line names
+  only commands that exist: `check` (T3.2) and `mcp` (T5.1) add themselves to
+  it when they ship, as the plan's sentence has them. Decided by the lead after
+  the walkthrough. The package smoke test runs the installed `doctor` without a
+  key, so it now takes `ok` and `note` lines and prints "none failing", the
+  line T1.3's A5 reads; `test/readme.test.ts` passes over `note` lines as it
+  does `ok` ones.
+- **Each failure outside the API is told for what it is.** `explainApiFailure`
+  ended every failure that did not come from the API in "no API key found. Set
+  ANTHROPIC_API_KEY ..." and the SDK's text in parentheses, which was right for
+  one of its three causes. The class now decides, never the SDK's wording
+  (0.123.0): a plain `Error` is the SDK finding no key, and says only "no API
+  key found." with where to put one, without the SDK's sentence, which names
+  ways to sign in dbtruth does not document; a `TypeError` is Node refusing to
+  build the request, a key with a character a header cannot carry (a curly
+  quote) or a bad `ANTHROPIC_BASE_URL`, and says "could not send a request to
+  the Anthropic API: <reason>"; the SDK's own `AnthropicError` that is not an
+  `APIError` is a reply that broke off while it streamed in (`terminated`,
+  `request ended without sending any chunks`), and says so with the SDK's
+  words and "Run again". Found in the walkthrough and while fixing it, decided
+  by the lead. `integration.test.ts` checks the no-key line has no SDK
+  sentence, `cli.test.ts` runs a key with a curly quote, and `model.test.ts`
+  ends a streamed reply before its first event.
+- **`context/` is written where the command runs.** `persist` joins
+  `context/` to the working directory, so from `packages/api` it lands in
+  `packages/api/context/`, whichever `.env` was read. The README's Monorepos
+  paragraph says so, and to run from the directory whose `context/` the agent
+  should read, usually the repository root; the nested-package test in
+  `integration.test.ts` checks where the files land. Not done: an option to
+  write `context/` elsewhere.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

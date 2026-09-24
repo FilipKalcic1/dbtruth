@@ -229,6 +229,7 @@ test("the CLI exits 1 with a clear message when no API key can be resolved, befo
   assert.equal(result.status, 1);
   assert.match(result.stderr, /no API key found/);
   assert.match(result.stderr, /ANTHROPIC_API_KEY/);
+  assert.doesNotMatch(result.stderr, /Could not resolve authentication method/, "the SDK's own sentence, which names ways to sign in dbtruth does not use");
   assert.doesNotMatch(result.stderr, /could not connect/, "the database must not be touched before the API check");
   assert.doesNotMatch(result.stdout, /Sending to/);
 });
@@ -257,7 +258,7 @@ function repository(dotEnv: string): { root: string; api: string } {
 const UNREACHABLE = "postgres://nobody:pw@localhost:1/none";
 
 test("from a nested package, the root .env is used and named on stderr before the disclosure line, never its values", async () => {
-  const { api } = repository(`DATABASE_URL=${FIXTURE_URL}\nANTHROPIC_API_KEY=sk-canary-pii\n`);
+  const { root, api } = repository(`DATABASE_URL=${FIXTURE_URL}\nANTHROPIC_API_KEY=sk-canary-pii\n`);
   const out: string[] = [];
   const err: string[] = [];
   const code = await run(
@@ -267,6 +268,9 @@ test("from a nested package, the root .env is used and named on stderr before th
   assert.equal(code, 2, "the fixture's broken join, so the URL came from the root .env");
   assert.equal(err[0], `reading settings from ${join("..", "..", ".env")}`, "relative to the working directory");
   assert.match(err[1]!, /^Sending to /);
+  // context/ goes where the command runs, as the README's Monorepos paragraph says, not beside the .env it read.
+  assert.ok(existsSync(join(api, "context", "README.md")), "context/ in the package");
+  assert.ok(!existsSync(join(root, "context")), "no context/ at the root");
   for (const line of [...out, ...err]) {
     assert.doesNotMatch(line, CANARY);
     assert.ok(!line.includes(FIXTURE_URL), line);

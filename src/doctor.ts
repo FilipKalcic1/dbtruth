@@ -1,9 +1,11 @@
 // doctor.ts: what stands between this setup and a full run, found without spending a token.
 //
-// Eight checks in order, one line each on stderr: "ok <what>", or "FAIL <what>: <fix>"; stdout stays empty. The setup
-// is ready when the first six pass. The last two only inform: a role may be meant to read part of a database, and
-// check and mcp need no API key. A check that needs an earlier one that failed is not run: after a failed connection
-// only the key is checked. A .env that could not be read on the way is named on a line of its own, as in a full run.
+// Eight checks in order, one line each on stderr: "ok <what>", "FAIL <what>: <fix>", or "note <what>" for what is
+// neither; stdout stays empty. The setup is ready when the first six pass. The last two only inform: relations the role
+// cannot read are a note, since a role may be meant to read part of a database, and so is a missing API key, which only
+// a full run needs; a key the API rejects fails, and the setup is still ready. A check that needs an earlier one that
+// failed is not run: after a failed connection only the key is checked. A .env that could not be read on the way is
+// named on a line of its own, as in a full run.
 
 import { resolveConfig, type Config, type Overrides } from "./config.js";
 import { createModel, DEFAULT_MODEL } from "./model.js";
@@ -61,7 +63,7 @@ export async function doctor(opts: DoctorOptions, deps: DoctorDeps = {}): Promis
 
   // 8. The key, by the one request that sends nothing but the model id.
   const apiKey = settings.env.ANTHROPIC_API_KEY;
-  if (!apiKey) opts.err("ok no API key: a full run needs ANTHROPIC_API_KEY; check and mcp do not");
+  if (!apiKey) opts.err("note no API key: a full run needs ANTHROPIC_API_KEY; doctor does not");
   else {
     const model = settings.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
     try {
@@ -111,7 +113,8 @@ async function checkDatabase(url: string, cfg: Config, err: (line: string) => vo
     );
     if (!r.ok) throw new Error(`could not read the catalog: ${r.message}`);
     const { readable, unreadable } = r.rows[0]!;
-    err(`ok ${readable} relations readable, ${unreadable} not${Number(unreadable) > 0 ? ": measurements on those will be skipped" : ""}`);
+    if (Number(unreadable) > 0) err(`note ${readable} relations readable, ${unreadable} not: measurements on those will be skipped`);
+    else err(`ok ${readable} relations readable, ${unreadable} not`);
     return db.readOnlyProven;
   } finally {
     await db.close();

@@ -13,11 +13,11 @@ const TSX = import.meta.resolve("tsx");
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 /**
- * Runs the CLI from cwd with no DATABASE_URL in the environment, so the settings files decide, and an empty API key, so
- * a run that gets past its settings stops at the API check before any network. One that hangs fails at 20 s.
+ * Runs the CLI from cwd with no DATABASE_URL and no API key in the environment, so the settings files decide, and a run
+ * that gets past its settings without a key stops at the API check before any network. One that hangs fails at 20 s.
  */
 function cli(args: string[], cwd: string) {
-  const env = { ...process.env, DATABASE_URL: undefined, ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "" };
+  const env = { ...process.env, DATABASE_URL: undefined, ANTHROPIC_API_KEY: undefined, ANTHROPIC_AUTH_TOKEN: "" };
   const result = spawnSync(process.execPath, ["--import", TSX, CLI, ...args], { cwd, env, encoding: "utf8", timeout: 20_000 });
   assert.ifError(result.error);
   return result;
@@ -110,7 +110,7 @@ test("--dotenv reads the file it names, and a missing one exits 1 with one line 
   const { root, api } = repository();
   mkdirSync(join(root, "settings"));
   writeFileSync(join(root, "settings", "db.env"), "DATABASE_URL=postgres://nobody:pw@localhost:1/none\n");
-  // The URL is only in the named file, so the run gets past it and stops at the empty key, before any network.
+  // The URL is only in the named file, so the run gets past it and stops for want of a key, before any network.
   const file = join("..", "..", "settings", "db.env");
   const named = cli(["--dotenv", file], api);
   assert.equal(named.status, 1);
@@ -121,6 +121,17 @@ test("--dotenv reads the file it names, and a missing one exits 1 with one line 
   assert.equal(missing.status, 1);
   assert.equal(missing.stdout, "");
   assert.equal(missing.stderr, "--dotenv nope.env: no such file\n");
+});
+
+test("a key that is set but cannot be sent, such as one with a curly quote pasted into it, is named with the reason", () => {
+  // Node refuses the header before a request is made, so this needs no network, and the database is never reached.
+  const cwd = mkdtempSync(join(tmpdir(), "dbtruth-cli-"));
+  writeFileSync(join(cwd, ".env"), "DATABASE_URL=postgres://nobody:pw@localhost:1/none\nANTHROPIC_API_KEY=sk-ant-\u2019canary-pii\n");
+  const result = cli([], cwd);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /^dbtruth: could not send a request to the Anthropic API: Cannot convert argument to a ByteString\b.*\. Check the key in ANTHROPIC_API_KEY\.$/m);
+  assert.doesNotMatch(result.stderr, /no API key found/, "a key was found; it could not be sent");
+  assert.doesNotMatch(result.stderr, /canary-pii/);
 });
 
 test("doctor's Node check reads the version it is given: below 20 fails, 20 and later pass", async () => {

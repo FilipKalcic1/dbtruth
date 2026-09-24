@@ -945,3 +945,368 @@ of each lost point, in the format of section 4.7 of the plan.
   Doctor's API check is recorded as within R9 rather than as an open
   question: it is the full run's own first request, and the plan's check 8
   asks for it.
+
+## T1.5 README quick start and troubleshooting
+### Iteration 1: 55/100
+- Tests first: `test/readme.test.ts` (new, in `test:unit`) failed against the
+  README of T1.3 with `no troubleshooting row for ": no such column, nothing
+  revealed"`: the README had no troubleshooting section, and the first message
+  the test found, `--reveal`'s, had no row. Before any row was written, the 51
+  pieces the test collects were printed and compared with an inventory of
+  `src/` made by hand: every error was there, from all five ways a message
+  reaches the user, and nothing that is not an error. The test's reasoning,
+  and why it reads the source rather than a list, is in NOTES.md, 0.2.0.
+- Built: the top of README.md in the plan's order: requirements (unchanged);
+  two settings in `.env` at the repository root, `npx dbtruth doctor`, `npx
+  dbtruth`, with `init` named only as coming in 0.2.0; the Monorepos paragraph
+  of T1.1; a troubleshooting table of 32 rows covering every message, near
+  ones sharing a row where the fix is the same, plus commander's errors, which
+  a newcomer who types `npx dbtruth init` gets today; and the one commands
+  list, `init`, `check` and `mcp` marked with the release T7.1 gives them. The
+  sections below are unchanged.
+- Found while checking the quick start against the parser, before the
+  walkthrough: the example's `ANTHROPIC_MODEL=claude-sonnet-5     # optional;
+  this is the default`, copied as shown, set the model id to the rest of the
+  line (`readEnvFile` printed `{"ANTHROPIC_MODEL":"claude-sonnet-5     #
+  optional; this is the default"}`), and a key check would then fail with
+  `model "..." does not exist`. The example now holds the two settings only.
+- Rows checked by running them, not only by reading the code: a `#` in the
+  password gives `could not connect to the database (ERR_INVALID_URL)`, an `@`
+  gives the authentication sentence, a missing `sslrootcert` file `(ENOENT)`,
+  a URL without a password and `sslmode=require` or `no-verify` against the
+  fixture the bare sentence; a fake server with a self-signed certificate
+  gives `(DEPTH_ZERO_SELF_SIGNED_CERT)` under `verify-full` and is passed with
+  `sslrootcert=<its certificate>` or `sslmode=no-verify`; a key with a curly
+  quote gives `no API key found ... (Cannot convert argument to a ByteString
+  ...)`; `dbtruth init`, `check` and `mcp` give `error: too many arguments.
+  Expected 0 arguments but got 1: init.` and the rest.
+- A new error without a row fails the test: a scratch file in `src/` printing
+  `could not frobnicate the widget` through `err(` failed it with `no
+  troubleshooting row for "could not frobnicate"`; the file was removed. This
+  is a check of the test, not the sabotage record.
+- A2 walkthrough, made by the implementing agent, which wrote this README and
+  knows the code; not a fresh reader, not a person. `npm pack` of the working
+  copy (`dbtruth-0.1.8.tgz`: the version is bumped at release) into a scratch
+  directory; an empty project with `git init` and `npm init -y`; the tarball
+  installed, in place of what `npx` fetches from npm; then only the quick
+  start's steps: `.env` at the root with the fixture's `DATABASE_URL` and no
+  key line, since this machine has no `ANTHROPIC_API_KEY`; `.gitignore`
+  listing `.env`; `npx dbtruth doctor`, eight `ok` lines, exit 0; `npx
+  dbtruth`, which stopped at the key check with `dbtruth: no API key found.
+  ...` and exit 1. The full run was not reached, for want of a key. `npx
+  dbtruth doctor` from `packages/api` printed `ok settings from ..\..\.env`.
+  Time from `git init` to the last line: 21.4 s, 7 s of it the install.
+  Reading time was not measured: an agent's says nothing of a person's.
+  Friction, and what became of it:
+  - The example's comment on the model's line: fixed in the README (above).
+  - The old quick start put `.env` in the directory you run from, and did not
+    say to keep it out of git: fixed.
+  - Doctor's last line, `ok no API key: a full run needs ANTHROPIC_API_KEY;
+    check and mcp do not`, names two commands that do not exist yet: the
+    commands list now marks them as coming; the line is T1.3's, in the plan's
+    words, and is unchanged.
+  - Without a key, doctor passes and the run stops at the key. That is as the
+    doctor paragraph says; a person with a key does not meet it.
+  - The "no API key found" line ends with the SDK's long sentence in
+    parentheses; its first sentence says what to do, and the row explains the
+    rest. Unchanged (0.1.8's wording).
+  - Not seen, because the package was installed first: `npx` asking to
+    install dbtruth, and, until 0.2.0 is on npm, `npx dbtruth doctor` running
+    0.1.8, which has no `doctor`. The commander row covers the second.
+- `npm run verify` exits 0: 112 tests, 110 pass, the 2 live tests skipped, and
+  the package smoke test passes.
+- `npm run acceptance -- --task T1.5` prints `T1.5: 55/100`, every check
+  passing. `npm run acceptance` over every task: T0.1, T0.2, T1.1, T1.2 and
+  T1.3 still 100/100.
+- BLOCKED A2 (-25): `FAIL T1.5 A2 acceptance: no evidence for: A person who
+  has never seen the tool follows the README's quick start ...`. Cause: the
+  lead asks for a fresh reader, an agent that knows nothing of this
+  repository; this session has no tool to start one (no subagent tool, and no
+  `claude` CLI on this machine), and the sessions `ListAgents` shows are the
+  user's own interactive sessions, which were not used. The walkthrough above
+  is the implementing agent's, so its evidence is left empty rather than
+  passed off as A2. Question for the lead: start a fresh agent with only the
+  README's quick start, the fixture's URL and a tarball from `npm pack`, as the
+  walkthrough above set it up, or accept that walkthrough as A2's evidence, or
+  leave A2 for a person.
+- Lost Tests (-20): `FAIL T1.5 sabotage tests: no evidence for: Sabotage check
+  (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage check is
+  done by a later stage.
+### Iteration 2: 55/100
+- Thirteen review findings, each checked against the code and the plan first.
+- Fixed, the test: with the rows for `could not read <path> (<error>)` and
+  `could not connect to the database (<code>)` deleted from a copy of the
+  README, `test/readme.test.ts` still printed `ok 1`. Cause: it looked for
+  each piece between placeholders anywhere in the section, and those two
+  messages' only pieces, "could not read" and "could not connect to the
+  database", stand in other rows. Now each message must match a whole code
+  span in the table's first column, a placeholder standing for any value,
+  from the span's start (a cause at its end only; the read-only warning after
+  `WARNING: `). That closed the first; the second stayed green because
+  `connectFailure`'s fallback nested a template in its message, so the
+  literal stopped at the start of every connection row. It is now two
+  returns with the same output, and a new test in `doctor.test.ts` runs both
+  (`#` in the password, `sslmode=require` against the fixture). Checked on
+  copies: deleting each row in turn fails the test, commander's row aside;
+  removing each span of a row that has several fails it, commander's three
+  aside; rewording the `.env` warning to `could not read ${p}, skipped:
+  ${error}` fails it with `no troubleshooting row for ...`, and so does a new
+  `err("could not start the server")`. The five ways are written once
+  (`WAYS`).
+- Fixed, `process.stderr`, which the plan names: `main`'s last line was the
+  one line written there directly; it now goes through `err`. A direct write
+  added later is not read, and NOTES says so.
+- Fixed, the README: the troubleshooting intro said doctor prints the
+  setup's errors after `FAIL `, though a failed catalog read and a lost
+  connection escape it and print after `dbtruth: `, and that a line after
+  `dbtruth: ` not in the table is the system's, though the summary starts
+  `dbtruth: <database>`; it now says only what holds. The trimmed-input row
+  shows its three notes whole, where it had cut two of them, and says in the
+  cause column where they are printed, as the skipped row now does too. Four
+  rows no longer repeat defaults of `src/config.ts` that nothing keeps in
+  step (the timeout, the output ceiling, the budget share, the input
+  ceiling); they name the tunable. The read-only session row ended "It needs
+  Postgres 12 or newer", which no upgrade fixes; it now says to point it at
+  Postgres itself. The `could not write` row named a file held open on
+  Windows, which never gives that message: `persist` removes the last run's
+  files first, outside its per-file `try`. A PowerShell handle without delete
+  sharing made Node's `rmSync(p, { force: true })` throw `EBUSY: resource
+  busy or locked, unlink '...'`; with delete sharing the file was removed and
+  written again without error; in `node:22-alpine`, offline, a directory
+  without write permission gave `EACCES: permission denied, unlink '...'`.
+  The row now names a directory that cannot be written or a full disk, and a
+  new row gives the `EBUSY` and `EACCES` lines: the run stops after the model
+  calls, with the files removed before it gone. Changing `persist` is a
+  change of behaviour, left out of this task and named in NOTES.
+- Fixed, NOTES: "Five rows were checked" listed four cases in two rows; it
+  now lists what was run, as iteration 1 records it.
+- Rejected: dropping `verify: `, `write: ` and `tokens: ` from `REPORT`. True
+  that the two-word filter drops those lines anyway, but `REPORT` names what
+  a run that goes well prints, and with them gone a progress line that gains
+  a word would fail the build as an error without a row.
+- Rejected: only naming the fragment gap in NOTES' "Not done", which one
+  review proposed as cheaper than a fix. The gap is closed instead; NOTES
+  names what whole matching still lets through (a message cut short by a
+  nested template, a known start followed by a value).
+- `npm run verify` exits 0: 113 tests, 111 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T1.5`
+  prints `T1.5: 55/100`, every check passing but the two below.
+- BLOCKED A2 (-25): `FAIL T1.5 A2 acceptance: no evidence for: A person who
+  has never seen the tool follows the README's quick start ...`. Cause and
+  question unchanged from iteration 1: no fresh reader has followed the quick
+  start, and the implementing agent's walkthrough is not passed off as one.
+- Lost Tests (-20): `FAIL T1.5 sabotage tests: no evidence for: Sabotage check
+  (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage check is
+  done by a later stage. The doctor test above was broken once to see it
+  fail (the code dropped from the fallback: `+ 'FAIL could not connect to the
+  database' - 'FAIL could not connect to the database (ERR_INVALID_URL)'`,
+  then restored), which is a check of that test, not the record.
+- The sabotage check of the task. `README.md`, `src/safety.ts`,
+  `src/extract.ts` and `test/readme.test.ts` were copied outside the
+  repository first; `test/readme.test.ts` was run under each sabotage, and
+  `test/doctor.test.ts` as well under the one in `src/safety.ts`.
+- Sabotage: the row for `could not read <path> (<error>)`, an unreadable
+  `.env` on the way up, deleted from the troubleshooting table, its words
+  still in the `--dotenv` and catalog rows; "every error the CLI can print has
+  a row in the README's troubleshooting table" failed with "no troubleshooting
+  row for "could not read ${relative(cwd, join(dir, ".env"))} (${error})"".
+  Restored.
+- Sabotage: the quick start's `.env` example given back its third line,
+  `ANTHROPIC_MODEL=claude-sonnet-5     # optional; this is the default`; "the
+  quick start's .env, copied as shown, is read as its two settings, each value
+  alone" failed with "ANTHROPIC_MODEL is read as "claude-sonnet-5     #
+  optional; this is the default"". Restored.
+- Sabotage: `connectFailure` in `src/safety.ts` left the code out of its
+  fallback (`if (code) return "could not connect to the database"`), so the
+  table's `(<code>)` row no longer held; "a connection failure without a
+  sentence of its own is named by its code, or by nothing" failed with
+  "Expected values to be strictly equal": `'FAIL could not connect to the
+  database'` where `'FAIL could not connect to the database
+  (ERR_INVALID_URL)'` was expected. Restored.
+- Sabotage: the trimmed-input row cut back to its first note, `sample rows
+  dropped to fit the model's input limit`, as it was before iteration 2. Every
+  test stayed green: `fitToContext` hands its notes to the CLI as `reduced:`,
+  which the test did not read, so `UNSEEN` held only the words the three notes
+  share, and a note reworded in `src/extract.ts` passed too. Strengthened
+  "every error the CLI can print has a row in the README's troubleshooting
+  table": `reduced` is a sixth way, read like the other five (the pattern
+  takes a `:` after the name), and its entry in `UNSEEN` is gone. Run over
+  `src/`, the new pattern takes those three notes and nothing else the old one
+  did not. Repeated; the test failed with "no troubleshooting row for "sample
+  rows and value lists dropped to fit the model's input limit"". Restored.
+  With the README whole, `tables dropped` reworded to `whole tables dropped`
+  in `src/extract.ts` now fails it too, with "no troubleshooting row for
+  "sample rows, value lists and ${dropped} whole tables dropped to fit the
+  model's input limit""; restored. NOTES.md now says six ways, and why.
+- `README.md` (the first, second and fourth), `src/safety.ts` (the third) and
+  `src/extract.ts` were restored each time from the copy and matched it byte
+  for byte (`cmp`), and `git diff HEAD -- <file>` printed the same diff as
+  before (none for `src/extract.ts`). The changes left are the strengthened
+  test and its NOTES sentences.
+- After the record, `npm run verify` exits 0: 114 tests, 112 pass, the 2 live
+  tests skipped, and the package smoke test passes. `npm run acceptance --
+  --task T1.5` prints `T1.5: 75/100`, every check and item passing but A2.
+- BLOCKED A2 (-25): `FAIL T1.5 A2 acceptance: no evidence for: A person who
+  has never seen the tool follows the README's quick start ...`. Cause and
+  question unchanged from iteration 1.
+### Iteration 3: 75/100
+- The lead ran A2's walkthrough: a fresh agent that knew nothing of this
+  repository followed only the quick start, against the fixture, in an empty
+  git repository with the packed package installed and no API key. It reached
+  a passing `npx dbtruth doctor` in 33 s of wall clock, about 3 minutes for a
+  person reading, from the root and from `packages/api`; the full run stopped
+  at the key, as expected. Its friction, decided by the lead, and what
+  changed:
+  - 1, decided by the lead: doctor's line for a missing key named `check` and
+    `mcp`, which do not exist yet; the newcomer ran `npx dbtruth check` and
+    got commander's `too many arguments`. The line names only `doctor` now.
+    NOTES.md, 0.2.0 says that T3.2 and T5.1 add `check` and `mcp` to it when
+    they ship.
+  - 2, decided by the lead: a missing key printed `ok no API key ...`, so
+    every line said ok and the next command failed, while the quick start
+    promised "ok, or FAIL with what to fix". Lines that only inform have a
+    marker of their own, `note`: `note no API key: a full run needs
+    ANTHROPIC_API_KEY; doctor does not`, and `note 2 relations readable, 9
+    not: measurements on those will be skipped` for a role that cannot read
+    every relation, the other finding doctor only informs of, which the
+    README's doctor paragraph already named with the key; `ok 11 relations
+    readable, 0 not` is unchanged. A key the API rejects is still `FAIL`,
+    and doctor still exits 1 only when one of checks 1 to 6 fails. The quick
+    start's comment for `doctor` now says what `ok`, `FAIL` and `note` mean
+    and when it exits 1, and the doctor paragraph says which findings are
+    notes. NOTES.md records the third marker beside the plan's "ok or FAIL",
+    and why. Changed with it, and named there: `NO_KEY` and the partial
+    role's relations line in `test/doctor.test.ts`; `scripts/pack-smoke.mjs`,
+    which runs the installed `doctor` without a key, takes `ok` and `note`
+    lines and prints `pack-smoke: the installed dbtruth doctor prints 8
+    checks, none failing`, the line T1.3's A5 check in
+    `acceptance/checks.json` now reads; `test/readme.test.ts` counts `note `
+    lines with `ok ` lines as not errors. CHANGELOG.md names the marker.
+  - 3, decided by the lead: the full run's no-key error ended with the SDK's
+    sentence in parentheses. Found in `@anthropic-ai/sdk` 0.123.0, with a
+    script against the installed SDK: with no key, `validateHeaders` throws
+    a plain `Error` (`Could not resolve authentication method. ...`); a key
+    with a curly quote makes Node's `Headers` throw a `TypeError` (`Cannot
+    convert argument to a ByteString ...`) while the SDK builds the header,
+    before that check. Also found: an error while a reply streams in is the
+    SDK's own `AnthropicError`, not an `APIError`, and reaches the same
+    fallback: a local server that ended the event stream at once gave
+    `request ended without sending any chunks`, one that cut it after its
+    first event `terminated`. `explainApiFailure` decides by class: the
+    plain `Error` gets "no API key found." and `KEY_HELP` alone; a
+    `TypeError` or an `AnthropicError` keeps its words, as in 0.1.8. The
+    troubleshooting row shows both messages, without and with the detail,
+    and says what each means, a reply that broke off among them. Tests: the
+    CLI test for a missing key in
+    `test/integration.test.ts` still matches "no API key found" and
+    "ANTHROPIC_API_KEY" and now fails if `Could not resolve authentication
+    method` is printed; a new test in `test/cli.test.ts` runs a `.env` whose
+    key holds a curly quote and expects `(Cannot convert argument to a
+    ByteString` and no canary; a new test in `test/model.test.ts` ends a
+    streamed reply before its first event and expects the SDK's words.
+    `cli()` in `test/cli.test.ts` now leaves the key out of the environment
+    instead of setting it empty, since an empty variable hides the file's
+    key; no other test's `.env` holds one. Each of the three was checked to
+    fail with its branch broken (the detail always kept; the `TypeError`
+    dropped from the condition; the `AnthropicError` dropped), and
+    `src/model.ts` was restored byte for byte (`cmp`); this is a check of
+    the tests, not the sabotage record. Question for the lead: a reply that
+    broke off still starts "no API key found", as in 0.1.8; it needs a
+    sentence of its own and a row, a change beyond this decision, named in
+    NOTES.md as not done.
+  - 4, decided by the lead: `persist` joins `context/` to the working
+    directory (`src/write.ts`), so from `packages/api` it lands in
+    `packages/api/context/`. The Monorepos paragraph now says `context/` is
+    written in the directory you run from, wherever the `.env` was found,
+    and to run dbtruth from the directory whose `context/` the agent should
+    read, usually the repository root, and commit that one. The
+    nested-package test in `test/integration.test.ts` now checks that
+    `packages/api/context/README.md` exists and the root has no `context/`.
+  - 5, decided by the lead: the quick start's parenthetical is now its own
+    sentence, "If the project is not a git repository, put the file in the
+    directory you run dbtruth from."; the troubleshooting introduction says
+    in order what the first column holds, where most messages appear in a
+    full run and with what exit code, what `doctor` prints, and where a
+    message not in the table comes from.
+  - 6, considered, not a defect, decided by the lead: the newcomer saw 0.1.8
+    in `package.json` while the README says a dbtruth older than 0.2.0 has no
+    `doctor`. This unreleased build still carries 0.1.8; 0.2.0 is the version
+    it ships as. Left as it is.
+  - 7, decided by the lead: A2 is filled by the lead after a second
+    walkthrough on the fixed README. Its evidence in `acceptance/manual.json`
+    is left empty, and it is not counted as a point to earn.
+- Review findings left open or partly addressed: none beyond the decisions.
+- The sabotage record in `acceptance/manual.json` is left as it was; the next
+  stage redoes it for what changed.
+- `npm run verify` exits 0: 116 tests, 114 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T1.5`
+  prints `T1.5: 75/100`, every check and item passing but A2. `npm run
+  acceptance` over every task: T0.1, T0.2, T1.1, T1.2 and T1.3 still 100/100.
+- Lost A2 (-25): `FAIL T1.5 A2 acceptance: no evidence for: A person who has
+  never seen the tool follows the README's quick start ...`. Cause: filled by
+  the lead after a second walkthrough on the fixed README (decision 7); not
+  a point for this iteration to earn. No other point is lost.
+- The sabotage check of what changed since iteration 2. `src/doctor.ts` and
+  `src/model.ts` were copied outside the repository first; `readme`, `doctor`,
+  `cli`, `integration` and `model` in `test/` were run under each sabotage.
+- Sabotage: doctor's line for a missing key marked `ok` again (`ok no API key:
+  a full run needs ANTHROPIC_API_KEY; doctor does not`); "as a command, the
+  key check asks the API for the model and nothing else, and each API error it
+  explains has its sentence" failed with "Expected values to be strictly
+  equal": `'ok no API key: ...'` where `'note no API key: ...'` was expected.
+  Four other tests in `test/doctor.test.ts` failed with it, "with no database
+  URL doctor says where to set it, runs no database check, and still checks
+  the key" among them. Restored.
+- Sabotage: the key's line named `check` and `mcp` again (`note no API key: a
+  full run needs ANTHROPIC_API_KEY; check and mcp do not`); "as a command, the
+  key check asks the API for the model and nothing else, and each API error it
+  explains has its sentence" failed with "Expected values to be strictly
+  equal": `'... check and mcp do not'` where `'... doctor does not'` was
+  expected. The same four others failed with it. Restored.
+- Sabotage: `explainApiFailure` gave a missing key the SDK's words again, its
+  last return ending `(${e instanceof Error ? e.message : String(e)})` as in
+  0.1.8; "the CLI exits 1 with a clear message when no API key can be
+  resolved, before touching the database" failed with "the SDK's own
+  sentence, which names ways to sign in dbtruth does not use", the line
+  ending `(Could not resolve authentication method. Expected one of apiKey,
+  authToken, credentials, config, or profile to be set. ...)`. Restored.
+- `src/doctor.ts` (the first two) and `src/model.ts` (the third) were
+  restored each time from the copy and matched it byte for byte (`cmp`), and
+  `git diff HEAD -- <file>` printed the same diff as before. Every sabotage
+  failed at least one test, so no test was strengthened. The sabotage item in
+  `acceptance/manual.json` now points at this record and iteration 2's.
+- After the record, `npm run verify` exits 0: 116 tests, 114 pass, the 2 live
+  tests skipped, and the package smoke test prints `pack-smoke: the installed
+  dbtruth doctor prints 8 checks, none failing`. `npm run acceptance --
+  --task T1.5` prints `T1.5: 75/100`, every check and item passing but A2.
+- Lost A2 (-25): `FAIL T1.5 A2 acceptance: no evidence for: A person who has
+  never seen the tool follows the README's quick start ...`. Cause unchanged:
+  filled by the lead after a second walkthrough (decision 7).
+### Iteration 4: 100/100 (the lead)
+- A2, first walkthrough (07:35), before iteration 3: a fresh agent that knew
+  nothing of the repository followed only the README, in an empty git
+  repository with the packed package installed, against the fixture, with no
+  API key. It is an agent standing in for a newcomer, not a person. A passing
+  `npx dbtruth doctor` after 33 s, about 3 minutes for a person reading, from
+  the root and from `packages/api`. Friction: `doctor` named `check` and `mcp`,
+  which do not exist yet; a missing key printed `ok`; the no-key error ended in
+  the SDK's sentence; the README did not say where `context/` lands from a
+  package; two sentences read hard. Fixed in iteration 3.
+- `explainApiFailure` told every failure outside the API as "no API key found",
+  which iteration 3 left for a reply that broke off. Now each class says what
+  happened: a plain `Error` "no API key found." only; a `TypeError` "could not
+  send a request to the Anthropic API: <reason>" (a key a header cannot carry,
+  or a bad `ANTHROPIC_BASE_URL`); the SDK's `AnthropicError` "the Anthropic
+  API's reply broke off: <reason>. Run again." Three troubleshooting rows.
+  Sabotage: the `AnthropicError` branch disabled; "a reply that breaks off says
+  so, with the SDK's words, the only clue to what happened" failed (not ok 4).
+  The `TypeError` branch disabled; "a key that is set but cannot be sent, such
+  as one with a curly quote pasted into it, is named with the reason" failed
+  (not ok 5). Both restored byte for byte.
+- A2, second walkthrough (08:20), on the fixed README, by another fresh agent:
+  a passing `doctor` after 31 s, 4 to 5 minutes estimated for a person, every
+  line and message as the README says. Two small gaps, fixed: what to do with
+  the key line without a key, and a `.gitignore` the project may not have. The
+  version it saw, 0.1.8, against "older than 0.2.0 has no `doctor`", is this
+  unreleased build's number, not a defect (iteration 3). A person should
+  repeat the walkthrough before release.

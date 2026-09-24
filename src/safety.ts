@@ -266,7 +266,8 @@ function connectFailure(e: unknown, timeoutSeconds: number): string {
   if (e instanceof Error && e.message === PG_CONNECT_TIMEOUT) {
     return because(`the server did not answer within ${timeoutSeconds}s; check the host and port in the URL, and any firewall on the way`);
   }
-  return `could not connect to the database${code ? ` (${code})` : ""}`;
+  if (code) return `could not connect to the database (${code})`;
+  return "could not connect to the database";
 }
 
 /** A client-side failure (no SQLSTATE), a class 08 connection exception, or a class 57 shutdown. */

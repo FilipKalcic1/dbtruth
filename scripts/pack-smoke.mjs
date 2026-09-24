@@ -39,13 +39,13 @@ try {
   const printed = sh(`${dbtruth} --version`, dir);
   if (printed !== `${version}\n`) throw new Error(`the installed dbtruth --version printed ${JSON.stringify(printed)}, not ${version}`);
   console.log(`pack-smoke: the installed dbtruth --version prints ${version}, the version in package.json`);
-  // Without an API key, so doctor sends nothing to the API and every line it prints can be ok.
+  // Without an API key, so doctor sends nothing to the API: the key's line is a note, and no line can fail.
   const doctor = spawnSync(`${dbtruth} doctor`, { cwd: dir, env: { ...process.env, DATABASE_URL, ANTHROPIC_API_KEY: "" }, shell: true, encoding: "utf8" });
   const checks = doctor.stderr.trimEnd().split(/\r?\n/);
-  if (doctor.status !== 0 || doctor.stdout !== "" || !checks.every((line) => line.startsWith("ok "))) {
+  if (doctor.status !== 0 || doctor.stdout !== "" || !checks.every((line) => /^(ok|note) /.test(line))) {
     throw new Error(`the installed dbtruth doctor exited ${doctor.status}:\n${doctor.stdout}${doctor.stderr}`);
   }
-  console.log(`pack-smoke: the installed dbtruth doctor prints ${checks.length} checks, every one ok`);
+  console.log(`pack-smoke: the installed dbtruth doctor prints ${checks.length} checks, none failing`);
 } catch (e) {
   console.error(`pack-smoke: FAIL ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;

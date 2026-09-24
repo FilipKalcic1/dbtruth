@@ -15,7 +15,7 @@ const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@loca
 const TSX = import.meta.resolve("tsx");
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const CANARY = /canary-pii/;
-const NO_KEY = "ok no API key: a full run needs ANTHROPIC_API_KEY; check and mcp do not";
+const NO_KEY = "note no API key: a full run needs ANTHROPIC_API_KEY; doctor does not";
 
 /** The fixture URL as another user, percent-encoded as a URL must be. */
 function fixtureAs(user: string, password: string): string {
@@ -136,7 +136,7 @@ test("a role that can read some relations is told how many it cannot, and its pa
   const { ready, lines } = await diagnose({ url: fixtureAs("partial", "canary-pii :/?#[]@%&=+'") });
   assert.equal(ready, true, lines.join("\n"));
   assert.equal(lines[3], "ok connected to fixture");
-  assert.equal(lines[6], "ok 2 relations readable, 9 not: measurements on those will be skipped", "the relations and how many of them");
+  assert.equal(lines[6], "note 2 relations readable, 9 not: measurements on those will be skipped", "the relations and how many of them");
   assert.equal(lines[7], NO_KEY, "a missing key is not a failure");
   for (const line of lines) assert.doesNotMatch(line, CANARY);
 });
@@ -170,6 +170,20 @@ test("each connection failure has its own sentence and leaves the setup not read
   } finally {
     sslOnly.stop();
     silent.stop();
+  }
+});
+
+test("a connection failure without a sentence of its own is named by its code, or by nothing", { timeout: 20_000 }, async () => {
+  // A # in the password ends the URL before its host; the fixture has no SSL, and the driver says so in words only.
+  const failures: [Partial<DoctorOptions>, string][] = [
+    [{ url: "postgres://canary-pii:canary#pii@127.0.0.1:1/canary-pii" }, "could not connect to the database (ERR_INVALID_URL)"],
+    [{ url: `${FIXTURE_URL}?sslmode=require` }, "could not connect to the database"],
+  ];
+  for (const [opts, expected] of failures) {
+    const { ready, lines } = await diagnose(opts);
+    assert.equal(ready, false, expected);
+    assert.equal(lines[3], `FAIL ${expected}`);
+    for (const line of lines) assert.doesNotMatch(line, CANARY, expected);
   }
 });
 
