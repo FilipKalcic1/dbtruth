@@ -37,7 +37,9 @@ test("300 tables: the budget is respected and output still renders", async () =>
   const out: string[] = [];
   const started = Date.now();
   const code = await run(
-    { url: SCALE_URL, samples: true, reveal: [], json: true, flags: { budgetSeconds: 0.3, statementTimeoutSeconds: 2 }, cwd, env: {}, out: (l) => out.push(l), err: () => {} },
+    // Sampling may spend the whole budget, which 300 tables always exhaust, so verify finds none left. With the default
+    // share the claims could all fit in the rest when the server was slow to sample and quick to measure (NOTES.md 0.3.0).
+    { url: SCALE_URL, samples: true, reveal: [], json: true, flags: { budgetSeconds: 0.3, extractBudgetShare: 1, statementTimeoutSeconds: 2 }, cwd, env: {}, out: (l) => out.push(l), err: () => {} },
     { transport: fakeModel() },
   );
   const seconds = (Date.now() - started) / 1000;

@@ -2431,6 +2431,12 @@ of each lost point, in the format of section 4.7 of the plan.
   none left, while no machine samples 300 tables in 0.3 s; the test would
   still show that the budget is respected, extraction stops, and the output
   renders.
+- Fixed by the lead after T1.4: the test's flags gain `extractBudgetShare: 1`,
+  so sampling spends the whole 0.3 s, which 300 tables always exhaust, and
+  verify finds no budget left; the assertions are unchanged. Twelve runs of
+  the whole scale file, three at a time against one server, all passed. The
+  loop of 30 `npm run verify` before it did not reproduce the failure, which
+  fits a cause that needs the load of a full parallel run.
 
 ## T1.4 `dbtruth init`
 ### Iteration 1: 80/100

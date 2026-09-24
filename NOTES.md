@@ -1225,7 +1225,15 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   verify` those are npm's preamble, and a rare failure of that gate (three
   times in some forty runs, never outside an acceptance run) was cut off each
   time. The whole output is now also written to a file in the temporary
-  directory, and its path printed beneath the 20 lines.
+  directory, and its path printed beneath the 20 lines. The first failure
+  whose output was kept (T1.4) named its cause: the scale test "300 tables:
+  the budget is respected and output still renders" gives the run 0.3 s and
+  asserts some claim runs out of it, but with sampling at its default 60% share
+  a server slow to sample and quick to measure left few claims, which all fit
+  in the rest (5 of 45 runs with three test files side by side). The test now
+  gives sampling the whole budget (`extractBudgetShare: 1`), which 300 tables
+  always exhaust, so the claims run out by construction; its assertions are
+  unchanged. A change to an earlier task's test, decided by the lead.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 
