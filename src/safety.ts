@@ -104,7 +104,7 @@ export function findDotEnv(start: string): { path?: string; values: Record<strin
 }
 
 /** The first directory from dir upward that holds a .git, or undefined when none does up to the filesystem or drive root. */
-function repositoryRoot(dir: string): string | undefined {
+export function repositoryRoot(dir: string): string | undefined {
   while (!existsSync(join(dir, ".git"))) {
     if (dirname(dir) === dir) return undefined;
     dir = dirname(dir);

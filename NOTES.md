@@ -761,6 +761,91 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     a foreign partition and an estimate of its own, from an `ANALYZE` of the
     parent on 14 and later, is still sampled with `TABLESAMPLE`, which reads
     that partition whole, as in 0.1.8.
+- **`dbtruth init` writes a `.env` to fill in, and says what to do next.** A
+  first run needs a settings file with the right lines in the right place;
+  `init` writes it, so the next command, `doctor`, has a file to read and to
+  name. It writes at the repository root, found by T1.1's rule
+  (`repositoryRoot` in `safety.ts`, now exported, so there is one walk), or in
+  the working directory outside a repository; says what it did on stderr,
+  stdout staying empty (R6); and exits 0, or 1 when it could not write.
+  `runInit` is one function, so it sits in `cli.ts` beside `runCheck` rather
+  than in a module of its own; the plan's module map (Appendix B) has none
+  for it.
+  - **The file is the quick start's, commented out.** `DATABASE_URL` and
+    `ANTHROPIC_API_KEY` as the quick start writes them, and `ANTHROPIC_MODEL`
+    set to the default, `DEFAULT_MODEL`, so that uncommenting it changes
+    nothing; each behind `# `, under two comment lines of their own.
+    `readEnvFile` reads a value to the end of its line (above, "The quick
+    start's `.env` had a comment the parser keeps"), so no comment shares a
+    line with a setting. `test/init.test.ts` reads the file as written with
+    `readEnvFile` and finds no setting; then it uncomments one line at a time,
+    as found whole after `# `, and finds that setting alone, with the quick
+    start's value.
+  - **It changes no file that exists.** A `.env` file already there is left
+    as it is, and `init` says so and goes on. Otherwise the file is opened
+    with `wx`, which fails rather than open anything that is there: a file
+    that appeared since the check, a dangling link, or a directory named
+    `.env`, such as a Python virtualenv. That directory is not a settings file
+    (T1.1), and none can be written in its place, so `init` stops with `could
+    not write .env: EEXIST: ...` and exits 1; the row for that message says to
+    rename it or use `--dotenv`. The tests compare every file under the
+    repository, `.git` included, byte for byte, before and after.
+  - **Git judges whether `.gitignore` ignores `.env`.** `init` runs `git -c
+    core.excludesFile= check-ignore --quiet --no-index .env` on the directory
+    it writes to and never reads `.gitignore` itself. Its patterns are easy to
+    read wrong by hand: `*.env` and `.env*` cover `.env`, `.env/` covers only
+    a directory, and a later `!.env` takes an earlier pattern back. The plan
+    asks about `.gitignore`, the file every clone shares, so the user's own
+    ignore file (`core.excludesFile`, by default `~/.config/git/ignore`) is
+    left out: a rule there covers one machine, and a teammate who writes a
+    `.env` in a clone without it would commit the file. `--no-index` judges
+    the patterns alone: without it, a `.env` git already tracks counts as not
+    ignored even when `.gitignore` lists it, and the warning would ask for a
+    line that is there. Exit 1 gives `WARNING: .gitignore does not ignore
+    .env; add this line to it: .env`, with both paths relative to the working
+    directory. No answer gives a warning that git could not say, with the same
+    line: outside a repository, where the plan makes no exception and the
+    directory may become one with the `.env` in it; with git missing from the
+    `PATH`; or in a repository git refuses, such as one owned by another user.
+    Git is started in the temporary directory and pointed at the repository
+    with `-C`: on Windows a bare command name is looked for in the working
+    directory before the `PATH`, unless `NoDefaultCurrentDirectoryInExePath`
+    is set, as Git Bash sets it, so started at the root it would run a
+    `git.exe` the repository holds. The tests make real repositories with `git
+    init --template=` and cover no `.gitignore`, `.env`, `/.env` with CRLF,
+    `.env*`, `*.env`, `.env.local`, `.env/`, `.env*` then `!.env`, a personal
+    ignore file that lists `.env`, a tracked `.env` that `.gitignore` lists,
+    an empty `git.exe` at the root, git missing from the `PATH`, and no
+    repository.
+  - **The next steps are the README's.** The plan's list without what is not
+    built: fill in `.env`, run `npx dbtruth doctor`, run `npx dbtruth`, and
+    add the line for `CLAUDE.md` under "Giving it to your agent". The quick
+    start shows them as `init` prints them, in the block after its paragraph
+    on `init`, and `test/init.test.ts` takes that block as the expected output
+    and checks that its line for `CLAUDE.md` is the one under "Giving it to
+    your agent", so none of the three can change alone. `init` keeps its own
+    copy rather than read `README.md` at run time: the file ships in the
+    package, but reading it would put a Markdown parser in the CLI, and a
+    failure no user could fix.
+  - **Not built here: `--skill` and the `claude mcp add` line.** They need the
+    skill file of T5.2 and the MCP server of T5.1; each task adds its part to
+    `init` when it lands. No option or placeholder stands for them now, so
+    `init --skill` is refused as an unknown option.
+  - Changed with it: the quick start, the Commands list and the Team tier's
+    sentence on what stays free forever no longer call `init` coming, and the
+    row for an unknown command names only `mcp` as not built;
+    `test/readme.test.ts` reads what is built from `cli.ts`, which now defines
+    `init`. In `acceptance/checks.json`, T1.5's two checks that expected
+    `init` to be coming, `readme-init-coming` (now `readme-init`) and
+    `readme-commands`, expect it built. The row for `could not write <path>:
+    <error>` covers `init`'s, and each new message has its own.
+  - Not done: editing `.gitignore`, which the plan rules out; leaving out
+    `.git/info/exclude`, which is one clone's too but which `check-ignore`
+    has no option to skip, so a `.env` listed only there gets no warning;
+    saying that a `.env` git already tracks is committed, which `git rm
+    --cached` settles, not this command; from a package that has a `.env` of its own, saying that
+    a run there reads that one and not the root's; and a `.env` anywhere but
+    the root.
 
 ## 0.3.0 (unreleased)
 

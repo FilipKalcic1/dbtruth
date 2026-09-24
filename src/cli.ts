@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-// cli.ts: orchestrates one run, or one check, in order, and hands `doctor` to doctor.ts. Nothing else.
+// cli.ts: orchestrates one run, or one check, in order, writes the .env `init` starts a project with, and hands `doctor`
+// to doctor.ts. Nothing else.
 
 import { Command, Option, type OptionValues } from "commander";
-import { readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { FAIL_ON, fails, remeasure, reportLines, type FailOn } from "./check.js";
@@ -12,7 +15,7 @@ import { contextualize } from "./contextualize.js";
 import { doctor } from "./doctor.js";
 import { extract, fitToContext, readCatalog } from "./extract.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
-import { connect, readSettings, resolveDatabaseUrl } from "./safety.js";
+import { connect, readSettings, repositoryRoot, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
 import { readSnapshot, serialize, toSnapshot } from "./snapshot.js";
 import { assemble, describeKinds, EXIT_FAILURE, EXIT_FINDINGS, EXIT_OK, exitCode } from "./verdict.js";
@@ -147,6 +150,67 @@ export async function runCheck(opts: CheckOptions): Promise<number> {
 }
 
 /**
+ * The .env init writes: the quick start's two settings and the model, each commented out, so that nothing in it is read
+ * until a line is filled in. Every comment is a line of its own, since a value runs to the end of its line.
+ */
+const DOTENV = [
+  "# Settings for dbtruth. Remove the # before each setting you use.",
+  "# A value runs to the end of its line, so a comment goes on a line of its own.",
+  "# DATABASE_URL=postgres://user:password@host:5432/dbname",
+  "# ANTHROPIC_API_KEY=sk-ant-...",
+  `# ANTHROPIC_MODEL=${DEFAULT_MODEL}`,
+  "",
+].join("\n");
+
+/** What init prints last, word for word as README.md's quick start shows it; test/init.test.ts holds the two equal. */
+const NEXT_STEPS = [
+  "next steps:",
+  "  fill in .env",
+  "  run npx dbtruth doctor",
+  "  run npx dbtruth",
+  "  add this line to CLAUDE.md: Before writing SQL against this database, read `context/README.md` and the file in `context/tables/` for every table you touch.",
+];
+
+export type InitOptions = {
+  cwd: string;
+  err: (line: string) => void;
+};
+
+/**
+ * Writes DOTENV at the repository root, or in cwd outside a repository, unless a .env is there, then says whether
+ * .gitignore ignores it and what to do next. It changes no file that exists. 0 when done, 1 when it could not write.
+ */
+export function runInit(opts: InitOptions): number {
+  const here = realpathSync(opts.cwd);
+  const dir = repositoryRoot(here) ?? here;
+  const path = join(dir, ".env");
+  // Both named relative to cwd as given, as a run names the settings file it reads.
+  const file = relative(opts.cwd, path);
+  const gitignore = relative(opts.cwd, join(dir, ".gitignore"));
+  if (statSync(path, { throwIfNoEntry: false })?.isFile()) {
+    opts.err(`${file} already exists; left as it is`);
+  } else {
+    try {
+      // wx never opens what is there: a file that appeared since, or a directory of that name, fails instead.
+      writeFileSync(path, DOTENV, { flag: "wx" });
+    } catch (e) {
+      opts.err(`could not write ${file}: ${e instanceof Error ? e.message : String(e)}`);
+      return EXIT_FAILURE;
+    }
+    opts.err(`wrote ${file}`);
+  }
+  // Git judges the patterns in .gitignore: 0 ignored, 1 not, anything else no answer (git not found, no repository, or
+  // one it refuses). The user's own ignore file is left out, since it covers no one else's clone, and --no-index judges
+  // the patterns alone, so a .env already tracked is not reported as missing a line .gitignore has. Git is started
+  // outside the repository and pointed at it with -C: Windows looks for a command in the working directory first.
+  const git = spawnSync("git", ["-C", dir, "-c", "core.excludesFile=", "check-ignore", "--quiet", "--no-index", ".env"], { cwd: tmpdir() });
+  if (git.status === 1) opts.err(`WARNING: ${gitignore} does not ignore ${file}; add this line to it: .env`);
+  else if (git.status !== 0) opts.err(`WARNING: git could not say whether ${gitignore} ignores ${file}; if it does not, add this line to it: .env`);
+  for (const line of NEXT_STEPS) opts.err(line);
+  return EXIT_OK;
+}
+
+/**
  * DATABASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL and DBTRUTH_* from the environment, else from the settings file:
  * --dotenv, or the .env nearest to cwd up to the repository root. Undefined once it has said why a run cannot start.
  */
@@ -256,6 +320,12 @@ export async function main(argv: string[]): Promise<number> {
       const o = { ...program.opts(), ...own };
       const ready = await doctor({ url: o.url, dotenv: o.dotenv, flags: overrides(o), cwd: process.cwd(), env: process.env, node: process.version, err });
       code = ready ? EXIT_OK : EXIT_FAILURE;
+    });
+  program
+    .command("init")
+    .description("write a .env to fill in at the repository root, and print the next steps")
+    .action(() => {
+      code = runInit({ cwd: process.cwd(), err });
     });
   const check = program
     .command("check")

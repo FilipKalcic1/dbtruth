@@ -49,6 +49,11 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   `ok`, `FAIL` with what to fix, or `note` for what is worth knowing, such as
   a missing API key, without spending a token, and exits 1 when something must
   be fixed.
+- `npx dbtruth init` writes a `.env` with the settings commented out at the
+  repository root, or in the current directory outside a repository, and
+  prints the next steps. It leaves a `.env` that is already there as it is,
+  never edits `.gitignore`, and warns, with the line to add, when `.gitignore`
+  does not ignore `.env`.
 - A failed connection is told in one sentence per cause (nothing listening,
   host not found, authentication failed, no such database, SSL required,
   timeout), never in the driver's words, which could quote the user, the host

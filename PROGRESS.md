@@ -2402,3 +2402,248 @@ of each lost point, in the format of section 4.7 of the plan.
   directory and its path printed (`full output: ...`); test "one passing and
   one failing check ..." asserts it. Sabotage: the path line removed; that
   test failed. Restored. The next occurrence will show its cause.
+- Seen again, with its output, in T1.4's first `npm run verify`, run on its
+  own: `not ok 148 - 300 tables: the budget is respected and output still
+  renders`, at `assert.ok(statuses.includes("unverifiable"), "some
+  measurements ran out of budget")`, `test/scale.test.ts` line 50; 206 tests,
+  203 pass, 1 fail, the 2 live tests skipped. The rerun passed.
+- Cause: a race in that test's own assumption. It gives the run a budget of
+  0.3 s and asserts that some claim runs out of it. Sampling may use 60% of
+  the budget (`extractBudgetShare`), the fake model then proposes one claim
+  per sampled table and 20 more, and verify has the rest. Whether a claim is
+  left over depends on how fast the server answers each phase: slow while
+  sampling and quick while verifying, few tables are sampled, their few
+  claims all fit, none is unverifiable, and the assertion fails. Measured
+  with a script that repeats the test's run and prints its counts (in the
+  scratchpad, not the repository): alone, 15 runs sampled 26 to 43 tables and
+  left 2 to 30 claims unmeasured, the 2 a near miss; three at once, as `npm
+  test` runs the database files side by side against one server, 5 of 45
+  runs sampled 20 to 22 tables and measured all 40 to 42 claims, each a
+  failure of this test.
+- This is the first failure of the gate whose output was kept. The three
+  before it fit this cause (a database test file, a full parallel run, a
+  rerun that passed), but their output is lost, so it is not proven that
+  they were this test.
+- Not changed: the test is an earlier task's, and section 4.4 rules out
+  rewriting it without a decision. For the lead: make the budget run out by
+  construction rather than by timing. One way is `extractBudgetShare: 1` in
+  the test's flags, so that sampling spends the whole budget and verify finds
+  none left, while no machine samples 300 tables in 0.3 s; the test would
+  still show that the budget is respected, extraction stops, and the output
+  renders.
+
+## T1.4 `dbtruth init`
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 and T1.4 of the plan, with T1.1, T1.3, T1.5,
+  T5.1, T5.2, T6.1, T7.1 and Appendices B and E; `src/cli.ts`,
+  `src/safety.ts`, `src/doctor.ts` and their tests, `test/readme.test.ts`,
+  `test/acceptance.test.ts`, `scripts/acceptance.mjs` and
+  `scripts/pack-smoke.mjs`; README.md, NOTES.md (0.2.0 and 0.3.0),
+  CHANGELOG.md, the iterations above and `acceptance/`.
+- Scope, as the lead set it: no `--skill` and no `claude mcp add` line, which
+  need the skill file of T5.2 and the server of T5.1. NOTES says each task
+  adds its part when it lands; no option or placeholder stands for them.
+- Checked before designing, on this machine (git 2.50.1, Node 22.18):
+  `git check-ignore --quiet --no-index .env` exits 1 with no `.gitignore`,
+  with `.env.local`, `.env/`, and `.env*` then `!.env`, and 0 with `.env`,
+  `/.env`, `.env*`, `*.env` and `*`; without `--no-index` a tracked `.env`
+  that `.gitignore` lists exits 1. Git reads `~/.config/git/ignore` with no
+  global config at all, and this machine has one; a repository's own empty
+  `core.excludesFile` shuts it out. Opening a directory named `.env` with `wx`
+  fails with `EEXIST`; `spawnSync("git")` with `PATH` empty fails with
+  `ENOENT`; outside a repository git exits 128.
+- Tests first, `test/init.test.ts`, ten tests, in `test:unit`: they need git,
+  not the databases.
+  - On the code as committed the file does not load: `The requested module
+    '../src/cli.js' does not provide an export named 'runInit'`. `dbtruth
+    init` prints `error: too many arguments. Expected 0 arguments but got 1:
+    init.` and exits 1, as the README said.
+  - On a stub `runInit` that printed nothing and returned 0, with the README
+    as committed, each failed on its own assertion: A1 with `no .env at the
+    root`; the nested package with `[]` for `wrote ..\..\.env` and the
+    warning naming `..\..\.gitignore`; the placeholders with `ENOENT` opening
+    the `.env`; the existing `.env` with `[]` for `.env already exists; left
+    as it is`; the `.env` directory with `0 !== 1`; the `.gitignore` cases
+    with `[]` for `wrote .env` and the warning; git missing with `[]` for the
+    warning that git could not say; outside a repository with `[]` for
+    `wrote .env`; A3 with "no block of next steps after the quick start's
+    `npx dbtruth init`"; the command with `error: too many arguments ...` and
+    `1 !== 0`. The stub was then removed; `src/cli.ts` matched `HEAD` again.
+  - That run also showed the README lookup was loose: with no block after
+    the quick start's mention of `init`, it took the closing fence of the
+    `bash` block for an opening one and read half the page as the next
+    steps. Both lookups now read the quick start section alone, and the block
+    must open with the first fence after the mention.
+- Built: `runInit` in `src/cli.ts`, beside `runCheck` (Appendix B has no
+  module for it), and the `init` subcommand, with no options;
+  `repositoryRoot` exported from `src/safety.ts`, T1.1's walk, not a second
+  one. It writes the `.env` at the repository root, or in the working
+  directory outside a repository, with `wx`, unless a file is there, which
+  it leaves as it is and says so; asks `git check-ignore --quiet --no-index
+  .env` at the root, inside a repository only; prints on stderr what it did,
+  a warning when git does not ignore the file or could not say, and the next
+  steps; exits 0, or 1 when it could not write. The file holds the quick
+  start's two settings and `ANTHROPIC_MODEL=claude-sonnet-5`, each behind
+  `# `, under two comment lines of their own.
+- Checked by hand: from `packages/api` of a scratch repository, `wrote
+  ..\..\.env`, the warning with both paths, the next steps, exit 0; the file
+  as written; a second run after `.env` went into `.gitignore`, stdout empty
+  and exit 0; `init --skill` refused as an unknown option, exit 1. Then
+  `doctor` from there: `FAIL no database URL: set DATABASE_URL in
+  ..\..\.env, ...` on the untouched file, and every check `ok` once
+  `DATABASE_URL` was uncommented and set to the fixture (with the variable
+  removed from the environment: set but empty, it hides the file's, as
+  T1.1 has it).
+- Under Linux as the non-root `node` user, in `node:20` (20.20.2) and
+  `node:22` (22.23.3), git 2.39.5, from a copy with LF line endings: the
+  init, readme, structure, cli and acceptance test files, 37 tests, 37 pass
+  on each. There too, a dangling `.env` link makes `init` exit 1 with
+  `EEXIST` and write nothing where it points, and a link to a file is left
+  as it is, as NOTES says.
+- Docs: README (the quick start's paragraph on `init` with the next steps in
+  a block, and no "coming"; the Commands list; the Team tier's sentence on
+  what stays free forever; rows for the three new messages; the row for
+  `could not write <path>: <error>` covering `init`'s; the row for an unknown
+  command naming only `mcp` as not built), NOTES (the entry under 0.2.0:
+  what, why, the git decision, the README as the reference for the next
+  steps, what is left to T5.1 and T5.2, what is not done), CHANGELOG (0.2.0),
+  `--help` (`init` in the program's list; `init --help` has only `-h`).
+  `acceptance/checks.json`: T1.4's checks, three for the A-items, twelve on
+  tests, the gate, seven on docs, four invariants; T1.5's `readme-init-coming`
+  is now `readme-init`, and its `readme-commands` no longer expects `init` to
+  be coming, as NOTES says. `acceptance/manual.json`: the sabotage item,
+  empty.
+- `npm run verify`: the first run exited 1 on `test/scale.test.ts`, not on
+  anything of this task; the cause is in "A rare failure of the verify gate"
+  above. The rerun exits 0: 206 tests, 204 pass, the 2 live tests skipped,
+  and the package smoke test passes.
+- `npm run acceptance -- --task T1.4` prints `T1.4: 80/100`, every check
+  passing but the sabotage item. `npm run acceptance` over every task: T0.1,
+  T0.2, T1.1, T1.2, T1.3, T1.5, T2.1, T3.1, T3.2 and T6.1 still 100/100,
+  after T1.5's two checks changed.
+- Lost Tests (-20): `FAIL T1.4 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead, no point depends on either: the fix for the scale test
+  above; and whether "the README the single source" of the next steps meant
+  `init` reading `README.md` at run time. Built: the README is the
+  reference, `init` keeps a copy, and the test holds the two, and the line
+  for `CLAUDE.md` under "Giving it to your agent", equal; NOTES says why.
+### Iteration 2: 80/100
+- Four reviews, nine findings, each checked against the code and the plan
+  before acting; none rejected. Three were one finding: git's answer took in
+  the user's own ignore file, while the plan and the quick start speak of
+  `.gitignore`.
+- Checked first, on this machine: in a repository whose config points
+  `core.excludesFile` at a file listing `.env`, `git check-ignore --quiet
+  --no-index .env` exits 0, and with `-c core.excludesFile=` before
+  `check-ignore` it exits 1; `.git/info/exclude` listing `.env` still gives
+  0 with that option. From Node 22.18, with `NoDefaultCurrentDirectoryInExePath`
+  deleted (Git Bash sets it), `spawnSync("git", ...)` with `cwd` on a
+  directory holding an empty `git.exe` fails with `EFTYPE`: that file was
+  started, not the git on the `PATH`; with `-C <dir>` and the temporary
+  directory as `cwd`, git answers 1. A test with `{ timeout: 50 }` whose
+  synchronous body waits 500 ms on a child reports `ok`.
+- Fixed:
+  - The warning is about `.gitignore`, as the plan says: `runInit` runs `git
+    -c core.excludesFile= check-ignore --quiet --no-index .env`, so a rule in
+    the user's own ignore file, which covers one machine, no longer silences
+    the warning a teammate's clone needs. Both warnings name the file they
+    are about: `WARNING: .gitignore does not ignore .env; add this line to
+    it: .env`, and `WARNING: git could not say whether .gitignore ignores
+    .env; if it does not, add this line to it: .env`. The quick start's
+    sentence, "asks git whether `.gitignore` ignores `.env`", is now what the
+    code does, so it stays; the two rows, NOTES and CHANGELOG follow. The
+    test helper no longer empties `core.excludesFile` in each repository,
+    since `init` now does; the new test "the user's own ignore file does not
+    stand in for the line in .gitignore" sets it in the repository's config,
+    the key a global setting uses. `.git/info/exclude` still counts, since
+    `check-ignore` cannot skip it; NOTES lists it under not done.
+  - Outside a repository `init` asks git too, and prints that git could not
+    say, with the line: the plan makes no exception, and the directory may
+    become a repository with the `.env` in it. The `if (root)` is gone: one
+    directory, `dir`, names both files and is where git looks. The test
+    outside a repository expects the warning, and its row names the case.
+  - Git is started in the temporary directory and pointed at the repository
+    with `-C`, so on Windows a `git.exe` in the repository is never the git
+    that runs. New test "init never runs a git.exe the repository holds": an
+    empty `git.exe` at the root, the variable deleted while `init` runs.
+  - A1 and A2 through the command: the command test runs in a fresh
+    repository and compares every other file, `.git` included, before and
+    after, and is a second lookahead of A1 and of A2.
+  - The ten `{ timeout }` options, dead on synchronous tests, are gone; the
+    `spawnSync` timeout in the command test, the one that works, stays.
+  - The block of next steps is found by its first line, `next steps:`,
+    without a lookahead.
+  - NOTES: the sentence on where `runInit` sits says why in plain words.
+- Sabotage of the fixes, `src/cli.ts` restored byte for byte after each:
+  without `-c core.excludesFile=`, "the user's own ignore file ..." failed,
+  its expected warning missing from the lines; git started with `cwd: dir`,
+  "init never runs a git.exe ..." failed with `WARNING: git could not say
+  whether .gitignore ignores .env; ...` where the other warning was
+  expected; git asked inside a repository only, "outside a repository ..."
+  failed, the warning missing; the `init` command renamed, the command test
+  failed with `error: too many arguments. Expected 0 arguments but got 1:
+  init.` and `1 !== 0`, and A1 with it. In README.md, the block's first line
+  changed: "the next steps ..." failed with `no block of next steps in the
+  quick start`, as did every test that compares printed lines. README.md
+  restored byte for byte.
+- `npm run verify` exits 0: 208 tests, 206 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T1.4`
+  prints `T1.4: 80/100`, every check passing but the sabotage item. T1.5 and
+  T6.1, whose checks read the rows and the Team tier, still 100/100.
+- Lost Tests (-20): `FAIL T1.4 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record of the task's
+  core; the sabotage check is done by a later stage. The sabotages above are
+  of this iteration's fixes only.
+- Open for the lead, as in iteration 1; no point depends on either.
+- Sabotage check of the task's core (section 4.5), with `test/init.test.ts`
+  run after each break. `src/cli.ts` and `test/init.test.ts` were copied
+  outside the repository first; after each break `src/cli.ts` was restored
+  from its copy, `cmp` identical, and `git diff HEAD -- src/cli.ts` printed
+  byte for byte the diff saved before.
+- Sabotage: the existing-file check dropped and the `.env` opened with `w`
+  in place of `wx`, so `init` writes over whatever is there; "an existing
+  .env is left as it is, byte for byte, and init says so and goes on" failed
+  with "Expected values to be strictly deep-equal: + '.env': Buffer(267) -
+  '.env': Buffer(113)" and a dump of both files' bytes, a message assert
+  generated. That comparison was given a message saying what it checks, as
+  the fresh repository's has. Repeated; the test failed with "every file,
+  .env included, as it was + '.env': Buffer(267) - '.env': Buffer(113)", and
+  "a .env that is a directory, such as a Python virtualenv, ..." and the
+  command test with "The input did not match the regular expression
+  /^could not write \.env: EEXIST: /. Input: "could not write .env: EISDIR:
+  illegal operation on a directory, ..."". Restored.
+- Sabotage: the `.env` written in the working directory, `const dir =
+  here`, not at the repository root; "from a nested package init writes the
+  .env at the repository root, and names both files from there" failed with
+  "+ 'wrote .env', + 'WARNING: .gitignore does not ignore .env; ...', -
+  'wrote ..\..\.env', - 'WARNING: ..\..\.gitignore does not ignore
+  ..\..\.env; ...'". Restored.
+- Sabotage: the `.gitignore` warning's condition inverted, the warning on
+  git's 0 and none on its 1; "git decides whether .env is ignored, and
+  .gitignore is only read" failed with "- 'WARNING: .gitignore does not
+  ignore .env; add this line to it: .env'", missing after 'wrote .env' in
+  the repository with no `.gitignore`, and seven other tests with it.
+  Restored.
+- Sabotage: `--no-index` dropped from `git check-ignore`. Every test stayed
+  green: no test had a `.env` git tracks, the case NOTES gives `--no-index`
+  for. New test "a .env git already tracks draws no warning when .gitignore
+  lists it": a `.env` added with `git add --force` under a `.gitignore` that
+  lists it, as when it was committed before the line went in; it passes on
+  the code as built. NOTES.md's list of the cases the tests cover names it,
+  and `acceptance/checks.json` has a check for it, as for each test in the
+  file. Repeated; the new test failed with "+ 'WARNING: .gitignore does not
+  ignore .env; add this line to it: .env'" after '.env already exists; left
+  as it is'. Restored.
+- Sabotage: `DATABASE_URL` written uncommented in the `.env`; "the .env init
+  writes holds no setting until a line is uncommented, and then that line's
+  alone, as the quick start writes it" failed with "nothing is read until a
+  line is filled in + { DATABASE_URL:
+  'postgres://user:password@host:5432/dbname' } - {}". Restored.
+- The changes left are the message on the byte-for-byte comparison, the new
+  test, its check and its words in NOTES.md.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  209 tests, 207 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T1.4` prints `T1.4: 100/100`, every
+  check passing.

@@ -27,12 +27,26 @@ ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 No key yet? Leave its line out: `doctor` checks everything else without one.
-`npx dbtruth init`, coming in 0.2.0, will write this file for you. A third
-line, `ANTHROPIC_MODEL=<model id>`, picks the model; any Claude model id works.
-The default, `claude-sonnet-5`, is the current Sonnet-class model; a larger
-model costs more per run and, on the schemas measured so far, found the same
-things. Each value runs to the end of its line, so a `#` comment goes on a
-line of its own.
+A third line, `ANTHROPIC_MODEL=<model id>`, picks the model; any Claude model
+id works. The default, `claude-sonnet-5`, is the current Sonnet-class model; a
+larger model costs more per run and, on the schemas measured so far, found the
+same things. Each value runs to the end of its line, so a `#` comment goes on
+a line of its own.
+
+Or let `npx dbtruth init` write the file, at the repository root or, outside a
+repository, in the current directory. It writes the three lines commented
+out, so nothing in the file is read until you remove the `#` before a line and
+fill in its value. It never changes a file that is already there: it leaves an
+existing `.env` as it is, and asks git whether `.gitignore` ignores `.env`,
+printing the line to add when it does not. Last, it prints the next steps:
+
+```
+next steps:
+  fill in .env
+  run npx dbtruth doctor
+  run npx dbtruth
+  add this line to CLAUDE.md: Before writing SQL against this database, read `context/README.md` and the file in `context/tables/` for every table you touch.
+```
 
 Then check the setup, and run it:
 
@@ -112,21 +126,24 @@ comes from the system or from a library dbtruth uses, in its own words.
 | `--reveal <table.column>: no such column, nothing revealed` | The value of `--reveal` names no column of a relation dbtruth read, often a typo; the run goes on without revealing anything for it. Write it as `table.column`, or `schema.table.column`. |
 | `(<n> skipped)`<br>`relations: <kinds>, <n> not examined` | The first is part of the line that starts `Sending to`, the second of the summary. Some relations were not read: sampling used up its share of the time budget (`--extract-budget-share` of `--budget-seconds`) before it reached them, or they were dropped to fit the model's input (next row). Nothing is measured on them, and a measurement the budget cut off is marked `not measured: time budget exhausted` in `context/tables/`. Raise `--budget-seconds`. |
 | `sample rows dropped to fit the model's input limit`<br>`sample rows and value lists dropped to fit the model's input limit`<br>`sample rows, value lists and <n> tables dropped to fit the model's input limit` | Printed as part of the line that starts `Sending to`. The schema with its samples is larger than the model's input ceiling, `DBTRUTH_MODEL_MAX_INPUT_TOKENS`, so detail was dropped until it fit: sample rows first, then value lists, then whole tables. The model sees less and proposes less; what it proposes is still measured on the database. Raise `--model-max-input-tokens` only for a model that takes more. |
-| `could not write <path>: <error>` | A file under `context/` could not be written, or, when the error names `unlink` or `rm`, a file the last run wrote there for a table since renamed or dropped could not be removed. The cause is a directory this user cannot write (`EACCES`), a full disk, or on Windows another program that holds the file open (`EBUSY`). The other files were written, and a file that could not be removed stays as the last run left it. Close the program, or fix the cause, and run again. |
+| `could not write <path>: <error>` | A file under `context/` could not be written, or, when the error names `unlink` or `rm`, a file the last run wrote there for a table since renamed or dropped could not be removed. The cause is a directory this user cannot write (`EACCES`), a full disk, or on Windows another program that holds the file open (`EBUSY`). The other files were written, and a file that could not be removed stays as the last run left it. Close the program, or fix the cause, and run again. From `init`, the path is the `.env` it would have written, and `EEXIST` means a directory of that name is there, such as a Python virtualenv: dbtruth reads no directory as settings, so rename it, or keep the settings in a file of another name and pass `--dotenv <path>`. |
+| `<path> already exists; left as it is` | `init` found a `.env` where it would write one. It never changes a file that is there, so the file is as it was: check that it holds the settings the quick start shows, and follow the next steps printed after this line. |
+| `WARNING: <path> does not ignore <path>; add this line to it: .env` | Printed by `init`: no rule in the `.gitignore` at the repository root covers the `.env` there, so git would commit the password and the key in it on any machine without a rule of its own. Add the line `.env` to that `.gitignore`, and create the file if there is none; `init` never edits it. A rule in your own ignore file, `core.excludesFile`, does not count: it covers your machine alone. A rule for `.env/` covers only a directory, and a later `!.env` takes an earlier rule back. |
+| `WARNING: git could not say whether <path> ignores <path>; if it does not, add this line to it: .env` | Printed by `init` when git gives no answer: outside a repository, before `git init`; when git is not installed or not on the `PATH`; or in a repository git refuses, as it does one owned by another user. Make sure the `.gitignore` at the repository root holds the line `.env`, once there is a repository; `git check-ignore -v .env`, run there, shows git's own words. |
 | `no <path>: run npx dbtruth first` | There is no snapshot at that path, relative to the current directory. Every full run writes `context/snapshot.json`, and `check` measures the database against it; `--snapshot <path>` names another file. Run `npx dbtruth` in the directory that holds `context/`, and commit `context/` with the snapshot in it. |
 | `<path> is not a file`<br>`<path> is larger than 10 MB, the most dbtruth reads`<br>`<path> is not valid JSON: run npx dbtruth and commit context/`<br>`<path> is not a dbtruth snapshot: <where>: <problem>`<br>`<path> is not a dbtruth snapshot: measuredWith: <problem>` | The path holds something other than a snapshot dbtruth wrote: a directory, a file a merge left conflict markers in, or one edited by hand. `<where>` is the first value that is wrong, such as `verdicts.<claim>.status`, and `<problem>` says what is wrong with it; after `measuredWith`, it is a setting outside the range its flag allows, in that flag's words, or join bands out of order. Nothing else is read from the file. A snapshot takes about half a kilobyte per relation, so one larger than 10 MB is not dbtruth's, or is of a schema of some twenty thousand relations, which `check` cannot read. Run `npx dbtruth` and commit `context/` to write it again. |
 | `<path> was written by a newer dbtruth (snapshot format <n>); upgrade dbtruth to check it` | A newer dbtruth wrote the snapshot, in a format this one does not read. Upgrade dbtruth where `check` runs, such as CI, to the version that wrote it or a later one. |
 | `FAIL Node <version>: dbtruth needs Node 20 or newer` | Install Node 20 or newer. |
 | `FAIL Postgres <n>: dbtruth needs Postgres 12 or newer` | The server is older than dbtruth supports: its queries read catalog columns and use SQL that Postgres 12 added. Point it at Postgres 12 or newer. |
 | `error: option '--fail-on <when>' argument '<value>' is invalid. Allowed choices are regression, change, never.` | `check --fail-on` takes one of three values: `regression`, the default, fails the build on a regression or a stale item; `change` on any change; `never` reports and passes. |
-| `error: too many arguments. Expected 0 arguments but got 1: <word>.`<br>`error: unknown option '<option>'`<br>`error: option '<option>' argument missing` | A command or an option this dbtruth does not have, or an option given without its value. `init` and `mcp` are not built yet, a dbtruth older than 0.3.0 has no `check`, and one older than 0.2.0 has neither `doctor` nor `--version`. `npx dbtruth --help` lists what there is. |
+| `error: too many arguments. Expected 0 arguments but got 1: <word>.`<br>`error: unknown option '<option>'`<br>`error: option '<option>' argument missing` | A command or an option this dbtruth does not have, or an option given without its value. `mcp` is not built yet, a dbtruth older than 0.3.0 has no `check`, and one older than 0.2.0 has no `doctor`, `init` or `--version`. `npx dbtruth --help` lists what there is. |
 
 ## Commands
 
 ```bash
 npx dbtruth              # writes ./context/ and prints a summary
 npx dbtruth doctor       # checks the setup, one line per check, without spending a token
-npx dbtruth init         # coming in 0.2.0: writes a .env with placeholders at the repository root
+npx dbtruth init         # writes a .env with placeholders at the repository root, and prints the next steps
 npx dbtruth check        # re-measures what context/ claims, without a model or an API key
 npx dbtruth mcp          # coming in 0.4.0: lets an agent measure a join before it writes one
 npx dbtruth --version    # prints the version (also -v)
@@ -213,9 +230,9 @@ the workflow gives it, write what moved into one comment on the pull request,
 updated in place, and by default fail the job on a regression or a stale
 item.
 
-These stay free forever: the CLI (`dbtruth`, `doctor`, `check`, and the
-coming `init` and `mcp`); the skill, also coming, that tells an agent when to
-read the context and measure a join; and the Action on public repositories.
+These stay free forever: the CLI (`dbtruth`, `doctor`, `init`, `check`, and
+the coming `mcp`); the skill, also coming, that tells an agent when to read
+the context and measure a join; and the Action on public repositories.
 
 No database content passes through a server of ours, on either tier. You
 bring your own model access: a full run calls the Anthropic API with your
