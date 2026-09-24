@@ -47,3 +47,11 @@ test("pilotPages is a whole number of at least 1, from DBTRUTH_PILOT_PAGES or --
   assert.throws(() => resolveConfig({ DBTRUTH_PILOT_PAGES: "0" }), /^Error: DBTRUTH_PILOT_PAGES \/ --pilot-pages: 0 is below the minimum 1$/, "a pilot that reads no page measures nothing");
   assert.throws(() => resolveConfig({}, { pilotPages: "2.5" }), /--pilot-pages: 2\.5 must be a whole number/);
 });
+
+test("checkHitRateTolerance is 0.01 by default, from 0 to 1, from DBTRUTH_CHECK_HIT_RATE_TOLERANCE or --check-hit-rate-tolerance", () => {
+  assert.equal(config.checkHitRateTolerance, 0.01);
+  assert.equal(resolveConfig({ DBTRUTH_CHECK_HIT_RATE_TOLERANCE: "0.05" }).checkHitRateTolerance, 0.05);
+  assert.equal(resolveConfig({ DBTRUTH_CHECK_HIT_RATE_TOLERANCE: "0.05" }, { checkHitRateTolerance: "0" }).checkHitRateTolerance, 0, "the flag wins, and 0 is allowed");
+  assert.throws(() => resolveConfig({}, { checkHitRateTolerance: "1.5" }), /^Error: DBTRUTH_CHECK_HIT_RATE_TOLERANCE \/ --check-hit-rate-tolerance: 1\.5 is above the maximum 1$/);
+  assert.throws(() => resolveConfig({ DBTRUTH_CHECK_HIT_RATE_TOLERANCE: "-0.1" }), /is below the minimum 0/);
+});

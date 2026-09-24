@@ -28,7 +28,7 @@ test("every module loads without side effects (cli.ts is the entry point and is 
 
 test("dependency direction matches the spec", () => {
   const allowed: Record<string, string[]> = {
-    "cli.ts": ["config", "safety", "extract", "contextualize", "verify", "verdict", "write", "schemas", "model", "doctor", "snapshot"],
+    "cli.ts": ["config", "safety", "extract", "contextualize", "verify", "verdict", "write", "schemas", "model", "doctor", "snapshot", "check"],
     "config.ts": [],
     "safety.ts": [],
     "model.ts": ["config"],
@@ -40,6 +40,8 @@ test("dependency direction matches the spec", () => {
     "schemas.ts": [],
     "doctor.ts": ["safety", "model", "config"],
     "snapshot.ts": ["schemas", "config"],
+    // safety for the Db type only, as write.ts imports model for its types.
+    "check.ts": ["schemas", "config", "extract", "verify", "verdict", "snapshot", "safety"],
   };
   for (const file of modules) {
     const source = readFileSync(join(srcDir, file), "utf8");
@@ -49,5 +51,15 @@ test("dependency direction matches the spec", () => {
     for (const dep of local) {
       assert.ok(permitted.includes(dep), `${file} must not import ./${dep}`);
     }
+  }
+});
+
+test("check.ts and snapshot.ts never import model", () => {
+  // Nor through a module they import: check runs without a model, and loading one would load the Anthropic SDK.
+  const imports = (file: string) => [...readFileSync(join(srcDir, file), "utf8").matchAll(/from\s+["']\.\/([a-z]+)\.js["']/g)].map((m) => `${m[1]}.ts`);
+  for (const start of ["check.ts", "snapshot.ts"]) {
+    const reached = new Set([start]);
+    for (const file of reached) for (const dep of imports(file)) reached.add(dep);
+    assert.ok(!reached.has("model.ts"), `${start} reaches model.ts through ${[...reached].join(", ")}`);
   }
 });

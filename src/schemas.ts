@@ -1,6 +1,6 @@
 // schemas.ts: the four objects that flow through the loop, the zod schemas for
-// the two the model produces (Claims, Files), and the one for the snapshot, which
-// dbtruth reads back.
+// the two the model produces (Claims, Files), the one for the snapshot, which
+// dbtruth reads back, and what check reports.
 
 import { z } from "zod";
 
@@ -233,10 +233,12 @@ export const SnapshotSchema = z.object({
   toolVersion: z.string(),
   database: z.string(),
   serverVersionNum: z.number().int(),
-  // The settings a measurement depends on, so check measures as the run that wrote the file did.
+  // The settings a measurement depends on, so check measures as the run that wrote the file did. parseSnapshot holds
+  // each one a flag sets to that flag's range; of the two no flag sets, the seed can be any number, and an oversampling
+  // below 1 would cut every sample short, at 0 to nothing.
   measuredWith: z.object({
     sampleRows: z.number(),
-    sampleOversample: z.number(),
+    sampleOversample: z.number().min(1),
     sampleSeed: z.number(),
     pilotPages: z.number(),
     join: z.object({ confirmed: z.number(), broken: z.number() }),
@@ -263,3 +265,32 @@ export const SnapshotSchema = z.object({
 });
 
 export type Snapshot = z.output<typeof SnapshotSchema>;
+
+// ---------- CheckReport: the snapshot measured again (check) ----------
+
+/** What happened to a claim between the snapshot and now, as check.ts classifies it, in the report's order: what fails a build first. */
+export const CHECK_CLASSES = ["regression", "stale", "drift", "improved", "changed", "not measured", "unchanged"] as const;
+export type CheckClass = (typeof CHECK_CLASSES)[number];
+
+export type ClaimCheck = {
+  id: string;
+  class: CheckClass;
+  /** the snapshot's status: unverifiable when it holds no verdict for the claim */
+  before: Verdict["status"];
+  hitBefore?: number;
+  /** measured now, with the statement verify builds, never the one the snapshot stores */
+  after: Verdict;
+  /** stale only: the "table" or "table.column" the database no longer has */
+  missing?: string;
+};
+
+export type CheckReport = {
+  database: { snapshot: string; now: string };
+  /** the fingerprints differ */
+  schemaChanged: boolean;
+  /** the settings the snapshot was measured with, and measured with again, that differ from this run's */
+  settings: { name: string; snapshot: number; now: number }[];
+  claims: ClaimCheck[];
+  /** relations in the database and not in the snapshot, or the other way round: stale */
+  relations: { name: string; in: "database" | "context" }[];
+};

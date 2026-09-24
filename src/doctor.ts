@@ -63,7 +63,7 @@ export async function doctor(opts: DoctorOptions, deps: DoctorDeps = {}): Promis
 
   // 8. The key, by the one request that sends nothing but the model id.
   const apiKey = settings.env.ANTHROPIC_API_KEY;
-  if (!apiKey) opts.err("note no API key: a full run needs ANTHROPIC_API_KEY; doctor does not");
+  if (!apiKey) opts.err("note no API key: a full run needs ANTHROPIC_API_KEY; doctor and check do not");
   else {
     const model = settings.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
     try {

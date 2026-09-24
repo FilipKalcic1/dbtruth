@@ -14,6 +14,18 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   that it stays the same from run to run until the data is a day older; a
   table is dead, as before, once its newest row is more than `staleAfterDays`
   days old.
+- `npx dbtruth check` measures again what `context/snapshot.json` claims, with
+  no model and no API key, and exits 2 when the database now contradicts it: a
+  relationship that broke, a suspicion that came true, a table or column a
+  claim names that is gone, or a relation added or dropped since. It prints a
+  line for each claim that moved and each relation added or dropped, then the
+  count of each class, on stderr.
+  `--fail-on change` also fails on drift, improvements and other changes, and
+  `--fail-on never` only reports; `--snapshot <path>` checks another file, and
+  `--check-hit-rate-tolerance` sets how far a hit rate may move before it is
+  drift. It measures with the settings the snapshot was measured with and never
+  runs a query stored in the file. `doctor`'s line for a missing key now says
+  that `check` needs none either.
 - A file of the last run under `context/` is replaced by the new one, and
   only a file this run does not write again, such as a renamed table's, is
   removed. One that cannot be removed, held open by another program on

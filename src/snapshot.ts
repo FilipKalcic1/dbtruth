@@ -83,13 +83,17 @@ export function parseSnapshot(text: string, file: string): Snapshot | string {
   }
   // check measures with these, so they are held to the ranges a flag is. It shows no sample rows, which the snapshot
   // does not record, so their rule against sampleRows does not apply.
-  const { join, ...settings } = parsed.data.measuredWith;
   try {
-    resolveConfig({}, { ...settings, "join.confirmed": join.confirmed, "join.broken": join.broken, sampleRowsShown: 0 });
+    resolveConfig({}, { ...settingsOf(parsed.data.measuredWith), sampleRowsShown: 0 });
   } catch (e) {
     return `${file} is not a dbtruth snapshot: measuredWith: ${e instanceof Error ? e.message : String(e)}`;
   }
   return parsed.data;
+}
+
+/** The settings one level flat, join.confirmed beside sampleRows, as the flags name them. */
+export function settingsOf({ join, ...settings }: Snapshot["measuredWith"]) {
+  return { ...settings, "join.confirmed": join.confirmed, "join.broken": join.broken };
 }
 
 /** The snapshot at file, relative to cwd, or the sentence that says why there is none. Only a file of a sane size is read. */

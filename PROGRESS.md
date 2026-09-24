@@ -1894,3 +1894,288 @@ of each lost point, in the format of section 4.7 of the plan.
 - After the record, `npm run verify` exits 0: 162 tests, 160 pass, the 2
   live tests skipped, and the package smoke test passes. `npm run acceptance
   -- --task T3.1` prints `T3.1: 100/100`, every check and item passing.
+
+## T3.2 `dbtruth check`
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 and T3.2 of the plan, the design brief for T3.1
+  and T3.2 with the lead's decisions in its section 12, and how T3.1 landed
+  (`snapshot.ts`, `readCatalog` and `extract(db, cfg, catalog, opts)`,
+  `cli.ts`, `test/copies.ts`, its NOTES entry and both iterations above).
+  Where T3.1 differs from the brief the code was followed: the settings a
+  snapshot records are `SnapshotSchema.shape.measuredWith.parse(cfg)`, not a
+  `measuredWith` function, and `parseSnapshot` already holds them to the
+  flags' ranges.
+- Found in the working copy: an earlier attempt at this task that had left no
+  entry here: `src/check.ts`, `test/check.test.ts`, `test/remeasure.test.ts`,
+  `test/canned.ts`, and changes to `cli.ts`, `config.ts`, `doctor.ts`,
+  `schemas.ts`, five test files, the docs and `acceptance/`. It was read line
+  by line against the brief, section 12 and the code, run, and kept where it
+  held; what changed is listed below. Its tests had no recorded first
+  failure, so they were run first here, against the code before it, in a copy
+  of the tree outside the repository (sources from `git show HEAD:`, the new
+  tests beside them).
+- Tests first:
+  - On HEAD's sources, T3.1 as committed: `check.test.ts` and
+    `remeasure.test.ts` failed to load, `Cannot find module .../src/check.js`;
+    the tolerance test got `undefined` for `0.01`; the five doctor tests that
+    pin the key line got `note no API key: a full run needs ANTHROPIC_API_KEY;
+    doctor does not`; "check.ts and snapshot.ts never import model" failed on
+    `ENOENT ... src\check.ts`.
+  - On a stub `check.ts` that trusts the snapshot (no statement, every claim
+    unchanged, no relation, never failing, the count line alone), with the
+    real `cli.ts`, `config.ts` and `schemas.ts`: 24 of the 29 tests in the two
+    new files failed on their own assertions. The table and the matrix on
+    "relationship confirmed → broken", `['unchanged']` for `['regression']`;
+    drift `['unchanged']` for `['drift']`; stale `[['unchanged', undefined]]`
+    for `[['stale', 'customers']]`; the relations test `[]`; the empty
+    snapshot `check shop: 0 unchanged` for `check shop: no claims`; the notes
+    test no setting and no schema change; `fails` false under `regression` for
+    a regression; `reportLines` the count line alone. On the database the
+    regression, the dropped table and the new table exited 0 for 2; improved,
+    drift, the filled table, the settings, the other database, the retyped
+    column and the empty snapshot printed the count line alone where their
+    lines were expected; the budget test found 0 `not measured` lines for 11;
+    the hostile test `[]` for its two stale claims; "check profiles only the
+    relations its claims name" saw no statement at all; the canary test
+    exited 0 for 2. "an unchanged database passes ..." passed its first half,
+    since a stub that trusts the snapshot hands its numbers back, and failed
+    on the sampled half, which expects the note that `sampleRows` 100 differs
+    from this run's.
+  - Passed on the stub, as they should: "a snapshot with duplicate claim ids
+    gives one item per id" (`claimsSchema` merges them, T3.1); "a snapshot
+    that cannot be used exits 1 ..." and the exit-1 test, which judge
+    `runCheck`'s order and `readSnapshot`'s sentences, real in that run;
+    "check sends nothing to the Anthropic API ..." and "check runs as the
+    reader role ...", guards a stub cannot break; the tolerance and structure
+    tests.
+- Changed in this iteration:
+  - A test "check takes its options after its name, and the program's before
+    it", spawned: the program's `--url` with `--snapshot elsewhere.json` after
+    the name prints `no elsewhere.json: run npx dbtruth first`; `check
+    --dotenv ci.env`, with no `DATABASE_URL` in the environment, gets the URL
+    from the file and stops at the missing snapshot; `--check-hit-rate-tolerance
+    2` after the name is refused with its range sentence. The exit-1 test also
+    runs `check` with no database URL, which A5 lists. On HEAD's `cli.ts` the
+    two failed with `error: unknown option '--fail-on'` and `error: unknown
+    option '--snapshot'`.
+  - `CheckClass`'s comment in `schemas.ts` cited `BUILD_PLAN.md`, which no
+    other source comment does; it names `check.ts`. `remeasure` and `fails`
+    got the one-line comments every other export has.
+  - README and CHANGELOG said stderr gets a line per claim that moved; a
+    relation added or dropped gets one too. NOTES names `--dotenv` for the
+    plan's `--env-file` and `verdicts()` for the plan's `assemble`.
+  - `acceptance/checks.json`: the renamed exit-1 test in `A5` and `exit-1`,
+    and an `options` check.
+- As built (the brief, sections 1, 2, 4 to 9, with the lead's decisions):
+  `setup()` in `cli.ts`, the full run's first step moved as it was and shared
+  with `runCheck`; `runCheck` reads the settings, then the snapshot, before
+  anything connects, then connects with the read-only proof; the `check`
+  subcommand with `--snapshot`, `--fail-on` (choices, default `regression`),
+  `--url`, `--dotenv` and a flag per tunable, merged over the program's
+  options as `doctor` does; `checkHitRateTolerance` (0.01, 0 to 1, its
+  variable and flag) in `config.ts`; `check.ts` with `remeasure`, `diff`,
+  `fails` and `reportLines`, importing `type Db` from `safety` (section 12);
+  `CheckReport` as TypeScript types in `schemas.ts`; doctor's key line; the
+  canned claims in `test/canned.ts`; `copyOfFixture` returning the copy's
+  name.
+- Docs: README (the section "Keeping context true: dbtruth check" with the
+  exit codes and the classes in short form, the Commands list without
+  "coming" for `check`, the `--fail-on` choices row with commander's real
+  text, the no-key row naming `check`, the "not built yet" row without
+  `check`, the snapshot rows without "coming"), NOTES (the T3.2 entry under
+  0.3.0), CHANGELOG, and `--help` (`check [options]` with its own options;
+  `--check-hit-rate-tolerance` on both).
+- Postgres 12 (12.22) and 18 (18.6), in the containers on 54312 and 54318
+  loaded with every fixture file and the template: `check`, `remeasure`,
+  `integration` and `doctor`, 59 tests, 57 pass and the 2 live tests
+  skipped, on each. No copy was left on any of the three servers.
+- Time, on `fixture` itself after an offline full run (a script in the
+  scratchpad, not a test): `runCheck` in process 86 to 98 ms over three runs,
+  and `tsx src/cli.ts check --url <fixture>` 1,157 to 1,197 ms, exit 0,
+  stdout empty, `check fixture: 12 unchanged`; the test on a copy asserts
+  under 5 s. NOTES gives both numbers.
+- `npm run verify` exits 0: 194 tests, 192 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T3.2`
+  prints `T3.2: 80/100`, every check passing. `npm run acceptance` over
+  every task: T0.1, T0.2, T1.1, T1.2, T1.3, T1.5, T2.1 and T3.1 still
+  100/100, after doctor's key line and T1.5's commands check changed.
+- Lost Tests (-20): `FAIL T3.2 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- No failure outside this task was seen: the full suite passed three times
+  (`verify`, and inside each acceptance run), `remeasure.test.ts` six times
+  on Postgres 16 and once each on 12 and 18. Nothing to add on the rare
+  flake.
+- Open for the lead, no point depends on either:
+  - README's "Output on the fixture" is still the pasted live run of
+    iteration 1 of T3.1, with thirteen files; it is regenerated at release,
+    which needs an API key.
+  - The check's own lines print claim ids and relation names as the
+    snapshot and the catalog spell them; a name holding a newline could forge
+    a line. Named in NOTES as not done; T3.3's Markdown must escape them.
+### Iteration 2: 80/100
+- Four reviews (plan, rules, quality, bugs) gave fourteen findings. Each was
+  checked against the code, the plan and a run before anything changed; all
+  fourteen held, three of them only in part (below).
+- Fixed, in `src/`:
+  - A claim the full run could not measure (past the statement timeout, over
+    budget) whose table or column was then dropped came out `unchanged`, since
+    stale needed a measured claim. Now `diff` marks it stale unless the
+    snapshot's schema lacked one of its names too and the snapshot could not
+    measure it, a table the model invented; `classify` returns stale on any
+    missing name it is handed. The hostile claims, marked confirmed on names
+    no schema had, stay stale.
+  - A move of exactly `checkHitRateTolerance` could be `unchanged`: 410/500 -
+    405/500 is 0.009999999999999898 in doubles. The comparison allows
+    `Number.EPSILON`, with a comment saying why.
+  - `sampleOversample` in a snapshot was any number, and at 0 every sample was
+    `LIMIT 0`, every sampled claim empty and the check passing. The schema
+    holds it to at least 1. Not by `overridable` rows, which would add two
+    flags the plan does not ask for (T2.1 left both without one); not the
+    seed, which `REPEATABLE` takes as any finite number (`REPEATABLE
+    (1e+300)` runs on the fixture), so `.int()` would refuse nothing harmful.
+  - `CHECK_CLASSES` in `schemas.ts` is the one list of classes, in report
+    order, and `CheckClass` is read from it; `CLASS_ORDER` is gone. The fix
+    line is printed when `fails(report, "change")`, not by a second list of
+    classes. `settingsOf` in `snapshot.ts` flattens `measuredWith` for both
+    `parseSnapshot` and `diff`; the generic `flat` in `check.ts` is gone.
+- Fixed, in the tests:
+  - A1 compared the verdicts measured again with the snapshot's own, which a
+    `remeasure` that trusts the snapshot passes. It now hands `remeasure` the
+    snapshot with every measurement blanked (`query ""`, no numbers), in both
+    halves. The reviewer's `queries.length > 0` was left out: the deep-equal
+    already needs every statement verify builds.
+  - A3's no-API test ran with an empty key, so the SDK could send nothing
+    whatever `check` did. It spawns `check` with a key and the recording
+    `ANTHROPIC_BASE_URL`, then again with no key.
+  - A2 had no database test for "confirmed or broken → rejected" or for a
+    suspicion that comes true. The regression test goes on to move four of
+    every five line items (`confirmed 100.0% -> rejected 20.0%`), in the copy
+    it already has rather than a new one; "a suspicion that comes true is a
+    regression" adds `inconsistent_values` on `customers.country`, rejected on
+    the fixture, then sets one country to `cz`.
+  - The retyped column was `vehicles.model_year`, whose claim matches nothing
+    either way. It is `order_items.order_id` now (confirmed at 100%), with its
+    foreign key dropped first. Not `orders.customer_id`, as suggested: the
+    view `shipped_orders` and the materialized view `order_totals` use it, so
+    Postgres refuses to change its type.
+  - Removed "fails: every class under every --fail-on", which repeated what
+    the table test asserts under all three `--fail-on`. The unusable-snapshot
+    test removes its temporary directory, which held an 11 MB file. Added: the
+    stale test's timeout cases and an invented table in neither schema, the
+    one-point boundary in the drift test, a drift-only report ending with the
+    fix line, and an oversampling of 0 refused in `snapshot.test.ts`.
+- Kept as it was, in part: R7's "print the fresh query beneath each line".
+  The plan specifies the human report's lines, and the verdict measured now
+  carries its query and numbers in `CheckReport`, which T3.3 prints as
+  `--json`. NOTES now says so, as the reviewer's alternative asked.
+- Docs: NOTES (the options sentence rewritten plainly; the settings sentence
+  that claimed every setting had a flag's range; the stale rule, as "Stale
+  needs a name that was there"; the tolerance's slack; no query on a line;
+  the no-API test; the added assertion; the last "not done" limit; T3.1's
+  note on the two settings points here), README's stale row ("a table or
+  column the snapshot had"), `acceptance/checks.json` (the renamed stale
+  test, the suspicion test in A2 and in the tests list, A5 on the table test
+  instead of the removed one).
+- Sabotage of this iteration's fixes, each restored byte for byte (`cmp`):
+  `runCheck` sending a preflight when a key is set: "check sends nothing to
+  the Anthropic API ..." failed with three `GET /v1/models/...` requests.
+  `remeasure` handing back the snapshot's verdicts: "an unchanged database
+  ..." failed at the first deep-equal, blank queries against real ones. The
+  text fallback matching nothing: the retype test failed with its lines,
+  `confirmed 100.0% -> rejected 0.0%`, once its exit-code assertion carried
+  them (it printed `2 !== 0` before); the two new exit-code assertions carry
+  them too. The old stale rule: "a claim is stale ..." failed on "a dropped
+  table the snapshot could not measure". No `Number.EPSILON`: the drift test
+  failed on its one-point case. No bound on the oversampling: the parse test
+  failed. The suspicion's regression move removed: "a suspicion that comes
+  true ..." failed with `changed ...: rejected -> confirmed`. Confirmed →
+  rejected removed: the regression test failed with `changed ...:
+  confirmed 100.0% -> rejected 20.0%`. The fix line under `regression`: no
+  unit test failed, and three database tests did; the `reportLines` test
+  now fails too, at its drift-only case.
+- `npm run verify` exits 0: 194 tests, 192 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T3.2`
+  prints `T3.2: 80/100`, every check passing but the sabotage item.
+- `npm run acceptance` over every task, three times. The first run's shared
+  `npm run verify` exited 1, failing every task's gate; its output was lost
+  to a filter of mine, and `verify` run alone just before and just after
+  exited 0. The second run passed `verify`, and T2.1's test command (sampling,
+  extract, config, write and verdict tests, none of this task's) timed out at
+  240 s; run alone it passes 60 of 60 in 13 s. The third run is clean: T0.1,
+  T0.2, T1.1, T1.2, T1.3, T1.5, T2.1 and T3.1 at 100/100, T3.2 at 80/100.
+  Cause not found: no copy, session or waiting lock was left on the server,
+  and its log holds only the errors the tests provoke. Two other Claude
+  sessions on this machine were idle when looked at; whether one ran the
+  suite against the same databases during those runs is not known. Flagged
+  for the lead as unexplained, not as fixed.
+- Lost Tests (-20): `FAIL T3.2 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: `acceptance/manual.json` holds no
+  sabotage record for the task; the sabotage check of the task's core is
+  done by a later stage. The sabotages above cover only this iteration's
+  fixes.
+- Sabotage check of the task's core (section 4.5), with the two new test
+  files run after each break. Each file was copied outside the repository
+  first and restored from its copy: `cmp` identical, and `git diff HEAD --
+  src/cli.ts` byte for byte the diff saved before; `src/check.ts` is
+  untracked, so `cmp` alone.
+- Sabotage: `remeasure` measuring with this run's settings, not
+  `snapshot.measuredWith`; "the snapshot's settings are the ones measured
+  with" failed with "+ 'check <copy>: 12 unchanged' - 'improved
+  relationship:orders.customer_id->customers.id: broken 88.0% -> confirmed
+  88.0%'". Restored.
+- Sabotage: `classify` with regression and improved swapped; "every row of
+  the plan's table classifies and fails as the plan says" failed with
+  "relationship confirmed → broken + actual - expected [+ 'improved' -
+  'regression']". Restored.
+- Sabotage: `runCheck` returning 0 when the report fails and 2 when it
+  passes; "check sends nothing to the Anthropic API and needs no key" failed
+  with "check <copy>: 12 unchanged ... 2 !== 0", and sixteen other database
+  tests on their exit codes. Restored.
+- Sabotage: `missingName` looking at tables only; "a claim is stale when the
+  database lost a name it uses, unless the snapshot lacked one too and could
+  not measure it" failed with "a dropped column + actual - expected [+
+  'not measured', undefined - 'stale', 'orders.customer_id']", and the
+  hostile test lost its column claim from the stale list. Restored.
+- Sabotage: `diff` listing the relations the database lost and not those it
+  gained; "relations added and removed are stale; a relation not examined is
+  still in the context" failed with "- { in: 'database', name: 'added' }",
+  and "a new table is stale" with "0 !== 2". Restored.
+- Sabotage: `remeasure` profiling every relation in the catalog; "check
+  profiles only the relations its claims name" failed with the statement
+  that profiled one no claim names, "SELECT count(*) AS n, ... FROM (SELECT *
+  FROM "public"."audit_log" LIMIT 50000) s". Restored.
+- Sabotage: `runCheck` connecting before it reads the snapshot; "a snapshot
+  that cannot be used exits 1 with its sentence before any connection"
+  failed with "could not connect to the database: nothing is listening at
+  the host and port in the URL; ...". Restored.
+- Sabotage: the `check` command passing `regression` whatever `--fail-on`
+  says; "no hidden value reaches check's output or the snapshot, and stdout
+  stays empty", the one test that gives `--fail-on change` on the command
+  line, failed with "improved
+  relationship:orders.customer_id->customers.id: broken 88.0% -> confirmed
+  100.0% ... 0 !== 2". Restored.
+- Sabotage: `classify` calling any move of the hit rate drift, whatever the
+  tolerance; "drift needs the hit rate to move, by at least the tolerance"
+  failed with "a move below it + actual - expected [+ 'drift' -
+  'unchanged']". Restored.
+- Sabotage: stale left out of what fails under `--fail-on regression`;
+  "every row of the plan's table classifies and fails as the plan says"
+  failed with "claim names a table or column that no longer exists,
+  --fail-on regression false !== true", and "a dropped table makes its
+  claims and itself stale" with "0 !== 2". Restored.
+- Sabotage: not measured failing under `--fail-on change`; "every row of the
+  plan's table classifies and fails as the plan says" failed with "measured
+  before, unverifiable now (timeout, budget), --fail-on change true !==
+  false", and "claims the budget leaves unmeasured never fail" with "2 !==
+  0". Restored.
+- Sabotage: `side()` without the hit rate; "a broken foreign key is a
+  regression, named with both hit rates" failed with "+ 'regression
+  relationship:order_items.order_id->orders.id: confirmed -> broken' -
+  '... confirmed 100.0% -> broken 80.0%'". Restored.
+- No sabotage left every test green, so no test changed. No copy of the
+  template was left on the server.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  194 tests, 192 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T3.2` prints `T3.2: 100/100`, every
+  check passing.
