@@ -846,6 +846,142 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     --cached` settles, not this command; from a package that has a `.env` of its own, saying that
     a run there reads that one and not the root's; and a `.env` anywhere but
     the root.
+- **A polymorphic reference is measured one branch at a time.** A column
+  such as `comments.commentable_id` points at `posts` where
+  `commentable_type` is `post` and at `photos` where it is `photo`. Measured
+  whole, its matches are split over the targets, or a coincidence of small
+  ids passes for a join: on the new `polymorph` database,
+  `comments.commentable_id -> posts.id` matches all 480 rows, since every
+  photo id from 1 to 60 is also a post id, while the photo branch is broken,
+  120 of 180. Until now prompt A sent such a column to a suspicion of kind
+  `other`, which nothing measures. A relationship may now carry `"when":
+  {"column": ..., "equals": ...}`, and each branch is a claim with its own
+  verdict.
+  - **The id ends in `[column=value]`,** the plan's raw form:
+    `relationship:comments.commentable_id->photos.id[commentable_type=photo]`.
+    Names are already printed raw, and nothing reads an id back. With the
+    condition in the id, `claimsSchema` needs no change: two branches stay
+    two claims, and one branch given twice is one. `when` is optional, not
+    nullable, so a `null` goes back to the model like any other invalid
+    reply. The value is free text, from the model or from a snapshot, and is
+    printed raw on stderr as a name is, which T3.2 left not done; T3.3's
+    Markdown must escape it.
+  - **The condition filters the one sample.** Where the join read the
+    sample, it reads `(SELECT * FROM <sample> w WHERE w."<column>"::text =
+    $1)`, so a branch is measured on the pages every other claim on its table
+    reads, and its numbers are over its own rows. Both forms of the join take
+    the filter: the probe of the key, and the comparison as text. The column
+    is compared as text, the form its values were listed to the model in: on
+    `polymorph`, `invoices.account_id` equal to `5` selects 4 rows and `05`
+    none, where a comparison of integers would take both for 5.
+  - **The value is only ever `$1`.** `querySampled` and
+    `runWithTextFallback` take bind parameters and send them with every
+    attempt: the plain form after a refused sample, and the comparison as
+    text after a datatype mismatch. Without any, pg keeps the simple
+    protocol, as before. The value comes from the model, in `check` from a
+    snapshot a pull request can edit, and in T5.1 from an agent (R8); the
+    column must be one of the from-table's in the catalog, and is quoted with
+    `q()`. A test gives a
+    branch the value `x'; DROP TABLE posts; --`: it is empty, no statement
+    holds the text, and `posts` keeps its 100 rows. In `check`, a snapshot
+    edited to name the column `commentable_type" = 'x' OR true; --` makes
+    that branch stale with no statement run, and a NUL in a value, which no
+    Postgres text holds, is refused by the server (22021): unverifiable.
+  - **The stored query ends with the value.** The statement run has no
+    comment. The query kept in the verdict is that statement and one line
+    after it, as the plan has it, `-- $1 = 'photo'`, the value written as SQL
+    writes a string: quotes doubled, and a value with a line break in the
+    `E''` form, its backslashes, `\n` and `\r` escaped, so the note stays one
+    line and cannot end early (`sqlString` in `schemas.ts`, which `verify.ts`
+    and `write.ts` both import; the fixture server read each form back as
+    its value). A test reruns a kept query as it is, its value bound, and
+    gets the verdict's numbers: the query still starts with `SELECT`, which
+    is all `safety.ts` lets through, and Postgres skips the closing comment.
+    The per-table file writes the condition with the same literal, which an
+    agent can paste into a `WHERE`: `comments.commentable_id -> photos.id
+    when commentable_type = 'photo'`.
+  - **A condition must be on a categorical column.** On a column the
+    from-table lacks, a branch is unverifiable, as for any unknown column; on
+    one that is not categorical on the sample, too, with `<table>.<column> is
+    not categorical, so no condition on it is measured`. The column must be
+    visible, with no more than `categoricalMaxDistinct` values, none longer
+    than `categoricalMaxValueLength`, as the columns prompt A is given a
+    `values` list for are. A count under a guessed value of a hidden column
+    would say whether that value exists, and a snapshot's `when.equals`, or
+    T5.1's `measure_join`, could ask one guess at a time (R3). A key is
+    visible without being categorical, and a condition on it narrows the
+    join to one row, whose hidden from-column the counts then describe: on
+    `polymorph`, `id = '42'` selects one comment. The bounds keep out a key
+    with more values than `categoricalMaxDistinct`. The key of a table no
+    larger than that, and a value that one row alone holds in a categorical
+    column, narrow as far and get through; that is not closed. Leaving out
+    declared keys instead would also leave out a foreign key that is itself
+    the discriminator, such as a `commentable_type_id` with a few values.
+    The plan is silent on all this. An empty table is empty before its
+    condition is judged, since none of its columns shows a value. A column
+    shown with `--reveal` is visible only in the run that reveals it, and
+    counts only within the same bounds, so a full run and `check` differ on
+    it only when no value repeats on its sample: a branch on it is then `not
+    measured` in `check`, which fails no build.
+  - **In `check`, a snapshot cannot widen what is categorical.** There the
+    snapshot's settings decide what looks categorical, and a pull request
+    can edit them: under `categoricalMaxDistinct` 1000000 the guess
+    `comments.commentable_id = '57'` was measured, 6 sampled rows, and a
+    smaller `sampleRows` does the same, since on a few rows most short
+    columns repeat a value. So when the snapshot's bounds are wider than
+    this run's, or its sample smaller, `remeasure` takes no column as
+    categorical and every branch is `not measured`; the note on settings
+    names what differs. Every other claim is measured as before: only a
+    condition reads whether a column is visible in `check`. The seed, the
+    oversampling and the pilot pages move which rows a sample reads more
+    than how many, and stay the snapshot's.
+  - **A dropped condition column makes the branch stale.** `check` counts
+    the column a condition names among a claim's names, so a pull request
+    that drops `commentable_type` fails the build, as one that drops the
+    from-column does. T3.2 named only a join's two columns.
+  - **Prompt A.** The bullet that read "A relationship must hold
+    unconditionally: every non-null value of the from-column should be a key
+    of the to-table. A column that points at different tables depending on
+    another column (a polymorphic reference) cannot be tested as a join.
+    Report it once as a suspicion of kind "other", naming the column,
+    instead of one relationship per possible target." now reads "A
+    relationship holds on every row it covers: every non-null value of the
+    from-column should be a key of the to-table. A column that points at
+    different tables depending on another column of its table (a polymorphic
+    reference) is one relationship per value of that other column, each to
+    the table that value selects, with "when": {"column": that other column,
+    "equals": the value, exactly as its "values" list shows it}; each is
+    measured on its own rows. When that column has no "values" list, the
+    reference cannot be tested: report it once as a suspicion of kind
+    "other", naming the column, instead of one relationship per possible
+    target." One per value, as the plan asks, not one per target: two values
+    can select one table, and each covers rows of its own. The schema at its
+    end gains `"when"?`. Prompt B is told that a relationship with `when`
+    holds on those rows only, and to give each branch with its own verdict
+    and numbers, never merged.
+  - **The snapshot format stays 1.** `when` is a key that a reader of format
+    1 without it would drop, reading each branch as the whole join, and such
+    a key raises `SNAPSHOT_FORMAT` (0.3.0). No release that writes snapshots
+    has shipped, so no such reader exists; decided by the lead. Were one to
+    ship first, the format would be 2, and the reader would take both.
+  - **The `polymorph` database** (`test/fixtures/polymorph.sql`, mounted as
+    `60-polymorph.sql`, before the template) holds the reference above, and
+    the two tables T2.4 adds to it: `accounts`, with ids 10 to 19 missing,
+    and `invoices`, pointing at all 50, whose `account_id`, an integer with
+    50 values, is here the condition on a column that is not text. Its text
+    columns hold `canary-pii` and are hidden.
+    A volume made before it loads it with `docker compose down -v && docker
+    compose up -d --wait`, or, into the running server, `docker compose exec
+    -T db psql -v ON_ERROR_STOP=1 -U dbtruth -d fixture <
+    test/fixtures/polymorph.sql`. Its tests are in `test/joins.test.ts`,
+    under `test:db`.
+  - One test helper changed, and no assertion: `fakeDb` in `verify.test.ts`
+    records each statement's parameters beside its text.
+  - Not done: a condition on the target's side; one on several columns, or
+    on a list of values; one on a column that is not categorical; and
+    finding polymorphic columns in code, from a sibling named like `_type`,
+    which reads names for meaning (R4). The model proposes the branches, and
+    the database measures them.
 
 ## 0.3.0 (unreleased)
 
@@ -1248,20 +1384,24 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
 - `verify.ts` recognises timestamp types for the dead-table measurement.
 - `write.ts` normalises output paths into `context/`.
 - Verdict ids are prefixed `relationship:` / `suspicion:` so the exit code and
-  the summary can tell them apart.
+  the summary can tell them apart. A branch's id ends in `[column=value]`,
+  its condition as the claim gives it, so that each branch is a claim of its
+  own; nothing reads the value back out of an id.
 
 ## Known limits, deliberately not fixed
 
-- **The join measurement is unconditional.** It asks whether every non-null
-  value of the from-column exists in the to-column. A polymorphic column
-  (one that points at different tables depending on a sibling column) can
-  therefore hit 100% against several tables by coincidence of small integer
-  ids, and each would be stated as a fact. The first live run did exactly
-  that. Prompt A now defines a relationship as unconditional and sends
-  polymorphic references to a suspicion of kind `other`, which is labelled
-  inferred, and every run since has behaved. The measurement itself still
-  cannot express "only where entity = x"; that would be a conditional join
-  claim, allowed fix 3, and was not added because the prompt fix held.
+- **A join is unconditional unless its claim names a condition.** It asks
+  whether every non-null value of the from-column exists in the to-column,
+  over the rows the claim covers. A polymorphic column, one that points at
+  different tables depending on another column, can hit 100% against a
+  table by a coincidence of small integer ids, and the first live run
+  stated such a match as a fact. Since 0.2.0 prompt A claims such a column
+  one branch at a time, each measured on the rows its value selects ("A
+  polymorphic reference is measured one branch at a time", 0.2.0). A
+  discriminator that is not categorical cannot be branched on, and is still
+  sent to a suspicion of kind `other`, labelled inferred. And a claim with
+  no condition is measured whole, so a coincidental match still reads
+  confirmed: on `polymorph`, `comments.commentable_id -> posts.id` does.
 - `WITH` is accepted by the statement guard because verify uses CTEs. A
   data-modifying CTE would be refused by the read-only session anyway.
 - Structured outputs (`output_config.format`) could replace JSON extraction
@@ -1278,7 +1418,7 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   coincidence is in the data. Sweeping every type-compatible target per claim
   would multiply statements by the table count and report joins nobody
   claimed. The defence is the claim: prompt A proposes joins from names, types
-  and constraints, and routes polymorphic references to a suspicion.
+  and constraints, and claims a polymorphic reference one branch at a time.
 - **The value-length gate is a length, not a shape.** A text column is
   categorical only if it has few distinct values and none longer than
   `categoricalMaxValueLength`. That hides MD5 (32), SHA-1 (40), bcrypt (60)

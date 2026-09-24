@@ -351,23 +351,24 @@ export function sampleSource(t: { schema: string; name: string; rowEstimate: num
 }
 
 /**
- * Runs a statement built over a sampled source. If the sampled form is rejected (a relation that
- * does not support TABLESAMPLE, for one), the plain LIMIT form is tried once. Timeouts and the
- * budget are not retried.
+ * Runs a statement built over a sampled source, with its bind parameters. If the sampled form is
+ * rejected (a relation that does not support TABLESAMPLE, for one), the plain LIMIT form is tried
+ * once, with the same parameters. Timeouts and the budget are not retried.
  */
 export async function querySampled(
   db: Db,
   t: { schema: string; name: string; rowEstimate: number },
   cfg: SampleConfig,
   build: (source: string) => string,
+  params: unknown[] = [],
 ): Promise<{ source: string; result: QueryResult }> {
   const sampled = sampleSource(t, cfg);
   const plain = sampleSource(t, cfg, false);
   let source = sampled;
-  let result = await db.query(build(source));
+  let result = await db.query(build(source), params);
   if (!result.ok && result.reason === "error" && sampled !== plain) {
     source = plain;
-    result = await db.query(build(source));
+    result = await db.query(build(source), params);
   }
   return { source, result };
 }

@@ -39,7 +39,12 @@ export async function remeasure(db: Db, cfg: Config, snapshot: Snapshot): Promis
   const catalog = await readCatalog(db);
   const named = new Set(claimNames(snapshot.claims).flatMap((c) => c.names.map(([table]) => findTable(catalog, table))));
   const extracted = await extract(db, measuring, catalog.filter((r) => named.has(r)), { samples: false, reveal: new Set() });
-  const measured = verdicts(await verify(db, measuring, extracted, snapshot.claims), measuring);
+  // A condition is measured only on a column that looks categorical, which these settings decide, and a pull request can
+  // edit them: bounds wider than this run's, or a smaller sample, on whose few rows most columns repeat a value, would let
+  // a condition count a guess at a hidden value (R3). With such settings no column counts as categorical.
+  const wider = measuring.sampleRows < cfg.sampleRows || measuring.categoricalMaxDistinct > cfg.categoricalMaxDistinct || measuring.categoricalMaxValueLength > cfg.categoricalMaxValueLength;
+  const tables = wider ? extracted.tables.map((t) => ({ ...t, columns: t.columns.map((c) => ({ ...c, visible: false })) })) : extracted.tables;
+  const measured = verdicts(await verify(db, measuring, { ...extracted, tables }, snapshot.claims), measuring);
   return diff(snapshot, { database: db.database, schema: schemaOf(catalog), verdicts: measured }, cfg);
 }
 
@@ -125,10 +130,17 @@ function classify(kind: keyof typeof REGRESSIONS, before: Verdict["status"], hit
   return before === "unverifiable" || after.status === "unverifiable" ? "not measured" : "changed";
 }
 
-/** Each claim's id and kind, and the names it uses: a relationship its two columns, a suspicion its tables, the first with its column. */
+/**
+ * Each claim's id and kind, and the names it uses: a relationship its two columns and the column its condition names,
+ * a suspicion its tables, the first with its column.
+ */
 function claimNames(claims: Claims): { id: string; kind: keyof typeof REGRESSIONS; names: Name[] }[] {
   return [
-    ...claims.relationships.map((r) => ({ id: relationshipId(r), kind: "relationship" as const, names: [[r.from.table, r.from.column], [r.to.table, r.to.column]] satisfies Name[] })),
+    ...claims.relationships.map((r) => ({
+      id: relationshipId(r),
+      kind: "relationship" as const,
+      names: [[r.from.table, r.from.column], [r.to.table, r.to.column], ...(r.when ? [[r.from.table, r.when.column] satisfies Name] : [])] satisfies Name[],
+    })),
     ...claims.suspicions.map((s) => ({ id: suspicionId(s), kind: "suspicion" as const, names: s.tables.map((table, i): Name => (i === 0 && s.column !== undefined ? [table, s.column] : [table])) })),
   ];
 }

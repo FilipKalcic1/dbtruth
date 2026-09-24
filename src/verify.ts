@@ -9,7 +9,7 @@
 
 import type { Config } from "./config.js";
 import { DATATYPE_MISMATCH_STATES, q, qualified, querySampled, typeFamily, type Db, type QueryResult } from "./safety.js";
-import { findTable, relationshipId, suspicionId, type Claims, type Extract, type Measurement, type Relationship, type Suspicion, type Table } from "./schemas.js";
+import { findTable, relationshipId, sqlString, suspicionId, type Claims, type Extract, type Measurement, type Relationship, type Suspicion, type Table } from "./schemas.js";
 
 const SECONDS_PER_DAY = 86_400;
 
@@ -31,8 +31,17 @@ async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimI
   if (!to) return skip(claimId, kind, `unknown table ${r.to.table}`);
   if (!hasColumn(from, r.from.column)) return skip(claimId, kind, `unknown column ${r.from.table}.${r.from.column}`);
   if (!hasColumn(to, r.to.column)) return skip(claimId, kind, `unknown column ${r.to.table}.${r.to.column}`);
+  const { when } = r;
+  const on = when && from.columns.find((c) => c.name === when.column);
+  if (when && !on) return skip(claimId, kind, `unknown column ${r.from.table}.${when.column}`);
   const empty = nothingToMeasure(claimId, kind, from, to);
   if (empty) return empty;
+  // After emptiness, since an empty table shows no column's values. A count under a guessed value of a hidden column
+  // would tell whether that value exists, and one under a key's value would narrow the join to a row, so a condition is
+  // measured only on a categorical column, the kind the model is shown the values of: visible, with few values, none long.
+  if (on && !(on.visible && on.distinct <= cfg.categoricalMaxDistinct && on.maxLength <= cfg.categoricalMaxValueLength)) {
+    return skip(claimId, kind, `${r.from.table}.${on.name} is not categorical, so no condition on it is measured`);
+  }
 
   // The target is probed per row through its index when the column leads the primary key and is compared as is;
   // otherwise, or once a datatype mismatch forces a comparison as text that no index serves, it is read once,
@@ -41,13 +50,17 @@ async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimI
   const keyed = to.primaryKey?.[0] === r.to.column;
   const col = `f.${q(r.from.column)}`;
   const counts = `count(${col}) AS total, count(*) - count(${col}) AS nulls`;
+  // With a condition, only the sampled rows whose column reads as the value, as text, the form the model saw values in.
+  const rows = (source: string) => (when ? `(SELECT * FROM ${source} w WHERE w.${q(when.column)}::text = $1)` : source);
   const sql = (source: string, cast: string) =>
     keyed && !cast
       ? `SELECT ${counts}, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ${qualified(to)} t WHERE t.${q(r.to.column)} = ${col})) AS hits
-  FROM ${source} f`
+  FROM ${rows(source)} f`
       : `SELECT ${counts}, count(t.v) AS hits
-  FROM ${source} f LEFT JOIN (SELECT DISTINCT ${q(r.to.column)}${cast} AS v FROM ${qualified(to)}) t ON t.v = ${col}${cast}`;
-  const { query, result } = await runWithTextFallback(db, cfg, from, sql);
+  FROM ${rows(source)} f LEFT JOIN (SELECT DISTINCT ${q(r.to.column)}${cast} AS v FROM ${qualified(to)}) t ON t.v = ${col}${cast}`;
+  const { query: statement, result } = await runWithTextFallback(db, cfg, from, sql, when ? [when.equals] : []);
+  // The statement run holds $1 and never the value; the query kept ends with a note that gives it, so a person can rerun it.
+  const query = when ? `${statement}\n-- $1 = ${sqlString(when.equals)}` : statement;
   if (!result.ok) return skip(claimId, kind, result.message, query);
   const total = Number(result.rows[0]?.total);
   const hits = Number(result.rows[0]?.hits);
@@ -185,12 +198,12 @@ function measureMissingKey(extract: Extract, claimId: string, s: Suspicion): Mea
 // ---------- helpers ----------
 
 /** Runs the native comparison over a sampled source; if the server reports a datatype mismatch, compares as text once. */
-async function runWithTextFallback(db: Db, cfg: Config, from: Table, sql: (source: string, cast: string) => string): Promise<{ query: string; result: QueryResult }> {
+async function runWithTextFallback(db: Db, cfg: Config, from: Table, sql: (source: string, cast: string) => string, params: unknown[] = []): Promise<{ query: string; result: QueryResult }> {
   let cast = "";
-  let { source, result } = await querySampled(db, from, cfg, (src) => sql(src, cast));
+  let { source, result } = await querySampled(db, from, cfg, (src) => sql(src, cast), params);
   if (!result.ok && result.reason === "error" && result.sqlState !== undefined && DATATYPE_MISMATCH_STATES.includes(result.sqlState)) {
     cast = "::text";
-    ({ source, result } = await querySampled(db, from, cfg, (src) => sql(src, cast)));
+    ({ source, result } = await querySampled(db, from, cfg, (src) => sql(src, cast), params));
   }
   return { query: sql(source, cast), result };
 }

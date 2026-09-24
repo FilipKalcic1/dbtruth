@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { claimsSchema, findTable } from "../src/schemas.js";
+import { claimsSchema, findTable, relationshipId, sqlString } from "../src/schemas.js";
 
 const tables = [
   { name: "orders", schema: "public" },
@@ -49,4 +49,31 @@ test("copies of one claim come to the same claim whatever order the reply gives 
   assert.deepEqual(backward, forward);
   assert.deepEqual(forward!.relationships.map((r) => r.reason), ["named like it"], "of two copies with one basis, the one whose text sorts first");
   assert.deepEqual(forward!.suspicions.map((s) => s.detail), ["empty; empty beside vehicles"], "each detail once, in code-unit order, one inside another or not");
+});
+
+test("a condition is part of a claim's id: each branch is a claim of its own, and one branch given twice is one", () => {
+  const branch = (to: string, equals?: string) => ({
+    from: { table: "comments", column: "commentable_id" },
+    to: { table: to, column: "id" },
+    ...(equals === undefined ? {} : { when: { column: "commentable_type", equals } }),
+    basis: "inferred",
+    confidence: 0.8,
+    reason: "commentable_type selects the table",
+  });
+  const claims = claimsSchema([]).parse({ relationships: [branch("posts", "post"), branch("photos", "photo"), branch("posts"), branch("photos", "photo")] });
+  assert.deepEqual(claims.relationships.map(relationshipId), [
+    "relationship:comments.commentable_id->posts.id[commentable_type=post]",
+    "relationship:comments.commentable_id->photos.id[commentable_type=photo]",
+    "relationship:comments.commentable_id->posts.id",
+  ]);
+  assert.deepEqual(claims.relationships[1]!.when, { column: "commentable_type", equals: "photo" });
+  assert.equal(claimsSchema([]).safeParse({ relationships: [{ ...branch("posts"), when: null }] }).success, false, "a null condition goes back to the model like any other invalid reply");
+});
+
+test("sqlString writes a value as SQL does, on one line", () => {
+  assert.equal(sqlString("photo"), "'photo'");
+  assert.equal(sqlString("x'; DROP"), "'x''; DROP'", "a quote is doubled");
+  assert.equal(sqlString("a\\b"), "'a\\b'", "a backslash is itself in a standard string");
+  assert.equal(sqlString("a\nb\\c"), "E'a\\nb\\\\c'", "a line break takes the E'' form, which escapes it and the backslash");
+  assert.equal(sqlString("it's\r\n"), "E'it''s\\r\\n'");
 });

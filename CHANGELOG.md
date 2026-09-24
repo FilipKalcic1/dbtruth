@@ -68,6 +68,13 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   their size now comes from the partitions' estimates or is scaled up from a
   count over a few pages (`--pilot-pages`), and the per-table file says when
   it was estimated from a sample. Temporary tables are no longer listed.
+- A column that points at different tables depending on another column, such
+  as `commentable_id` beside `commentable_type`, is measured one branch at a
+  time: when that column is categorical, the model claims one relationship
+  per value of it, each is measured on the rows that hold its value and gets
+  its own verdict, and the per-table files give the condition, as in `when
+  commentable_type = 'photo'`. The value is sent to the database as a
+  parameter, never as SQL.
 - README: a quick start that runs `doctor` before the first run, a
   troubleshooting table with a row for every message dbtruth prints when
   something is wrong, and the commands, with those not built yet marked as

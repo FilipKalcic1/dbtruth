@@ -2653,3 +2653,260 @@ of each lost point, in the format of section 4.7 of the plan.
   209 tests, 207 pass, the 2 live tests skipped, and the package smoke test
   passes; `npm run acceptance -- --task T1.4` prints `T1.4: 100/100`, every
   check passing.
+
+## T2.3 Conditional relationships for polymorphic references
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 of the plan and T2.2 to T2.4, with T3.1, T3.2,
+  T5.1 and Appendices A to C; the design brief for T2.3, T2.4 and T2.2 and
+  the lead's decisions in its section 7, which set the order T2.3, T2.4,
+  T2.2; `src/verify.ts`, `src/safety.ts`, `src/schemas.ts`, `src/check.ts`,
+  `src/write.ts`, `src/snapshot.ts`, `src/extract.ts`, `src/cli.ts`, both
+  prompts and their tests; README.md, NOTES.md (0.2.0, 0.3.0 and the limits),
+  CHANGELOG.md, the iterations above and `acceptance/`.
+- Checked before building, on the fixture server (Postgres 16) with pg 8.23:
+  a statement with an empty parameter list goes by the simple protocol, as
+  every statement `connect()` sends already does (`requiresPreparation` is
+  false without values), so the statements without a condition travel as
+  before; a NUL bound as a parameter is refused by the server with 22021,
+  `invalid byte sequence for encoding "UTF8": 0x00`, a `DatabaseError` with
+  its code, so the claim is unverifiable and the run goes on; the brief's
+  case for asking the lead, a throw without a SQLSTATE, which `connect()`
+  takes for a lost connection, does not arise; and `total_cents = $1`
+  with `05` bound compares as 5, where `total_cents::text = $1` does not.
+- The fixture first: `test/fixtures/polymorph.sql`, all of it, as the brief
+  writes it, mounted as `60-polymorph.sql` before the template, and loaded
+  once into the running server with `docker exec -i dbtruth-db-1 psql -v
+  ON_ERROR_STOP=1 -U dbtruth -d fixture < test/fixtures/polymorph.sql`: 300
+  `post` comments over ids 1 to 100 and 180 `photo` comments over 1 to 60;
+  `reltuples` 40, 480, 200, 40, 100 and 20 for accounts, comments,
+  invoices, photos, posts and refunds.
+- Tests first: eight unit tests (three in verify, two in schemas, one each in
+  write, check and snapshot) and six database tests in the new
+  `test/joins.test.ts`, which joins `test:db`; `fakeDb` in `verify.test.ts`
+  also records each statement's parameters. On the code as committed:
+  - `schemas.test.ts` did not load: `The requested module
+    '../src/schemas.js' does not provide an export named 'sqlString'`.
+  - On polymorph the condition was dropped by the schema and every branch
+    measured as the whole join: the post branch read `total: 480, hits: 480`
+    for 300 of 300; no statement held `::text = $1`, `[]` where seven values
+    were expected; no line of `comments.md` had `when commentable_type =
+    'post'`; the claim on `comments.nope` came back confirmed; and check
+    printed `check polymorph: 4 unchanged` for `11 unchanged`, the branches'
+    ids having fallen into the whole join's. The canary test passed, as it
+    must before and after.
+  - The verify tests: the statement read `FROM (SELECT * FROM
+    "public"."comments" LIMIT 50000) f`, no filter; the four statements of
+    the retries carried `[]` four times for `["photo"]`; the unknown and the
+    hidden column were queried (`nothing here should be queried`).
+  - The write test found no line with the condition; the check test classed
+    the branch whose column was dropped `not measured`, not `stale` with
+    `orders.status`; the snapshot test found one relationship where three
+    branches were written.
+- Built, as section 2.1 of the brief has it: `when` on `RelationshipSchema`,
+  optional and not nullable; the raw `[column=value]` suffix in
+  `relationshipId`; `sqlString` in `schemas.ts`; bind parameters through
+  `querySampled` and `runWithTextFallback`; `claimRows` and `column()` in
+  `verify.ts`, with an unknown condition column checked with the others, a
+  hidden one after emptiness, the filter in both forms of the join, and the
+  note `-- $1 = <value>` before the statement in the query kept, never in
+  the one run; the condition's column among a relationship's names in
+  `claimNames`; the condition in the per-table file's edge. Prompt A's
+  bullet replaced and its schema given `"when"?`; prompt B given the
+  sentence and the rule. The stored query for the photo branch is the
+  brief's section 2.2, character for character.
+- Where the code at HEAD and the brief differ: nowhere that changed what
+  was built. `SNAPSHOT_FORMAT` stays 1, as decided.
+- Checked beyond the tests: the fixture server reads `sqlString`'s literal
+  back as the value for `photo`, `x'; DROP TABLE posts; --`, a value with a
+  newline, quotes and a backslash, one with CR LF, one with `\n` as two
+  characters, a tab and a lone backslash, each on one line.
+- Docs: NOTES (the entry under 0.2.0, with the old and new bullet of prompt
+  A, the decisions and what is not done; the known limit renamed "A join is
+  unconditional unless its claim names a condition."; "One sample, one
+  target" no longer says polymorphic references go to a suspicion; the id
+  suffix under "Where string matching does appear"), README ("How it
+  works", and polymorph in the Development line), CHANGELOG (0.2.0), both
+  prompts. No option was added, so `--help` is unchanged. The one new text
+  is a verdict's reason, `<table>.<column> is hidden, so no condition on it
+  is measured`, shown where `unknown column <table>.<column>` is: in the
+  per-table files and after `unverifiable` on a `check` line. Reasons have no
+  troubleshooting rows and `test/readme.test.ts` does not read them, so the
+  table is unchanged.
+- `acceptance/checks.json`: T2.3's checks, four for the A-items (A4 the
+  brief's check on NOTES), thirteen on tests, the gate, seven on docs, three
+  invariants. `acceptance/manual.json`: the sabotage item, empty.
+- The database tests (`joins`, `remeasure`, `integration`, `doctor`,
+  `safety`, `sampling`, `scale`: 82 tests, 80 pass, the 2 live tests
+  skipped) pass on Postgres 12 (12.22) and 18 (18.6), in throwaway
+  containers loaded with every fixture file in compose order, as on 16. No
+  copy was left.
+- Under Linux as a non-root user (uid 1000), in `node:20` (20.20.2) and
+  `node:22` (22.23.3), from a copy of the working tree with LF endings and
+  `npm ci`, against the 18.6 server: the task's six test files with
+  `readme`, `ci`, `structure`, `acceptance` and `remeasure`, 103 tests, 103
+  pass on each.
+- `npm run verify` exits 0: 223 tests, 221 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.3`
+  prints `T2.3: 80/100`, every check passing but the sabotage item.
+  `npm run acceptance` over every task: T0.1, T0.2, T1.1, T1.2, T1.3, T1.4,
+  T1.5, T2.1, T3.1, T3.2 and T6.1 still 100/100; after the last edits to
+  README.md and NOTES.md every file check of every task still matches.
+- Lost Tests (-20): `FAIL T2.3 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead, no point depends on it: whether a verdict's reason,
+  such as the new one for a hidden condition column, should have a
+  troubleshooting row. None has one today, `unknown column` included.
+### Iteration 2: 80/100
+- Four reviews, twelve findings, each checked against the code and the plan
+  before acting; none rejected. Two pairs overlapped (the fixture's
+  `refunds` and the test claims on it; `claimRows` and `column()`), and the
+  two on which columns a condition may name were fixed together, since the
+  rule one asks for reads settings the other shows a snapshot can widen.
+- Checked first, in the code: `visible` is categorical, a declared non-text
+  key or revealed (`extract.ts`), so a gate on it let `comments.id` through;
+  `remeasure` lays the snapshot's `measuredWith` over this run's config and
+  profiles with it, and `parseSnapshot` gives the two categorical bounds no
+  upper limit; the statement guard lets through only a statement that
+  starts with `SELECT` or `WITH`, so a kept query with its note first could
+  not be rerun through `connect()` as it was stored.
+- Fixed:
+  - The stored query ends with the note, as the plan says:
+    `<statement>\n-- $1 = '<value>'`. Iteration 1 put it first on the
+    lead's word, which the plan does not carry. The kept query now reruns
+    as it is: the database test binds the value to the whole of it, and the
+    tests in `verify.test.ts` and `joins.test.ts` read the note as the last
+    line. NOTES: "The stored query ends with the value."
+  - Prompt A asks for one relationship per value of the other column, each
+    to the table that value selects, as the plan says, not one per target:
+    two values that selected one table made one claim, and the rows of the
+    other were never measured. NOTES quotes the new bullet and says why.
+  - A condition must be on a categorical column: visible, with no more than
+    `categoricalMaxDistinct` values on the sample, none longer than
+    `categoricalMaxValueLength`. `visible` alone let a key through, and
+    `id = '42'` narrowed the join to one comment. The reason reads
+    `<table>.<column> is not categorical, so no condition on it is
+    measured`. A revealed column is held to the same bounds, so the full run
+    and `check` differ on it only when no value repeats on its sample. A
+    key on a table no larger than the bound, and a value one row alone
+    holds, still narrow to a row; NOTES says so. New claim `keyed` in
+    `joins.test.ts`; the `comments` of `verify.test.ts` has a key and
+    statistics like the fixture's.
+  - In `check` a snapshot can no longer widen what is categorical:
+    `remeasure` hides every column from `verify` when the snapshot's bounds
+    are wider than this run's or its `sampleRows` smaller, so no branch is
+    measured, and every other claim is measured as before, since nothing
+    else reads `visible` there. With this removed, the guess
+    `comments.commentable_id = '57'` under `categoricalMaxDistinct` 1000000
+    came back confirmed. New test "check measures no condition when the
+    snapshot's settings would show more values than this run's", over each
+    of the three settings, which also finds no statement with a parameter.
+    NOTES: "In `check`, a snapshot cannot widen what is categorical."
+  - `claimRows` and `column()` are gone, with the `Column` import:
+    `measureRelationship` looks the condition's column up once, as `on`,
+    and writes the filter and its parameter where the statement is built.
+  - `refunds` is out of `polymorph.sql`, with its header item and the one
+    about T2.2's key test, and the unconditional `invoices` claim is out of
+    `CLAIMS`. `accounts` and `invoices` stay: T2.4 adds them, and
+    `invoices.account_id` is the condition on a column that is not text.
+    The fixture was reloaded with `docker compose down -v && docker compose
+    up -d --wait`. The check line is `check polymorph: 10 unchanged`.
+  - `joins.test.ts`: `offline()` takes nothing and returns no exit code;
+    `claim(table, column, to, when?)` needs no split and no cast.
+    `verify.test.ts`: `photoBranch`'s parameter is `on`. `sqlString` sits
+    after `suspicionId`, so the two id functions are together.
+  - README "How it works" says the other column must be categorical and
+    that each of its values is a claim; CHANGELOG likewise.
+    `acceptance/checks.json`: the renamed tests, the NOTES bullets, the
+    README sentence, and one new check, `check-wider`.
+- Sabotage of the fixes, each file restored from a copy and compared with
+  `cmp`: `sampleRows` dropped from the comparison in `remeasure`, "check
+  measures no condition ..." failed with `{"sampleRows":60}: nor a branch
+  the full run measured`, `[ 'confirmed', undefined ]` where `[
+  'unverifiable', 'comments.commentable_type is not categorical, so no
+  condition on it is measured' ]` was expected; `categoricalMaxDistinct`
+  dropped from it, the same test failed with
+  `{"categoricalMaxDistinct":1000000}`, the guess `[ 'confirmed', undefined
+  ]`; the gate back to `on.visible` alone, three tests failed, among them
+  "a discriminator value is always a bind parameter ...", which found `[
+  'posts', '42' ]` among the bound values.
+- `npm run verify` exits 0: 224 tests, 222 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.3`
+  prints `T2.3: 80/100`, every check passing but the sabotage item. `npm run
+  acceptance` over every task: every other task built so far still 100/100.
+- Lost Tests (-20): `FAIL T2.3 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record of the task's
+  core; the sabotage check is done by a later stage. The sabotages above are
+  of this iteration's fixes only.
+- Open for the lead, as in iteration 1: whether a verdict's reason, now
+  `<table>.<column> is not categorical, so no condition on it is measured`,
+  should have a troubleshooting row.
+- Sabotage check of the task's core (section 4.5), with the task's six test
+  files (`joins`, `verify`, `schemas`, `write`, `check`, `snapshot`: 62
+  tests, all passing before) run after each break. `src/verify.ts`,
+  `src/schemas.ts`, `src/safety.ts`, `src/write.ts` and `src/check.ts` were
+  copied outside the repository first; after each break the file was
+  restored from its copy, `cmp` identical, and `git diff HEAD -- <file>`
+  printed byte for byte the diff saved before.
+- Sabotage: the condition's filter and its parameter dropped in
+  `measureRelationship`, so a branch is measured over every sampled row;
+  "each branch of a polymorphic reference gets its own verdict with its own
+  numbers" failed with "+ hits: 480, - hits: 300, + total: 480 - total: 300"
+  for the post branch, and five other tests with it. Restored.
+- Sabotage: the value written into the statement as a literal through
+  `sqlString`, `::text = 'photo'` in place of `$1`, and no parameter sent,
+  so the numbers stay right; "a condition filters the sampled rows by a
+  bound value, shown only in a note after the statement" failed with the
+  statement it ran, which read `w."commentable_type"::text = 'photo'`, and
+  "the plain-form retry and the text fallback send the condition's value
+  too" with "+ [ [], [], [], [] ]" where `[ 'photo' ]` was expected four
+  times. "a discriminator value is always a bind parameter, ..." failed too,
+  but before its own assertions, with "database connection lost: invalid
+  message format": the NUL claim's value was now in the statement's text.
+  Restored.
+- Sabotage: `relationshipId` without the `[column=value]` suffix; "a
+  condition is part of a claim's id: ..." failed with the four claims
+  reduced to two ids, "relationship:comments.commentable_id->posts.id" and
+  "...->photos.id", and "check measures every branch again, ..." with "+
+  'check polymorph: 3 unchanged' - 'check polymorph: 10 unchanged'", among
+  nine tests. Restored.
+- Sabotage: `querySampled` retrying the plain form without the parameters;
+  "the plain-form retry and the text fallback send the condition's value
+  too" failed with "+ [ [ 'photo' ], [], [ 'photo' ], [] ]" where the value
+  was expected four times. Restored.
+- Sabotage: the edge in `tableFile` without its condition; "the per-table
+  files show each branch with its condition" failed with "no line in
+  comments.md starts - comments.commentable_id -> posts.id when
+  commentable_type = 'post': confirmed, 100.0% of 300 sampled rows match
+  (inferred". "a branch reads with its condition, ..." in `write.test.ts`
+  failed too, with only the table's name, "comments", as its message.
+  Restored.
+- Sabotage: the kept query without its closing note; "a condition filters
+  the sampled rows by a bound value, shown only in a note after the
+  statement" failed with "the query kept is the one run, before a note that
+  gives $1", and "a discriminator value is always a bind parameter, ..."
+  found the statement's last line where "-- $1 = 'x''; DROP TABLE posts;
+  --'" was expected. Restored.
+- Sabotage: the check that the condition's column exists removed; "a
+  condition on a column the table lacks or that is not categorical is
+  unverifiable, ..." failed with "+ 'column w.nope does not exist'" and the
+  statement run where "'unknown column comments.nope', ''" was expected,
+  and "a condition on a column the table lacks, or on one that is not
+  categorical, is unverifiable and nothing runs" with "nothing here should
+  be queried". Restored.
+- Sabotage: `claimNames` in `check.ts` without the condition's column; "a
+  claim whose condition names a column the database lost is stale" failed
+  with "+ 'not measured', + undefined - 'stale', - 'orders.status'".
+  Restored.
+- Sabotage: the categorical gate removed, so a condition on any column is
+  measured; "a condition on a column the table lacks or that is not
+  categorical is unverifiable, ..." failed with "a count under a guessed
+  value would tell whether a hidden value exists": `comments.body = 'x'`
+  came back `empty`, with its statement, where `unverifiable` and
+  "comments.body is not categorical, so no condition on it is measured"
+  were expected; three other tests failed with it. Restored.
+- No sabotage left every test green, so no test was changed.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  224 tests, 222 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T2.3` prints `T2.3: 100/100`, every
+  check passing.

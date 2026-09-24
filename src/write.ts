@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { AskOptions, Model } from "./model.js";
-import { FilesSchema, relationshipId, suspicionId, type Files, type TableFacts, type Verified } from "./schemas.js";
+import { FilesSchema, relationshipId, sqlString, suspicionId, type Files, type TableFacts, type Verified } from "./schemas.js";
 
 export const OUTPUT_DIR = "context";
 /** cli.ts adds the snapshot to the files it hands persist, so this module need not know what it holds. */
@@ -47,7 +47,8 @@ export function tableFile(v: Verified, t: TableFacts): string {
     const verdict = v.verdicts[relationshipId(r)];
     if (!verdict || verdict.status === "rejected") return [];
     const n = verdict.measurement.numbers;
-    const edge = `${r.from.table}.${r.from.column} -> ${r.to.table}.${r.to.column}`;
+    // A branch's condition as a SQL literal, which an agent can paste into a WHERE.
+    const edge = `${r.from.table}.${r.from.column} -> ${r.to.table}.${r.to.column}${r.when ? ` when ${r.when.column} = ${sqlString(r.when.equals)}` : ""}`;
     const inferred = r.basis === "stated" ? "" : " (inferred)";
     const nulls = n.nulls ? ` ${n.nulls} sampled rows (${pct(n.nulls / (n.total! + n.nulls))}) have no ${r.from.column}; an inner join drops them too.` : "";
     if (verdict.status === "confirmed") return [`- ${edge}: confirmed, ${pct(n.hit!)} of ${n.total} sampled rows match${inferred}.${nulls}`];

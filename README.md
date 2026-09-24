@@ -305,9 +305,13 @@ output leads with it and the numbers. Below 50% it is dropped. The same goes
 for suspected dead tables (count, newest timestamp), duplicate tables (row
 overlap), inconsistent values (case and whitespace collisions) and missing
 keys. Every verdict carries the query and the numbers so you can rerun it.
-Each table's file under `context/tables/` is rendered from those measurements
-directly, so every number in it is the measured number; the model writes
-`README.md` and `ENTITIES.md`, where the synthesis is.
+When a column points at different tables depending on another column that is
+categorical, each value of that other column is a claim of its own, measured
+on the rows that hold it, with its own verdict; the value is sent as a
+parameter, never as SQL. Each table's file under `context/tables/` is
+rendered from those measurements directly, so every number in it is the
+measured number; the model writes `README.md` and `ENTITIES.md`, where the
+synthesis is.
 
 Views and materialized views are included, with their SQL, so the model knows
 what they read. A partitioned table stands for its partitions: one entry, with
@@ -405,7 +409,7 @@ refused before anything runs.
 ## Development
 
 ```bash
-docker compose up -d --wait         # fixture, clean, scale, sampling and fixture_template on port 54329
+docker compose up -d --wait         # fixture, clean, scale, sampling, polymorph and fixture_template on port 54329
 npm test                            # every test file
 npm run test:unit                   # only the tests that need no database
 npm run test:db                     # only the tests that need the databases

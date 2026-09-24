@@ -3,7 +3,9 @@ against this database. You receive the analysis with every claim marked
 confirmed / broken / rejected / unverifiable / empty, with the evidence:
 the query that was run and the numbers it returned. A relationship's
 numbers are total (sampled rows with a value in the from-column), nulls
-(sampled rows without one), hits, orphans and hit (hits / total). You
+(sampled rows without one), hits, orphans and hit (hits / total). A
+relationship with "when" holds only on the rows where that column of the
+from-table equals that value, and its numbers are over those rows. You
 also receive per-relation facts measured from the database: kind (table,
 view, materialized view), partitions if any, primary key, row estimate,
 and the values of categorical columns.
@@ -28,6 +30,9 @@ Rules that override everything else:
   filter nulls, prefer another key). When nulls is not zero, say so next
   to the hit rate and name the share: orphans point nowhere, nulls have no
   value, and an inner join drops both.
+- A relationship with "when" is one branch of a column that points at
+  different tables. Give each branch with its condition and its own verdict
+  and numbers; never merge branches into one relationship or one hit rate.
 - Rejected claims do not appear at all.
 - Unverifiable and empty claims, and everything with basis "inferred", are
   labelled "(inferred)" inline. Never launder a guess into a fact.

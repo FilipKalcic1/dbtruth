@@ -172,6 +172,19 @@ test("claim text with newlines, quotes and non-ASCII characters survives seriali
   assert.equal(serialize(parsed), text);
 });
 
+test("a condition survives serialize and parse, and branches are ordered by their ids", () => {
+  const [unconditional] = joins(["orders", "customers"]);
+  const branch = (equals: string) => ({ ...unconditional!, when: { column: "status", equals } });
+  const written = (relationships: Claims["relationships"]) => serialize(toSnapshot(verifiedOf({ relationships }), [relation("orders")], config, meta));
+  const text = written([branch("shipped"), unconditional!, branch("pending")]);
+  const parsed = parseSnapshot(text, FILE);
+  if (typeof parsed === "string") assert.fail(parsed);
+  assert.deepEqual(parsed.claims.relationships.map(relationshipId), [JOIN, `${JOIN}[status=pending]`, `${JOIN}[status=shipped]`]);
+  assert.deepEqual(parsed.claims.relationships.map((r) => r.when), [undefined, { column: "status", equals: "pending" }, { column: "status", equals: "shipped" }]);
+  assert.equal(serialize(parsed), text);
+  assert.equal(written([branch("pending"), branch("shipped"), unconditional!]), text, "in any order, the same bytes");
+});
+
 test("the fingerprint is sha256 of the schema only", () => {
   const catalog: Catalog = [
     { ...relation("orders", [["id", "integer"], ["customer_id", "integer"]]), size: { estimate: 500, pages: 4 } },

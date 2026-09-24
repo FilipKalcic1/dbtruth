@@ -93,6 +93,8 @@ export const TableMeaningSchema = z.object({
 export const RelationshipSchema = z.object({
   from: ColumnRef,
   to: ColumnRef,
+  // Only on the from-table's rows where this column holds this value, as text: one branch of a polymorphic reference.
+  when: z.object({ column: z.string(), equals: z.string() }).optional(),
   basis: Basis,
   confidence: Confidence,
   reason: z.string(),
@@ -110,13 +112,19 @@ export const SuspicionSchema = z.object({
 export type Relationship = z.infer<typeof RelationshipSchema>;
 export type Suspicion = z.infer<typeof SuspicionSchema>;
 
-/** Stable, readable id for a claim. The writer sees these keys next to the verdicts. */
+/** Stable, readable id for a claim. The writer sees these keys next to the verdicts. A condition is part of it, so each branch is a claim. */
 export function relationshipId(r: Relationship): string {
-  return `relationship:${r.from.table}.${r.from.column}->${r.to.table}.${r.to.column}`;
+  return `relationship:${r.from.table}.${r.from.column}->${r.to.table}.${r.to.column}${r.when ? `[${r.when.column}=${r.when.equals}]` : ""}`;
 }
 
 export function suspicionId(s: Suspicion): string {
   return `suspicion:${s.kind}:${s.tables.join("+")}${s.column ? "." + s.column : ""}`;
+}
+
+/** A value as SQL writes a string, on one line wherever it is shown: quotes doubled; a value with a line break in E'' form, backslashes, CR and LF escaped. */
+export function sqlString(value: string): string {
+  const quoted = value.replace(/'/g, "''");
+  return /[\r\n]/.test(value) ? `E'${quoted.replace(/\\/g, "\\\\").replace(/\r/g, "\\r").replace(/\n/g, "\\n")}'` : `'${quoted}'`;
 }
 
 const ClaimsShape = z.object({
