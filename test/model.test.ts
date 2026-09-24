@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -54,4 +57,23 @@ test("two malformed replies throw and save the raw replies", async () => {
   const saved = JSON.parse(readFileSync(raw, "utf8"));
   assert.deepEqual(saved.replies, ["not json at all", '{ "answer": null }']);
   assert.equal(saved.errors.length, 2);
+});
+
+test("a reply that breaks off says so, with the SDK's words, the only clue to what happened", { timeout: 20_000 }, async () => {
+  // Starts a streamed reply and ends it before its first event, as a dropped connection can.
+  const api = createServer((_, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.end();
+  });
+  api.listen(0, "127.0.0.1");
+  await once(api, "listening");
+  process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+  try {
+    const model = createModel({ rawDir: mkdtempSync(join(tmpdir(), "dbtruth-")), maxOutputTokens: 1000, apiKey: "sk-test" });
+    await assert.rejects(model.ask("contextualize", {}, Schema), /^Error: the Anthropic API's reply broke off: request ended without sending any chunks\. Run again\.$/);
+  } finally {
+    delete process.env.ANTHROPIC_BASE_URL;
+    api.closeAllConnections();
+    api.close();
+  }
 });

@@ -400,6 +400,367 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   between runs (loading them takes seconds) and a Windows runner (the
   database is Linux in every supported setup; the CLI's Windows paths are
   exercised on the maintainer's machine).
+- **`--version` reads `package.json` at run time.** `dbtruth --version`, or
+  `-v` as node and npm spell it (commander's default is `-V`), prints the
+  version to stdout, the data this command asks for (R6), and exits 0. Tools
+  that wrap dbtruth ask for it, HOL Guard's rules among them. `main()` reads
+  the `package.json` one directory above the running file, which is the
+  package root both from `src/` under tsx and from `dist/` once installed, so
+  the number is written once and a version bump cannot leave the binary
+  behind. `test/cli.test.ts` runs the source from a directory that has no
+  `package.json` and expects exactly that version and a newline; the package
+  smoke test runs the installed `node_modules/.bin/dbtruth`, which is what
+  `npx dbtruth` runs in a project that has the package, and expects the
+  version npm packed. Not done: a module or helper for the version. The
+  snapshot (T3.1) and the MCP server (T5.1) need the same value, and
+  `cli.ts` will hand it to them.
+- **`.env` is found up to the repository root.** In a monorepo `.env` sits at
+  the root while the command runs from a package, and 0.1.8 read the working
+  directory only, so the user was told "no database URL" with no idea why.
+  `findDotEnv` in `safety.ts` walks up from the real path of the working
+  directory to the first directory that holds a `.git` (a directory, or a
+  file in a worktree or submodule), and searches that root too. Outside a
+  repository it searches the working directory only, so an unrelated
+  `~/.env` is never read. The nearest `.env` wins and is read whole; two
+  files are never merged, so a run's settings are one file a person can open.
+  A `.env` that cannot be read is named on stderr with its error and passed
+  over, so a file used further up is no surprise; a directory named `.env`,
+  such as a Python virtualenv, is not a settings file and is passed over
+  without a word. When the file used is not in the working directory, stderr
+  says `reading settings from ../../.env` before the disclosure line, never a
+  value; that is decided on real paths, so a symlinked directory's own `.env`
+  is not announced, while the path shown is relative to the directory as
+  given, because Windows resolves `..` as written. Paths found on disk are
+  printed as the system spells them, so they paste into its shell. The "no
+  database URL" error lists the directories searched and one fix per line.
+  `searched` carries each directory with an optional error rather than the
+  plan's strings, so `cli.ts` words the error. Precedence is unchanged:
+  `--url`, the environment (an empty variable still means unset and hides
+  the file's), the file. Not done: a line of its own for that empty variable,
+  or for a `--dotenv` file that exists but cannot be read, which stops the run
+  with the system's error like any other unreadable file.
+- **The option is `--dotenv`, not the plan's `--env-file`.** Node claims
+  `--env-file` from anywhere on its command line, after the script name too:
+  `node argv.mjs --env-file nope.env` exits 9 with Node's own `nope.env: not
+  found` before the script runs (Node 20.20, 22.18, 22.23, 24.21, and through
+  `npx`), and with a file that exists Node applies that file's `NODE_OPTIONS`
+  before passing the flag on. `npx dbtruth` and `node dist/cli.js` both go
+  through Node, so an option of that name can never do what the plan asks;
+  `--dotenv` reaches dbtruth untouched. Section 0, item 5 of the plan: the
+  platform wins, and the lead decided the name after T1.1 iteration 3. The
+  later tasks that take the option use it too: `doctor` (T1.3), `check`
+  (T3.2), `mcp` (T5.1) and Appendix E.
+- **What "no value from any `.env` is ever printed" (T1.1, A6) covers.** Nothing
+  read from a settings file is printed except what 0.1.8 already printed on
+  purpose: the model id, which the disclosure line names because it says where
+  the data goes, and the database name as the server reports it. Credentials,
+  host, user, the API key and every other value never are. A test puts
+  `canary-pii` into a `.env`'s password, key and an unrelated variable and
+  runs every path T1.1 adds or changes, errors included; no line holds it.
+  Since T1.3 a failed connection is told in a sentence of dbtruth's own
+  (below), and the test puts the canary in the user, host and database of the
+  URL too. dbtruth's own tuning values, which a `.env` can also hold, are
+  still printed where the tool reports using or rejecting them.
+- **`dbtruth doctor` says what stands between a setup and a full run.** Most
+  first runs fail on setup, and a full run meets the problems one at a time.
+  `doctor [--url <url>] [--dotenv <path>]` runs the plan's eight checks in its
+  order, one line each on stderr, `ok <what>` or `FAIL <what>: <fix>`, nothing
+  on stdout, and exits 1 when one of the first six fails: Node, the settings
+  source, the URL (never printed, not even its host), the connection, Postgres
+  12 or newer, the read-only proof. The last two inform only: how many
+  relations the role can and cannot `SELECT`, since a role may be meant to
+  read part of a database, and the API key, since `check` and `mcp` need none.
+  A key that is set is tried with `model.preflight()`, the full run's own
+  first request: the Models endpoint, the model id, no token. The plan's
+  check 8 asks for it, so it is read as within R9's allowance for a full run;
+  `check` and `mcp` stay offline. A check that needs one that failed is not
+  run. How it is built:
+  - The settings step moved out of `run()` into `readSettings` in `safety.ts`,
+    beside `findDotEnv`, and both commands call it. A `--dotenv` file that
+    exists but cannot be read is now a sentence for both, not a raw throw.
+  - Check 7 counts over `DESCRIBED_RELATIONS`, the condition `listRelations`
+    uses too, less partitions, and only once check 5 has passed:
+    `relispartition` does not exist on 9.x, where one combined statement
+    failed before the version could be printed.
+  - Options before `doctor` are its own as well, with those after its name
+    winning (`enablePositionalOptions`); they were dropped, and `dbtruth --url
+    X doctor` checked another database. `optsWithGlobals()` lets the
+    program's value win, so it was not used.
+  - The `WARNING: ` mark moved from `connect()` to `run()`, so check 6 fails in
+    the words of the full run's warning and the full run prints what it did.
+  - The minimum versions are constants in `doctor.ts`, not tunables: they are
+    what the code needs, and the README and CI state the same numbers.
+  - `DoctorDeps.preflight` is the test hook. The proof that no token is spent
+    is the command run against a local HTTP server given as
+    `ANTHROPIC_BASE_URL`: every request it records, for a 200 and for each
+    error `explainApiFailure` words, is `GET /v1/models/<id>`, and there is
+    none without a key.
+  - `test/fixtures/roles.sql` adds a role that can read two of the fixture's
+    eleven relations, with a password a URL must escape and the canary.
+  - The package smoke test runs the installed `dbtruth doctor` against
+    `DATABASE_URL`, else the fixture, as every test does; the plan runs it
+    only when `DATABASE_URL` is set, which would leave A5 unchecked.
+  - Not done: a line for a check that was not run; `USAGE` on the relation's
+    schema in check 7; naming which source the URL came from.
+- **A failed connection is told in dbtruth's words, in a full run too.**
+  `connect()` appended the driver's message, which names the user, the host or
+  the database. It now words the cause, and the full run and `doctor` print
+  the same sentence: nothing listening (`ECONNREFUSED`), host not found
+  (`ENOTFOUND`), authentication failed (SQLSTATE class 28), no such database
+  (3D000), SSL required, timeout; anything else by its code alone.
+  `new pg.Client` is inside the same `try`, because the driver parses the URL
+  there and its errors quote it.
+  - SSL required has no code of its own: a server whose `pg_hba.conf` admits
+    only encrypted connections refuses with 28000 from `ClientAuthentication`
+    (checked on Postgres 16 and 18). A host or user it does not admit is
+    refused the same way, so the sentence says the access rules refused the
+    connection and suggests `sslmode=verify-full`. Not `require`:
+    pg-connection-string treats it as `verify-full` anyway and prints a
+    SECURITY WARNING for it.
+  - Connecting is bounded by `statementTimeoutSeconds` (pg's
+    `connectionTimeoutMillis`); pg sets no limit, and a host that drops
+    packets held a run for the system's TCP timeout. One number says how long
+    dbtruth waits on the server; its comment says so, and a separate limit
+    would be a number the plan does not ask for. pg's timeout carries no code,
+    so its message, `timeout expired`, is what is matched.
+  - A server that accepted the connection and then refused `SET` let its raw
+    error escape and left the client open. The client is now closed and the
+    error reads "the server accepted the connection but refused to set up a
+    read-only session (42704)". No real server can be made to refuse `SET`,
+    so the test runs a fake Postgres of a few lines over `node:net`, against
+    the real driver and the real `connect()`; fakes of the same kind play a
+    server that requires SSL, one that never answers, and a 9.x server that
+    accepts the proof's write.
+  - Not done: a sentence for failures the driver reports only in words, such
+    as a URL without a password or `sslmode` against a server without SSL;
+    they read `could not connect to the database`. A certificate that cannot
+    be verified is named by its OpenSSL code alone; the fixes
+    (`sslrootcert=<file>`, `sslmode=no-verify`) belong in the troubleshooting
+    table of T1.5.
+- **The README opens with the quick start the plan orders, and every error
+  has a row.** Requirements; two settings in `.env` at the repository root,
+  `npx dbtruth doctor`, `npx dbtruth`; the Monorepos paragraph; a
+  troubleshooting table; the commands. The plan offers `npx dbtruth init` as a
+  way to write the settings, but it is not built and today prints commander's
+  `too many arguments`, so the quick start names it only as coming; the
+  commands list marks `init`, `check` and `mcp` with the release the plan's
+  T7.1 puts them in. The table shows each message as it is printed, `<...>`
+  for a value, so a person can search it for the line they got; messages with
+  one fix share a row. Checked by running them as well as by reading the code:
+  a `#` in the password gives `ERR_INVALID_URL` and an `@` the authentication
+  sentence; a missing `sslrootcert` file gives `ENOENT`; a URL without a
+  password, or `sslmode` against a server without SSL, the bare sentence; a
+  self-signed certificate under `verify-full` gives
+  `DEPTH_ZERO_SELF_SIGNED_CERT`, which `sslrootcert=<file>` and
+  `sslmode=no-verify` both get past; a key with a curly quote in it gives
+  "could not send a request to the Anthropic API" with `Cannot convert argument
+  to a ByteString`; `init`,
+  `check` and `mcp` give commander's `too many arguments`. Not done: `persist`
+  removes the last run's files before it writes the new ones, outside its
+  per-file `try`, so a file it cannot remove (held open on Windows, `EBUSY`;
+  in a directory this user cannot write, `EACCES`) stops the run after the
+  model calls, with the files removed before it gone. The table gives that
+  failure a row in the system's words; reporting it with the other files that
+  could not be written is a change of behaviour, not of the README.
+- **`test/readme.test.ts` reads the errors out of `src/`.** A list of error ids
+  is kept by whoever adds an error, the one person the test is there to catch,
+  so it reads the source with regular expressions, as `structure.test.ts`
+  does; TypeScript 7 ships no stable parser API. A message reaches the user in
+  one of six ways, and the test takes the literal after each: thrown (`new
+  Error(`), printed (`err(`), warned (`warn(`), a connection failure's cause
+  (`because(`), a sentence a function returns for its caller to throw or print
+  (`return`), and the note `fitToContext` returns when it trims the model's
+  input (`reduced:`). The plan also names `process.stderr`: `main` wrote its
+  last line, `dbtruth: <error>`, there directly, and now hands it to its `err`
+  like every other line. A literal without two words in a row is punctuation,
+  a prefix such as `FAIL`, or SQL, which this code writes in capitals; doctor's
+  `ok` and `note` lines and the full run's progress lines are named as not
+  errors. Each
+  message must match a whole code span in the table's first column, a
+  placeholder standing for any value; a cause need only end one, since it
+  follows `could not connect to the database: `, and the read-only warning may
+  follow `WARNING: `. A first version looked for the words between the
+  placeholders anywhere in the section, and `could not read <path> (<error>)`
+  passed on the `--dotenv` row's. The pattern reads a literal up to a template
+  nested in it, and `connectFailure`'s last line nested its code in the
+  message, which left `could not connect to the database`, the start of every
+  connection row; it is now two returns, one per message, printing what it
+  printed, and `doctor.test.ts` runs both, which no test did. Two pieces sit
+  inside a longer line or a list of lines, where the pattern cannot see them,
+  and are listed by hand: the full run's "no database URL" line and "not
+  examined"; each must still be in `src/` and in the table's first column. The
+  note that the input was trimmed was listed too, by the words its three
+  versions share, which let two of them lose their row unnoticed; it is now
+  read as the sixth way. The test also fails when one of the six ways matches
+  nothing, so an edit that breaks the pattern cannot pass by finding less.
+  Not done: a message worded a seventh way, through a new helper
+  like `because` or a direct write to `process.stderr`, is not seen until the
+  pattern learns it; a message cut short by a nested template, as the
+  read-only session's still is, is matched only up to the cut, which no other
+  row starts with; a message that is a known start and a value, such as a new
+  `could not connect to the database: <detail>`, passes on any row that starts
+  the same way; commander's own errors have a row but are not in `src/`; and a
+  row whose message is gone is not caught, though a reworded message fails the
+  test until its row has the new words.
+- **The quick start's `.env` had a comment the parser keeps.**
+  `ANTHROPIC_MODEL=claude-sonnet-5     # optional; this is the default`, copied
+  as shown, set the model id to the rest of the line, and the key check then
+  said that model does not exist. `readEnvFile` reads a value to the end of its
+  line, as in 0.1.8. The example now holds the two settings only, and the text
+  says a comment goes on a line of its own. `test/readme.test.ts` reads the
+  example with `readEnvFile` and fails on a value with a space in it, which no
+  setting has; no test did. Not done: dropping a trailing `#
+  comment` in the parser, which would cut a password that holds ` #`, and is a
+  change of behaviour outside this task.
+- **`doctor` has a third marker, `note`, for what only informs.** The plan's
+  doctor prints `ok` or `FAIL`, and T1.3 printed a missing key as `ok no API
+  key: a full run needs ANTHROPIC_API_KEY; check and mcp do not`. In the
+  lead's walkthrough of the quick start (T1.5, A2) a newcomer without a key saw
+  every line say `ok`, and the full run then stopped at the key; the line also
+  named `check`, which does not exist yet and gave commander's `too many
+  arguments`. A missing key is neither a pass nor a failure, and neither are
+  relations the role cannot read, the other finding doctor only informs of,
+  which the README already named with the key: both are now `note` lines,
+  `note no API key: a full run needs ANTHROPIC_API_KEY; doctor does not` and
+  `note 2 relations readable, 9 not: measurements on those will be skipped`. A
+  key the API rejects is still a `FAIL`, and the exit code is the plan's: 1
+  only when one of checks 1 to 6 fails. The quick start's comment for `doctor`
+  says what the three markers and the exit code mean. The key's line names
+  only commands that exist: `check` (T3.2) and `mcp` (T5.1) add themselves to
+  it when they ship, as the plan's sentence has them. Decided by the lead after
+  the walkthrough. The package smoke test runs the installed `doctor` without a
+  key, so it now takes `ok` and `note` lines and prints "none failing", the
+  line T1.3's A5 reads; `test/readme.test.ts` passes over `note` lines as it
+  does `ok` ones.
+- **Each failure outside the API is told for what it is.** `explainApiFailure`
+  ended every failure that did not come from the API in "no API key found. Set
+  ANTHROPIC_API_KEY ..." and the SDK's text in parentheses, which was right for
+  one of its three causes. The class now decides, never the SDK's wording
+  (0.123.0): a plain `Error` is the SDK finding no key, and says only "no API
+  key found." with where to put one, without the SDK's sentence, which names
+  ways to sign in dbtruth does not document; a `TypeError` is Node refusing to
+  build the request, a key with a character a header cannot carry (a curly
+  quote) or a bad `ANTHROPIC_BASE_URL`, and says "could not send a request to
+  the Anthropic API: <reason>"; the SDK's own `AnthropicError` that is not an
+  `APIError` is a reply that broke off while it streamed in (`terminated`,
+  `request ended without sending any chunks`), and says so with the SDK's
+  words and "Run again". Found in the walkthrough and while fixing it, decided
+  by the lead. `integration.test.ts` checks the no-key line has no SDK
+  sentence, `cli.test.ts` runs a key with a curly quote, and `model.test.ts`
+  ends a streamed reply before its first event.
+- **`context/` is written where the command runs.** `persist` joins
+  `context/` to the working directory, so from `packages/api` it lands in
+  `packages/api/context/`, whichever `.env` was read. The README's Monorepos
+  paragraph says so, and to run from the directory whose `context/` the agent
+  should read, usually the repository root; the nested-package test in
+  `integration.test.ts` checks where the files land. Not done: an option to
+  write `context/` elsewhere.
+- **A relation the catalog cannot size is still sampled across its whole
+  file.** The sample is sized from the row estimate, and with none it took the
+  plain `LIMIT`, which reads the oldest pages or the first partition: the bias
+  of "Every sample of a large table came from its oldest pages" (0.1.8),
+  reached by another door. The plan's reproduction (section 1, defects 1 and
+  2, Postgres 16): a 300,000-row table partitioned by year, its leaves
+  analyzed and its parent not, as autovacuum leaves it, where `SELECT * FROM
+  ev LIMIT 50000` covered 2024 only and `TABLESAMPLE SYSTEM` on the parent
+  2024 to 2026; and a table loaded since its last `ANALYZE`, `reltuples = -1`
+  and `relpages = 0` over 1,664 pages, where the `LIMIT` read ids 1 to 50,000
+  of 300,000. The new `sampling` database holds both, and the edge cases
+  below. On it 0.1.8 gave `ev` the years 2024 to 2024 and no `only_2026`, and
+  `fresh_big` batches 1 to 5 of 30 and no `introduced_late`, both sized -1.
+  Now `ev` is 300,000 rows from its leaves and `fresh_big` 279,812 from a
+  pilot over 1,637 pages, both are sampled with `TABLESAMPLE`, and every
+  year, batch and value is found, the same on Postgres 12, 16 and 18.
+  - `listRelations` reads each relation's pages: `relpages`, which the
+    `ANALYZE` that gave `reltuples` counted, or, where there is no estimate
+    and `relpages` is 0 as well, the file's size, `pg_relation_size` over
+    `block_size`. For a partitioned table it reads its leaves' `reltuples` and
+    pages the same way, from `pg_partition_tree`, every level deep. That is a
+    subquery in the listing rather than the plan's one more statement per
+    parent: the listing already visits every partitioned table, and the
+    leaves come back in the shape the rules take. The leaves are the tree's
+    ordinary tables, `relkind = 'r'`, without the plan's `isleaf` beside it:
+    only a partitioned table has partitions, so the two say the same. The
+    tree also lists the partitioned table itself, which an `ANALYZE` of the
+    whole database sizes on Postgres 16 and 18 (on 12 it stays 0); the
+    fixture's `events` is the test that its 300 rows are not counted twice,
+    and `nested`, partitioned two levels deep, that the leaves one level
+    further down are counted.
+  - A partition tree with a foreign table in it gets no leaves, and the
+    parent is sized and sampled by its own `reltuples`, as in 0.1.8. The plan
+    expected `TABLESAMPLE` on such a parent to fail and fall back to the
+    plain form. It does not fail: Postgres reads a foreign partition whole and
+    samples the rest, so a pilot there counts every remote row as a sampled
+    one. On the fixture's `mixed`, 1,000 rows a `file_fdw` program prints
+    beside 59,000 local rows never analyzed, the pilot read 38% of the local
+    pages, counted 24,518 rows, the 1,000 remote ones among them, and made
+    64,237; in review a 200,000-row remote partition beside a 300,000-row
+    local one made 2,953,127. Now `mixed` is -1, read with the plain form.
+  - `estimateRows` applies the plan's five rules in order. An estimate is
+    unknown when `reltuples` is -1 (Postgres 14 and later) or 0 over pages on
+    disk (12 and 13 before the first `ANALYZE`, and any version for a table
+    analyzed while empty and loaded since). The pilot, a count over
+    `TABLESAMPLE SYSTEM (min(100, 100 * pilotPages / pages)) REPEATABLE
+    (sampleSeed)`, goes through `db.query`, inside the budget; any failure
+    leaves the size -1 and the plain path as before. The function takes the
+    pilot as an argument, so the rules read in one place and are tested
+    without a database, and `extract()` hands it the statement. The pilot's
+    count is scaled by 100 / p: the plan's rows per page times the pages, with
+    the pages cancelled. A pilot's or an extrapolation's estimate is rounded
+    to whole rows. A database restored from a dump has no statistics until
+    autovacuum reaches it, so every table in it takes a pilot then: one count
+    over about `pilotPages` pages each.
+  - A partitioned table with no known leaf is piloted over its leaves' pages,
+    with the source `pilot`: rule 3 sends it to rule 4, and the number did
+    come from a sample. A known leaf with no pages has no rows per page to
+    lend: with only such leaves known, the parent is piloted too.
+  - The source travels with the number. `estimateSource` is set with the
+    estimate, and `profile()` keeps it only where the estimate stands: a
+    random sample, a plain scan that filled up under it, or statistics that
+    could not be taken. A plain scan that came back short counted the
+    relation, even when the count equals the estimate, as it does after a
+    pilot over a table of 100 pages or fewer, which read it all; one that
+    filled past a low estimate says "at least the sample size"; a 0 the
+    statistics could not confirm becomes -1. Every small table is counted, so
+    it has none. No `count` source was added: no source already says "not an
+    estimate", and the plan gives three values. The per-table file adds
+    `(estimated from a sample)` for `pilot`.
+  - The dead-table measurement of a large table with no date column takes its
+    count from the estimate, and its label named `pg_class.reltuples`, which
+    the leaves or a pilot may now stand in for. No statement reruns an
+    estimate, so the label names where to look it up: `pg_class.reltuples`,
+    as before, the leaf partitions' `pg_class.reltuples`, or a pilot sample;
+    and says when there is no estimate.
+  - `DESCRIBED_RELATIONS` leaves out the temporary schemas by catalog facts,
+    not a `LIKE` on the name: other sessions' by `pg_is_other_temp_schema`,
+    this session's own by `pg_my_temp_schema()`. Other sessions' tables were
+    listed, and every read of them failed. dbtruth creates no temporary table,
+    but behind a pooler that shares server sessions its session can hold
+    another client's. `pg_toast_temp_*` was already left out by `pg_toast%`.
+    `doctor` counts over the same condition.
+  - The test first asserts, from the catalog, that both estimates are unknown
+    on the server it runs on: an index built after the load, or an `ANALYZE`
+    of the whole database, would fill them in, and it would prove nothing.
+    Postgres 12 reports 0 for both, 16 and 18 report -1.
+  - The fixture's `events` is now the sum of its two leaves, 300, the number
+    its own `ANALYZE` gave, and the plain scan counts it as before.
+  - The listing opens a file only where the catalog has no estimate.
+    `pg_relation_size` takes the lock a `SELECT` takes, and called on every
+    relation it let one table under an exclusive lock, by a `VACUUM FULL` or a
+    long migration, hold the whole listing until the statement timeout, and
+    the run stopped with `could not list relations`. An analyzed table, and a
+    partitioned table itself, are now sized from the catalog alone, and under
+    such a lock lose only their statistics, as any read of them does; the
+    test holds `analyzed` and `ev` under one.
+  - Not done: analyzing anything, which is a write; and a lock timeout for
+    the listing, which would be a new number. The listing still waits on a
+    table under an exclusive lock that has no estimate, whose file it must
+    read; on a partition under one, since `pg_partition_tree` takes the
+    `SELECT` lock on every member of the tree; and on a table a view reads,
+    through `pg_get_viewdef`, as it did before. A large partitioned table with
+    a foreign partition and an estimate of its own, from an `ANALYZE` of the
+    parent on 14 and later, is still sampled with `TABLESAMPLE`, which reads
+    that partition whole, as in 0.1.8.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

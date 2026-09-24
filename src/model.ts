@@ -145,7 +145,9 @@ function extractJson(reply: string): string | undefined {
   return start >= 0 && end > start ? reply.slice(start, end + 1) : undefined;
 }
 
-const KEY_HELP = "Set ANTHROPIC_API_KEY in the environment or in a .env file in this directory; keys are created at console.anthropic.com.";
+const KEY_HELP =
+  "Set ANTHROPIC_API_KEY in the environment or in a .env file in this directory or its parents up to the repository root; " +
+  "keys are created at console.anthropic.com.";
 
 /** One sentence a person can act on, from whatever the SDK threw before or during a request. */
 function explainApiFailure(e: unknown, model: string): string {
@@ -156,8 +158,12 @@ function explainApiFailure(e: unknown, model: string): string {
   if (e instanceof Anthropic.BadRequestError) return `the Anthropic API rejected the request (400): ${e.message}`;
   if (e instanceof Anthropic.APIConnectionError) return `could not reach the Anthropic API: ${e.message}`;
   if (e instanceof Anthropic.APIError) return `the Anthropic API returned ${e.status}: ${e.message}`;
-  // Anything else thrown before a request was made: the client could not resolve credentials.
-  return `no API key found. ${KEY_HELP} (${e instanceof Error ? e.message : String(e)})`;
+  // Anything else did not come from the API. The SDK's own error is a reply it could not read, one that broke off.
+  if (e instanceof Anthropic.AnthropicError) return `the Anthropic API's reply broke off: ${e.message}. Run again.`;
+  // Node refuses a request it cannot build: a key a header cannot carry, such as one with a curly quote, or a bad base URL.
+  if (e instanceof TypeError) return `could not send a request to the Anthropic API: ${e.message}. Check the key in ANTHROPIC_API_KEY.`;
+  // With no key the SDK throws a plain Error, in words that name ways to sign in dbtruth does not use.
+  return `no API key found. ${KEY_HELP}`;
 }
 
 function sdkTransport(client: Anthropic, model: string, maxOutputTokens: number): Transport {

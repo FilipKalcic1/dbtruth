@@ -138,3 +138,12 @@ test("a file that cannot be written is reported, and the others are still writte
   assert.equal(r.failed.length, 1);
   assert.equal(r.failed[0]!.path, "context/tables/orders.md");
 });
+
+test("a size estimated from a sample says so; one from the catalog, from the partitions or counted does not", () => {
+  const pilot = facts("fresh_big", { rowEstimate: 279_815, estimateSource: "pilot", primaryKey: null });
+  assert.equal(tableFile(nothing, pilot), "# fresh_big\n\ntable, ~279815 rows (estimated from a sample), primary key: none\n");
+  for (const estimateSource of ["catalog", "partitions", undefined] as const) {
+    const t = facts("t", { rowEstimate: 300_000, ...(estimateSource ? { estimateSource } : {}) });
+    assert.equal(tableFile(nothing, t), "# t\n\ntable, ~300000 rows, primary key: id\n", String(estimateSource));
+  }
+});

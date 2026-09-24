@@ -1,9 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { connect, readDotEnv, resolveDatabaseUrl, sampleSource } from "../src/safety.js";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { connect, findDotEnv, readDotEnv, resolveDatabaseUrl, sampleSource } from "../src/safety.js";
 import { config } from "../src/config.js";
+import { writeUnreadable } from "./unreadable.js";
 
 export const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
+
+/** A temporary directory, by its real path, holding the given files; a null content makes a directory. */
+function tree(entries: Record<string, string | null>): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "dbtruth-env-")));
+  for (const [path, content] of Object.entries(entries)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    if (content === null) mkdirSync(join(root, path));
+    else writeFileSync(join(root, path), content);
+  }
+  return root;
+}
 
 test("a large table is sampled at the share of pages that holds the sample size, and the LIMIT only caps a stale estimate", () => {
   const big = { schema: "public", name: "big", rowEstimate: 1_000_000 };
@@ -119,4 +134,75 @@ test("DATABASE_URL resolves from flag, then env; .env is read as key=value pairs
   assert.deepEqual(readDotEnv(dir), { OTHER: "1", DATABASE_URL: "postgres://from-dotenv", ANTHROPIC_API_KEY: "sk-test" });
   assert.deepEqual(readDotEnv(tmpdir()), {});
   assert.equal(resolveDatabaseUrl(undefined, { ...readDotEnv(dir), DATABASE_URL: "" }), undefined, "an empty environment value wins over .env, meaning unset");
+});
+
+test("from a nested package, the .env at the repository root is found", () => {
+  const root = tree({ ".git": null, ".env": "DATABASE_URL=postgres://root\n", "packages/api": null });
+  const api = join(root, "packages", "api");
+  assert.deepEqual(findDotEnv(api), {
+    path: join(root, ".env"),
+    values: { DATABASE_URL: "postgres://root" },
+    searched: [{ dir: api }, { dir: join(root, "packages") }, { dir: root }],
+  });
+});
+
+test("the nearest .env wins over one further up, and the two are never merged", () => {
+  const root = tree({
+    ".git": null,
+    ".env": "DATABASE_URL=postgres://root\nANTHROPIC_MODEL=from-root\n",
+    "packages/api/.env": "DATABASE_URL=postgres://api\n",
+    "packages/api/src": null,
+  });
+  const api = join(root, "packages", "api");
+  // From below the package, so the file that wins is one the walk reaches, not one in the start directory.
+  const src = join(api, "src");
+  assert.deepEqual(findDotEnv(src), { path: join(api, ".env"), values: { DATABASE_URL: "postgres://api" }, searched: [{ dir: src }, { dir: api }] });
+});
+
+test("outside a repository only the start directory is searched, and a .env above it is ignored", () => {
+  // The temporary directory is in no repository, so the walk reaches the filesystem root ("/", or the drive root on
+  // Windows) to learn so, and ends there.
+  const parent = tree({ ".env": "DATABASE_URL=postgres://parent\n", child: null });
+  const child = join(parent, "child");
+  assert.deepEqual(findDotEnv(child), { values: {}, searched: [{ dir: child }] });
+});
+
+test("a .git file, as in a worktree or a submodule, marks the repository root", () => {
+  const outer = tree({ ".git": null, ".env": "DATABASE_URL=postgres://outer\n", "sub/.git": "gitdir: ../.git/modules/sub\n", "sub/packages/api": null });
+  const sub = join(outer, "sub");
+  const api = join(sub, "packages", "api");
+  assert.deepEqual(findDotEnv(api), { values: {}, searched: [{ dir: api }, { dir: join(sub, "packages") }, { dir: sub }] }, "the outer repository's .env is not read");
+});
+
+test("a .env that exists but cannot be read is listed with its error, and the search goes on", () => {
+  const root = tree({ ".git": null, ".env": "DATABASE_URL=postgres://root\n", "packages/api": null });
+  const api = join(root, "packages", "api");
+  writeUnreadable(join(api, ".env"), "DATABASE_URL=postgres://api\n");
+  const found = findDotEnv(api);
+  assert.equal(found.path, join(root, ".env"));
+  assert.deepEqual(found.values, { DATABASE_URL: "postgres://root" });
+  assert.deepEqual(found.searched.map((s) => s.dir), [api, join(root, "packages"), root]);
+  assert.match(found.searched[0]!.error ?? "", /^(EACCES|EPERM): /, "the reason, as the system gives it");
+  assert.deepEqual(found.searched.slice(1).map((s) => s.error), [undefined, undefined]);
+});
+
+test("a directory named .env, such as a Python virtualenv, is passed over without a word", () => {
+  const root = tree({ ".git": null, ".env": "DATABASE_URL=postgres://root\n", "packages/api/.env/bin": null });
+  const api = join(root, "packages", "api");
+  assert.deepEqual(findDotEnv(api), { path: join(root, ".env"), values: { DATABASE_URL: "postgres://root" }, searched: [{ dir: api }, { dir: join(root, "packages") }, { dir: root }] });
+});
+
+test("a symlinked working directory is walked from its real path", () => {
+  const root = tree({ ".git": null, ".env": "DATABASE_URL=postgres://root\n", "packages/api": null });
+  const link = join(tree({}), "api");
+  // A junction needs no administrator rights on Windows; other systems ignore the type and make a symlink.
+  symlinkSync(join(root, "packages", "api"), link, "junction");
+  assert.equal(findDotEnv(link).path, join(root, ".env"), "walked from the link itself, the search would stop at the link");
+});
+
+test("a .env with CRLF line endings, export prefixes and quotes is read, and an empty DATABASE_URL= means unset", () => {
+  const root = tree({ ".git": null, ".env": "# settings\r\nexport DATABASE_URL=\"postgres://root\"\r\nANTHROPIC_MODEL='claude-x'\r\n" });
+  assert.deepEqual(findDotEnv(root).values, { DATABASE_URL: "postgres://root", ANTHROPIC_MODEL: "claude-x" });
+  writeFileSync(join(root, ".env"), "DATABASE_URL=\r\n");
+  assert.equal(resolveDatabaseUrl(undefined, findDotEnv(root).values), undefined);
 });

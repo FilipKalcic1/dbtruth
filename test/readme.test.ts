@@ -1,0 +1,68 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readEnvFile } from "../src/safety.js";
+
+const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const sources = readdirSync(new URL("../src/", import.meta.url))
+  .filter((f) => f.endsWith(".ts"))
+  .map((f) => read(`src/${f}`));
+
+// A string or template literal, its text captured. A template nested in a placeholder ends the capture at its backtick,
+// which keeps the words before it.
+const LITERAL = String.raw`(?:\x60((?:[^\x60\\]|\\.)*)\x60|"((?:[^"\\]|\\.)*)")`;
+
+/**
+ * The ways src/ hands a message to the user, each followed by the literal that holds its words: thrown (new Error),
+ * printed (err), warned (warn), a connection failure's cause (because), a sentence a function returns for its
+ * caller to throw or print (return), and the note on what was dropped to fit the model's input (reduced:).
+ */
+const WAYS = ["Error", "err", "warn", "because", "return", "reduced"];
+const MESSAGE = new RegExp(String.raw`\b(${WAYS.join("|")})(?:\?\.)?[(:\s]\s*${LITERAL}`, "g");
+
+/** A placeholder, or the start of one that a nested template cut short. */
+const PLACEHOLDER = /\$\{[^}]*\}?/;
+
+/** What a run that goes well prints: doctor's ok and note lines, and the full run's progress. Not errors, so no rows. */
+const REPORT = /^(ok |note |reading settings from |Sending to |contextualize: |verify: |write: |tokens: )/;
+
+/** Printed as part of a longer line, or as one of a list of lines, where MESSAGE cannot see them. */
+const UNSEEN = ["no database URL: DATABASE_URL is not in the environment or in", "not examined"];
+
+test("every error the CLI can print has a row in the README's troubleshooting table", () => {
+  const section = /^## Troubleshooting$([\s\S]*?)^## /m.exec(read("README.md"))?.[1] ?? "";
+  // The messages as the table shows them: the code spans in the first cell of each row.
+  const shown = [...section.matchAll(/^\| (.+?) \| /gm)].flatMap((row) => [...row[1]!.matchAll(/\x60([^\x60]+)\x60/g)].map((span) => span[1]!));
+  const ways = new Set<string>();
+  for (const m of sources.flatMap((source) => [...source.matchAll(MESSAGE)])) {
+    const literal = m[2] ?? m[3]!;
+    const pieces = literal.split(PLACEHOLDER);
+    // A literal without two words in a row is punctuation, a prefix such as FAIL, or SQL.
+    if (REPORT.test(literal) || !pieces.some((piece) => /[A-Za-z] [a-z]/.test(piece))) continue;
+    ways.add(m[1]!);
+    // The whole message, each placeholder standing for any value, so words shared with another row do not count. A
+    // cause is printed after "could not connect to the database: ", and the read-only warning after "WARNING: ".
+    const shape = pieces.map((piece) => piece.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+    const printed = new RegExp(m[1] === "because" ? `${shape}$` : `^(?:WARNING: )?${shape}$`);
+    assert.ok(shown.some((span) => printed.test(span)), `no troubleshooting row for "${literal}"`);
+  }
+  // A pattern that stopped matching one of the ways would let every new message of that way slip past.
+  assert.deepEqual(ways, new Set(WAYS));
+  for (const words of UNSEEN) {
+    assert.ok(sources.some((source) => source.includes(words)), `"${words}" is no longer in src/`);
+    assert.ok(shown.some((span) => span.includes(words)), `no troubleshooting row for "${words}"`);
+  }
+});
+
+test("the quick start's .env, copied as shown, is read as its two settings, each value alone", () => {
+  const example = /^## Quick start$[\s\S]*?^```\r?\n([\s\S]*?)^```/m.exec(read("README.md"))?.[1] ?? "";
+  const file = join(mkdtempSync(join(tmpdir(), "dbtruth-readme-")), ".env");
+  writeFileSync(file, example);
+  const settings = readEnvFile(file);
+  // A URL, a key, a model id and a number hold no spaces, so a value read with one has taken in the rest of its line,
+  // such as a comment, which dbtruth keeps as part of the value.
+  for (const [name, value] of Object.entries(settings)) assert.doesNotMatch(value, /\s/, `${name} is read as "${value}"`);
+  assert.deepEqual(Object.keys(settings), ["DATABASE_URL", "ANTHROPIC_API_KEY"]);
+});

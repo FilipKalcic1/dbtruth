@@ -1,23 +1,26 @@
 #!/usr/bin/env node
-// cli.ts: orchestrates one run, in order. Nothing else.
+// cli.ts: orchestrates one run, in order, and hands `doctor` to doctor.ts. Nothing else.
 
-import { Command } from "commander";
-import { realpathSync } from "node:fs";
+import { Command, type OptionValues } from "commander";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Overrides } from "./config.js";
 import { contextualize } from "./contextualize.js";
+import { doctor } from "./doctor.js";
 import { extract, fitToContext } from "./extract.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
-import { connect, readDotEnv, resolveDatabaseUrl } from "./safety.js";
+import { connect, readSettings, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
-import { assemble, describeKinds, EXIT_FAILURE, exitCode } from "./verdict.js";
+import { assemble, describeKinds, EXIT_FAILURE, EXIT_OK, exitCode } from "./verdict.js";
 import { verify } from "./verify.js";
 import { OUTPUT_DIR, persist, write } from "./write.js";
 
 export type RunOptions = {
   url?: string;
+  /** The settings file to read instead of looking for .env, relative to cwd. */
+  dotenv?: string;
   samples: boolean;
   reveal: string[];
   json: boolean;
@@ -34,12 +37,19 @@ export type RunDeps = {
 };
 
 export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number> {
-  // 1. DATABASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL and DBTRUTH_* from the environment, else from .env in cwd.
-  const env = { ...readDotEnv(opts.cwd), ...opts.env };
+  // 1. DATABASE_URL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL and DBTRUTH_* from the environment, else from the settings
+  //    file: --dotenv, or the .env nearest to cwd up to the repository root.
+  const settings = readSettings(opts.cwd, opts.dotenv, opts.env, opts.err);
+  if (typeof settings === "string") {
+    opts.err(settings);
+    return EXIT_FAILURE;
+  }
+  if (settings.elsewhere) opts.err(`reading settings from ${settings.file}`);
+  const env = settings.env;
   const cfg = resolveConfig(env, opts.flags);
   const url = resolveDatabaseUrl(opts.url, env);
   if (!url) {
-    opts.err("no database URL: set DATABASE_URL, put it in .env, or pass --url");
+    for (const line of noDatabaseUrl(settings.file, settings.searched)) opts.err(line);
     return EXIT_FAILURE;
   }
 
@@ -55,7 +65,7 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
   await ai.preflight();
 
   // 2. Connect through safety, prove read-only.
-  const db = await connect(url, { ...cfg, warn: opts.err });
+  const db = await connect(url, { ...cfg, warn: (message) => opts.err(`WARNING: ${message}`) });
   try {
     // 3. Extract, then trim to what the model can take.
     const raw = await extract(db, cfg, { samples: opts.samples, reveal: new Set(opts.reveal) });
@@ -103,6 +113,19 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
   }
 }
 
+/** Where DATABASE_URL was looked for, then one way to set it per line. */
+function noDatabaseUrl(file: string | undefined, searched: { dir: string }[]): string[] {
+  return [
+    `no database URL: DATABASE_URL is not in the environment or in ${file ?? "a .env"}`,
+    ...searched.map(({ dir }) => `  searched ${dir}`),
+    "set it to postgres://user:password@host:5432/dbname in one of these ways:",
+    `  in ${file ?? "a .env in one of those directories"}`,
+    "  in the environment",
+    "  with --url",
+    "  in a file elsewhere, read with --dotenv <path>",
+  ];
+}
+
 function summary(v: Verified, fileCount: number, spentMs: number, modelMs: { contextualize: number; write: number }): string[] {
   const count = (prefix: string, status: string) => Object.entries(v.verdicts).filter(([id, x]) => id.startsWith(prefix) && x.status === status).length;
   const rel = (s: string) => count("relationship:", s);
@@ -140,39 +163,67 @@ function emptyClaims(v: Verified): string[] {
 }
 
 export async function main(argv: string[]): Promise<number> {
+  // package.json is one level up from both src/ under tsx and dist/ once installed.
+  const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  const err = (line: string) => process.stderr.write(line + "\n");
+  // Set by the action commander runs; --help and --version exit before any does.
+  let code = EXIT_FAILURE;
   const program = new Command()
     .name("dbtruth")
     .description("Verified database context for AI coding agents. Read-only, Postgres.")
+    .version(version, "-v, --version")
+    // Options after a subcommand's name are its own, so doctor's --url is not taken for the full run's.
+    .enablePositionalOptions()
     .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
+    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root")
     .option("--reveal <table.column>", "show one hidden column's values to the model (repeatable)", collect)
     .option("--no-samples", "send schema and statistics only, no sample rows")
     .option("--json", "print the Verified object as JSON to stdout")
     .option(`--${EFFORT_FLAG} <level>`, `auto, low, medium, high, xhigh or max (env ${EFFORT_ENV})`);
   for (const o of overridable) program.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
-  program.parse(argv);
-  const o = program.opts();
+  program.action(async (o) => {
+    code = await run({
+      url: o.url,
+      dotenv: o.dotenv,
+      samples: o.samples !== false,
+      reveal: o.reveal ?? [],
+      json: Boolean(o.json),
+      flags: overrides(o),
+      cwd: process.cwd(),
+      env: process.env,
+      out: (line) => process.stdout.write(line + "\n"),
+      err,
+    });
+  });
+  program
+    .command("doctor")
+    .description("check what a full run needs, one line per check, without spending a token")
+    .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
+    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root")
+    .action(async (own) => {
+      // Options before `doctor` are the program's, and would otherwise be dropped; its own, after its name, win.
+      const o = { ...program.opts(), ...own };
+      const ready = await doctor({ url: o.url, dotenv: o.dotenv, flags: overrides(o), cwd: process.cwd(), env: process.env, node: process.version, err });
+      code = ready ? EXIT_OK : EXIT_FAILURE;
+    });
+  try {
+    await program.parseAsync(argv);
+  } catch (e) {
+    err(`dbtruth: ${e instanceof Error ? e.message : String(e)}`);
+    return EXIT_FAILURE;
+  }
+  return code;
+}
+
+/** The tunables given as flags, keyed as resolveConfig takes them. */
+function overrides(o: OptionValues): Overrides {
   const flags: Overrides = {};
   for (const item of overridable) {
     const v = o[camel(item.flag)];
     if (v !== undefined) flags[item.path] = String(v);
   }
   if (o[camel(EFFORT_FLAG)] !== undefined) flags.modelEffort = String(o[camel(EFFORT_FLAG)]);
-  try {
-    return await run({
-      url: o.url,
-      samples: o.samples !== false,
-      reveal: o.reveal ?? [],
-      json: Boolean(o.json),
-      flags,
-      cwd: process.cwd(),
-      env: process.env,
-      out: (line) => process.stdout.write(line + "\n"),
-      err: (line) => process.stderr.write(line + "\n"),
-    });
-  } catch (e) {
-    process.stderr.write(`dbtruth: ${e instanceof Error ? e.message : String(e)}\n`);
-    return EXIT_FAILURE;
-  }
+  return flags;
 }
 
 function seconds(ms: number): string {

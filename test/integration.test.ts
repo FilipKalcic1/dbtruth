@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { run } from "../src/cli.js";
+import { run, type RunOptions } from "../src/cli.js";
 import type { Transport } from "../src/model.js";
 import type { Extract, Verified } from "../src/schemas.js";
+import { writeUnreadable } from "./unreadable.js";
 
 const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
 const TSX = import.meta.resolve("tsx");
@@ -228,6 +229,7 @@ test("the CLI exits 1 with a clear message when no API key can be resolved, befo
   assert.equal(result.status, 1);
   assert.match(result.stderr, /no API key found/);
   assert.match(result.stderr, /ANTHROPIC_API_KEY/);
+  assert.doesNotMatch(result.stderr, /Could not resolve authentication method/, "the SDK's own sentence, which names ways to sign in dbtruth does not use");
   assert.doesNotMatch(result.stderr, /could not connect/, "the database must not be touched before the API check");
   assert.doesNotMatch(result.stdout, /Sending to/);
 });
@@ -240,6 +242,118 @@ test("the CLI exits 1 when no URL is configured", () => {
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /no database URL/);
+});
+
+/** A temporary repository, by its real path, whose root .env holds the given lines, with an empty packages/api to run from. */
+function repository(dotEnv: string): { root: string; api: string } {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "dbtruth-repo-")));
+  mkdirSync(join(root, ".git"));
+  writeFileSync(join(root, ".env"), dotEnv);
+  const api = join(root, "packages", "api");
+  mkdirSync(api, { recursive: true });
+  return { root, api };
+}
+
+// A URL nothing listens on: a source that must lose holds it, so a wrong order fails with "could not connect".
+const UNREACHABLE = "postgres://nobody:pw@localhost:1/none";
+
+test("from a nested package, the root .env is used and named on stderr before the disclosure line, never its values", async () => {
+  const { root, api } = repository(`DATABASE_URL=${FIXTURE_URL}\nANTHROPIC_API_KEY=sk-canary-pii\n`);
+  const out: string[] = [];
+  const err: string[] = [];
+  const code = await run(
+    { samples: true, reveal: [], json: true, flags: {}, cwd: api, env: {}, out: (l) => out.push(l), err: (l) => err.push(l) },
+    { transport: fakeModel().transport },
+  );
+  assert.equal(code, 2, "the fixture's broken join, so the URL came from the root .env");
+  assert.equal(err[0], `reading settings from ${join("..", "..", ".env")}`, "relative to the working directory");
+  assert.match(err[1]!, /^Sending to /);
+  // context/ goes where the command runs, as the README's Monorepos paragraph says, not beside the .env it read.
+  assert.ok(existsSync(join(api, "context", "README.md")), "context/ in the package");
+  assert.ok(!existsSync(join(root, "context")), "no context/ at the root");
+  for (const line of [...out, ...err]) {
+    assert.doesNotMatch(line, CANARY);
+    assert.ok(!line.includes(FIXTURE_URL), line);
+  }
+});
+
+test("precedence stays: the environment beats the .env found, and --url beats both; an empty variable still means unset", async () => {
+  const { api } = repository(`DATABASE_URL=${UNREACHABLE}\n`);
+  const base = { samples: true, reveal: [], json: false, flags: {}, cwd: api, out: () => {}, err: () => {} };
+  assert.equal(await run({ ...base, env: { DATABASE_URL: FIXTURE_URL } }, { transport: fakeModel().transport }), 2);
+  assert.equal(await run({ ...base, url: FIXTURE_URL, env: { DATABASE_URL: UNREACHABLE } }, { transport: fakeModel().transport }), 2);
+  assert.equal(await run({ ...base, env: { DATABASE_URL: "" } }, { transport: fakeModel().transport }), 1, "no database URL: the empty value hides the .env's");
+});
+
+test("--dotenv reads that file only, relative to the working directory", async () => {
+  const { root, api } = repository(`DATABASE_URL=${UNREACHABLE}\nANTHROPIC_MODEL=root-model\n`);
+  mkdirSync(join(root, "settings"));
+  writeFileSync(join(root, "settings", "fixture.env"), `DATABASE_URL=${FIXTURE_URL}\n`);
+  const err: string[] = [];
+  const code = await run(
+    { dotenv: "../../settings/fixture.env", samples: true, reveal: [], json: false, flags: {}, cwd: api, env: {}, out: () => {}, err: (l) => err.push(l) },
+    { transport: fakeModel().transport },
+  );
+  assert.equal(code, 2, "the root .env, which is not read, holds a URL nothing listens on");
+  assert.equal(err[0], `reading settings from ${join("..", "..", "settings", "fixture.env")}`);
+  assert.ok(!err.some((l) => l.includes("root-model")), "nor is any other setting of the root .env");
+});
+
+test("no value from a .env reaches stdout or stderr on any path that reads one, the errors included", async () => {
+  // canary-pii in the password, the key and a variable dbtruth does not read, and where the connection fails, in the
+  // user, the host and the database too: a failed connection is told in dbtruth's words, never the driver's.
+  const secrets = "ANTHROPIC_API_KEY=sk-canary-pii\nSESSION_SECRET=canary-pii\n";
+  const { root, api } = repository(`DATABASE_URL=${FIXTURE_URL}\n${secrets}`);
+  writeUnreadable(join(api, ".env"), secrets);
+  writeFileSync(join(root, "no-url.env"), secrets);
+  writeFileSync(join(root, "refused.env"), `DATABASE_URL=postgres://canary-pii:canary-pii@localhost:1/canary-pii\n${secrets}`);
+  writeFileSync(join(root, "not-found.env"), `DATABASE_URL=postgres://canary-pii:canary-pii@canary-pii.invalid/canary-pii\n${secrets}`);
+  // A repository inside this one, with no .env of its own: the walk stops at its root, below the canary .env.
+  const lib = join(root, "vendor", "lib");
+  mkdirSync(join(lib, ".git"), { recursive: true });
+
+  // Every line a run prints, on stdout or stderr, and the message main() prints when it throws.
+  const printed = async (opts: Partial<RunOptions>): Promise<{ code?: number; lines: string[] }> => {
+    const lines: string[] = [];
+    const sink = (line: string) => lines.push(line);
+    try {
+      const code = await run({ samples: true, reveal: [], json: true, flags: {}, cwd: api, env: {}, out: sink, err: sink, ...opts }, { transport: fakeModel().transport });
+      return { code, lines };
+    } catch (e) {
+      return { lines: [...lines, String(e)] };
+    }
+  };
+  const runs = {
+    fullRun: await printed({}),
+    urlHidden: await printed({ env: { DATABASE_URL: "" } }),
+    nothingFound: await printed({ cwd: lib }),
+    namedWithoutUrl: await printed({ dotenv: "../../no-url.env" }),
+    namedMissing: await printed({ dotenv: "nope.env" }),
+    namedUnreadable: await printed({ dotenv: "." }),
+    refused: await printed({ dotenv: "../../refused.env" }),
+    notFound: await printed({ dotenv: "../../not-found.env" }),
+  };
+
+  // Each path was taken.
+  const dotEnv = join("..", "..", ".env");
+  assert.equal(runs.fullRun.code, 2);
+  assert.match(runs.fullRun.lines[0]!, /^could not read \.env \((EACCES|EPERM): .+\)$/);
+  assert.equal(runs.fullRun.lines[1], `reading settings from ${dotEnv}`);
+  assert.ok(runs.fullRun.lines.includes("dbtruth: fixture"), "the database name, printed on purpose");
+  assert.equal(runs.urlHidden.code, 1);
+  assert.ok(runs.urlHidden.lines.includes(`no database URL: DATABASE_URL is not in the environment or in ${dotEnv}`));
+  assert.equal(runs.nothingFound.code, 1);
+  assert.equal(runs.nothingFound.lines[0], "no database URL: DATABASE_URL is not in the environment or in a .env");
+  assert.equal(runs.namedWithoutUrl.code, 1);
+  assert.equal(runs.namedWithoutUrl.lines[0], `reading settings from ${join("..", "..", "no-url.env")}`);
+  assert.deepEqual(runs.namedMissing, { code: 1, lines: ["--dotenv nope.env: no such file"] });
+  assert.match(runs.namedUnreadable.lines.at(-1)!, /EISDIR/);
+  assert.match(runs.refused.lines.at(-1)!, /could not connect to the database: nothing is listening at the host and port in the URL; /);
+  assert.match(runs.notFound.lines.at(-1)!, /could not connect to the database: the host in the URL was not found; /);
+
+  for (const [name, { lines }] of Object.entries(runs)) {
+    for (const line of lines) assert.doesNotMatch(line, CANARY, `${name} printed a value from a .env`);
+  }
 });
 
 test("a clean database, offline: declared keys confirmed, nothing broken, fits in context, exit 0", async () => {
