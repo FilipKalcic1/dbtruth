@@ -2179,3 +2179,208 @@ of each lost point, in the format of section 4.7 of the plan.
   194 tests, 192 pass, the 2 live tests skipped, and the package smoke test
   passes; `npm run acceptance -- --task T3.2` prints `T3.2: 100/100`, every
   check passing.
+
+## T6.1 Team section and waitlist in the README
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 and T6.1 of the plan, with section 2 (the tiers),
+  T4.1, T5.1, T5.2, T6.2, T6.3 and T7.1, which the section's sentences lean
+  on; README.md, NOTES.md (0.2.0 and 0.3.0), CHANGELOG.md, the earlier
+  iterations here, `acceptance/`, `test/readme.test.ts` and the commands in
+  `src/cli.ts`.
+- Tests first, two in `test/readme.test.ts`: "the Team tier section has a
+  price and a waitlist link, placeholders until a person sets them" (A1)
+  failed with `no Team tier section`; "the Team tier section names every
+  command, and those not built yet as coming" (A2) failed with `+ Set(0) {}`
+  against `check`, `dbtruth`, `doctor`, `init`, `mcp`. Both for the reason the
+  task describes: the README had no such section.
+- Built: the section "Team tier" in README.md, after "Keeping context true:
+  dbtruth check" and before "What it sends, and what it never does". The plan
+  puts it after a "CI" section, which T4.1 writes and which does not exist;
+  NOTES says so, and that T4.1 moves it. Four short paragraphs: the Team tier
+  is the Action on private repositories, coming, and what it will do there;
+  what stays free; that no database content passes through a server of ours,
+  with what the license check of T6.2 will send; the price, `PRICE_TBD` per
+  team per month, and `[Join the waitlist](WAITLIST_URL)`. No price, link or
+  date was made up.
+- The tests: A1 accepts the placeholders, or an amount and an `https` link,
+  so the person's edit needs no change to a test. A2 reads the built commands
+  from `.command("...")` in `src/cli.ts` and the full run, and the coming ones
+  from the Commands list's `# coming in` lines, and fails when the section
+  names another command, leaves one out, or names a coming one in a clause
+  without "coming". Checked by breaking a copy of the README before any
+  record (not the sabotage record): `init` without "the coming", a
+  `dashboard` code span, `mcp` named in the model sentence, a price without
+  an amount, a `#waitlist` link and the heading renamed each failed a test;
+  the README was restored byte for byte (`cmp`). One of them showed the first
+  version of the A2 test read the named commands with one pattern and the
+  clauses with a plain substring, so a clause holding `` `dbtruth init` ``
+  without "coming" passed; both now come from one pass over the clauses, and
+  that clause fails with ``... after `dbtruth init`" names init, which is not
+  built yet``.
+- A2 by hand, sentence by sentence (the manual item `A2-sentences`), each
+  against the plan and the code:
+  1. "The Team tier is the GitHub Action on private repositories": section 2,
+     the tier table.
+  2. "The Action is coming: on a pull request it will run `dbtruth check`
+     against the database the workflow gives it, write what moved into one
+     comment on the pull request, updated in place, and by default fail the
+     job on a regression or a stale item": T4.1 (P1, not built: the
+     `database-url` and `fail-on` inputs, `comment.sh`, A2), T3.2's table
+     (stale fails under `regression`), T3.3's comment body.
+  3. "These stay free: the CLI (`dbtruth`, `doctor`, `check`, and the coming
+     `init` and `mcp`); the skill, also coming, that tells an agent when to
+     read the context and measure a join; and the Action on public
+     repositories": section 2's Free row and T6.1's list; the three commands
+     `src/cli.ts` defines; T1.4 and T5.1 for `init` and `mcp`, coming in the
+     Commands list too; T5.2 and Appendix D for the skill; T6.2 (public
+     repositories never need a key). The plan's "free forever" is "stay
+     free" (NOTES).
+  4. "No database content passes through a server of ours, on either tier":
+     section 2's goal, T6.1, R3 and R9; a hosted service is out of scope.
+  5. "You bring your own model access: a full run calls the Anthropic API
+     with your key, and `check` needs no model at all": section 2;
+     `src/cli.ts` hands `ANTHROPIC_API_KEY` to the client of `src/model.ts`;
+     `src/check.ts` never imports `model.ts`, which `test/structure.test.ts`
+     pins.
+  6. "The Action will run `check` in your own CI job": T4.1, a composite
+     action in the user's workflow.
+  7. "On a private repository it will also check a license key, sending the
+     key and the repository's id and nothing else, and an outage of that
+     check will never fail the job": T6.2 (P2), its fail-open rule and A2.
+  8. "The Team tier will cost PRICE_TBD per team per month": section 2, "per
+     team per month, HUMAN decides".
+  9. "[Join the waitlist](WAITLIST_URL) to hear when it opens": T6.1's HUMAN
+     line and T6.3, step 3.
+  Nothing else is named: no dashboard, hosted service, SLA, support tier or
+  UI.
+- HUMAN, not done, and recorded as done nowhere: decide the price; make the
+  waitlist form (email only); replace `PRICE_TBD` and `WAITLIST_URL` in
+  README.md. README.md is in the package, so a release made before then shows
+  both placeholders on npm too.
+- Docs: README (the section), NOTES (the entry under 0.3.0: what, why, where
+  it sits and why, what is HUMAN, how it is tested, what is not done),
+  CHANGELOG (a line under 0.3.0). No `--help` change: no command or option
+  changed. `acceptance/checks.json`: A1 and A2 on the two tests, the same two
+  as tests, `verify`, the README's place, the NOTES entry, the CHANGELOG line,
+  and the structure and canary invariants; `acceptance/manual.json`:
+  `A2-sentences` with the check above, and the sabotage item, empty.
+- `npm run verify` exits 0: 196 tests, 194 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T6.1`
+  prints `T6.1: 80/100`, every check passing but the sabotage item.
+  `npm run acceptance` over every task: T0.1, T0.2, T1.1, T1.2, T1.3, T1.5,
+  T2.1, T3.1 and T3.2 still 100/100 with the README and NOTES changed.
+- Lost Tests (-20): `FAIL T6.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+### Iteration 2: 80/100
+- Four reviews gave seven findings. Each was checked against the plan, the
+  code and a run of the test's logic on changed copies of the README before
+  anything changed; all seven held. Two fixes were applied without the edits
+  they asked for in iteration 1 of this task (below).
+- Fixed, in the acceptance entries: A2 was scored twice, by the commands
+  test and by the manual item `A2-sentences`, so T6.1 had three acceptance
+  entries for two A-items and A2 weighed twice what A1 did; section 4.2
+  splits the 50 points evenly over the A-items. The test alone also passes a
+  broken A2 that names no command, such as a sentence promising a dashboard,
+  since it reads only code spans. The automated `A2` entry is gone, the test
+  stays scored as `commands` under tests, and the manual item is `A2`: every
+  sentence by hand, with the commands test named as the part a script judges.
+- Fixed, in the README: "These stay free" is "These stay free forever", as
+  T6.1's Build says. The plan made that promise, and "stay free" gave it no
+  term. Sentence 3 checked again against the Build's "what stays free
+  forever"; the rest of it is as iteration 1 records. NOTES no longer
+  explains the substitution.
+- Fixed, in `test/readme.test.ts`:
+  - The commands test took "coming" anywhere in the clause, so ``the CLI
+    (`dbtruth`, `doctor`, `check`, `init` and `mcp`) and the coming skill``
+    passed. It now reads "coming" only before the command in its clause and
+    asserts both ways, so a command built since and still called coming
+    fails too. Its title says so: "... and only those not built yet as
+    coming". NOTES drops its "Not caught" sentence and says the word marks
+    every command after it in its clause.
+  - A command counted only as a code span of one word, with or without
+    `dbtruth `, so `npx dbtruth mcp` and `dbtruth mcp --stdio`, the README's
+    own forms, went unseen. The span may now start with `npx ` and carry
+    options.
+  - The price took only a token holding a digit right before " per team per
+    month", so "20 EUR" and "20 €" failed a correct README after the HUMAN
+    edit. It takes any text on the line from the first digit on.
+  - Checked on changed copies of the README, each restored byte for byte
+    (`cmp`); not the sabotage record. The "coming skill" clause failed with
+    ``... `init` and `mcp`) and the coming skill" names init, which is not
+    built yet``; `npx dbtruth mcp` added to the CI sentence failed with
+    ``... names mcp, which is not built yet``, and so did `dbtruth mcp
+    --stdio`; "20 EUR per team per month" passed; "a fee per team per
+    month" failed the price test. "The Action is coming, and on a pull
+    request it will run `dbtruth check`" failed with ``... names check,
+    which is built``: correct English the positional rule refuses, which
+    NOTES now says.
+- Fixed, in NOTES: the sentence spliced in unwrapped, "It ends with the
+  price and a link to the waitlist.", is gone, since the HUMAN bullet names
+  both placeholders, and the paragraph is rewrapped. In CHANGELOG: the line
+  listed the skill as free without saying it is coming. It now says what a
+  team will pay for, what stays free forever and the promise on database
+  content, without the list, and the placeholders are there "for now", not
+  "until they are decided"; it still opens "README: a Team tier section."
+  for the docs check.
+- Kept as it was: iteration 1 of this task. The plan reviewer asked to
+  change its "(A2)" labels and remove its note on "stay free"; it records
+  what was done then, and this iteration records the change. The manual
+  item's evidence cites both iterations.
+- `npm run verify` exits 0: 196 tests, 194 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T6.1`
+  prints `T6.1: 80/100`, every check passing but the sabotage item.
+  `npm run acceptance` over every task: T0.1, T0.2, T1.1, T1.2, T1.3, T1.5,
+  T2.1, T3.1 and T3.2 still 100/100.
+- Lost Tests (-20): `FAIL T6.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Sabotage check of the task's core (section 4.5): the price and the
+  waitlist link (A1), and the commands the section names and calls coming,
+  the part of A2 a test judges. `README.md` and `test/readme.test.ts` were
+  copied outside the repository first, and `test/readme.test.ts` was run
+  after each break.
+- Sabotage: the section taken out whole, `README.md` as at `HEAD`; "the Team
+  tier section has a price and a waitlist link, placeholders until a person
+  sets them" failed with "no Team tier section", and "the Team tier section
+  names every command, and only those not built yet as coming" with "+
+  Set(0) {} - Set(5) { 'check', 'dbtruth', 'doctor', 'init', 'mcp' }".
+  Restored.
+- Sabotage: the price sentence, "The Team tier will cost PRICE_TBD per team
+  per month.", deleted; "the Team tier section has a price and a waitlist
+  link, placeholders until a person sets them" failed with "The input did
+  not match the regular expression
+  /(?:PRICE_TBD|\d[^\n]*?) per team per month/". Restored.
+- Sabotage: the waitlist link unlinked and its placeholder gone, "Join the
+  waitlist to hear when it opens."; the same test failed with "The input did
+  not match the regular expression
+  /\[[^\]]+\]\((?:WAITLIST_URL|https:\/\/[^)\s]+)\)/". Restored.
+- Sabotage: "the coming" dropped before `init` and `mcp`, so the CLI's list
+  gives them as built; "the Team tier section names every command, and only
+  those not built yet as coming" failed with ""the CLI (`dbtruth`,
+  `doctor`, `check`, `init` and `mcp`)" names init, which is not built yet
+  ... false !== true". Restored.
+- Sabotage: `check` dropped from the CLI's list in the sentence on what
+  stays free forever. Every test stayed green: the commands test gathered
+  the commands over the whole section, which names `check` three times
+  more, so a README that no longer said `check` stays free passed.
+  Strengthened "the Team tier section names every command, and only those
+  not built yet as coming": the sentence on what stays free forever must
+  name every command the section names, which the test already holds to
+  what `cli.ts` defines and the Commands list calls coming. NOTES.md says
+  so. Repeated; the test failed with ""free forever: the CLI (`dbtruth`,
+  `doctor`, and the coming `init` and `mcp`); the skill, also coming, that
+  tells an agent when to read the context and measure a join; and the
+  Action on public repositories" leaves out check". Restored.
+- Not broken: the sentences no test reads, among them the promise on
+  database content. A test of them would copy the prose; they were checked
+  by hand, sentence by sentence, for the manual item A2, as NOTES says.
+- `README.md` was restored from the copy each time and matched it byte for
+  byte (`cmp`), and `git diff HEAD -- README.md` printed byte for byte the
+  diff saved before. The changes left are the strengthened test and its
+  NOTES sentence.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  196 tests, 194 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T6.1` prints `T6.1: 100/100`, every
+  check passing. T1.5, whose checks run the same test file, is still
+  100/100.

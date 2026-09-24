@@ -66,3 +66,38 @@ test("the quick start's .env, copied as shown, is read as its two settings, each
   for (const [name, value] of Object.entries(settings)) assert.doesNotMatch(value, /\s/, `${name} is read as "${value}"`);
   assert.deepEqual(Object.keys(settings), ["DATABASE_URL", "ANTHROPIC_API_KEY"]);
 });
+
+test("the Team tier section has a price and a waitlist link, placeholders until a person sets them", () => {
+  const team = /^## Team tier$([\s\S]*?)^## /m.exec(read("README.md"))?.[1];
+  assert.ok(team, "no Team tier section");
+  // A person decides the price and makes the waitlist form (T6.1 in BUILD_PLAN.md), then replaces the placeholders.
+  assert.match(team, /(?:PRICE_TBD|\d[^\n]*?) per team per month/);
+  assert.match(team, /\[[^\]]+\]\((?:WAITLIST_URL|https:\/\/[^)\s]+)\)/);
+});
+
+test("the Team tier section names every command, and only those not built yet as coming", () => {
+  const readme = read("README.md");
+  const team = /^## Team tier$([\s\S]*?)^## /m.exec(readme)?.[1] ?? "";
+  const commands = /^## Commands$([\s\S]*?)^## /m.exec(readme)?.[1] ?? "";
+  // Built is what cli.ts defines, with the full run; coming is what the Commands list says is.
+  const built = ["dbtruth", ...[...read("src/cli.ts").matchAll(/\.command\("(\w+)"\)/g)].map((m) => m[1]!)];
+  const coming = [...commands.matchAll(/^npx dbtruth (\w+) +# coming in /gm)].map((m) => m[1]!);
+  const span = /`(?:npx )?(?:dbtruth )?([a-z]+)(?: [^`]*)?`/g;
+  const named = new Set<string>();
+  for (const clause of team.split(/[.;:]\s/)) {
+    // A command in a code span, alone or as the README writes it elsewhere (`npx dbtruth mcp`, with options), is called
+    // coming by that word before it in its clause, as in "the coming `init`".
+    for (const m of clause.matchAll(span)) {
+      const name = m[1]!;
+      named.add(name);
+      const notBuilt = coming.includes(name);
+      assert.equal(/\bcoming\b/.test(clause.slice(0, m.index)), notBuilt, `"${clause}" names ${name}, which is ${notBuilt ? "not built yet" : "built"}`);
+    }
+  }
+  assert.deepEqual(named, new Set([...built, ...coming]));
+  // Every command stays free forever (T6.1 in BUILD_PLAN.md), so the sentence that says so names each, even `check`,
+  // which other sentences name too.
+  const free = /free forever[^.]*/.exec(team)?.[0] ?? "";
+  const listed = [...free.matchAll(span)].map((m) => m[1]);
+  for (const name of named) assert.ok(listed.includes(name), `"${free}" leaves out ${name}`);
+});

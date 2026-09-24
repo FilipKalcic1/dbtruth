@@ -1093,6 +1093,47 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     review like code, and a claim the snapshot never measured fails a build
     only once a name it uses is gone, so any other break on it waits for the
     next full run.
+- **The README says what a team will pay for, with the price and the waitlist
+  left to a person.** The paid tier of the plan's section 2 is the GitHub
+  Action on private repositories. A section, "Team tier", says so before the
+  Action exists, so the line between free and paid is written down before
+  anyone depends on either side: what the Action will do there (the pull
+  request comment and the regression gate), what stays free forever (the
+  CLI, the skill, the Action on public repositories), and that no database
+  content passes through a server of ours, since users bring their own model
+  access and `check` needs none. The Action, `init`, `mcp` and the skill are
+  planned and not built, so each is called coming, as the Commands list calls
+  `init` and `mcp`, and nothing is named that the plan does not have. It also
+  says what the license check of T6.2 will send, the key and the repository's
+  id, and that an outage of it will not fail the job: that check is the one
+  call the paid tier adds, and the promise would be incomplete without it.
+  - **Where it sits.** The plan puts it after a "CI" section, which T4.1
+    writes with the Action and which does not exist yet. It sits after
+    "Keeping context true: dbtruth check", the nearest section, and T4.1
+    moves it after its CI section.
+  - **HUMAN, not done:** deciding the price, making the waitlist form (email
+    only), and replacing `PRICE_TBD` and `WAITLIST_URL` in the README with
+    them. Until then the section shows both placeholders, and nothing records
+    these as done.
+  - **Tested where a script can judge.** `test/readme.test.ts` fails when the
+    section is missing; when it has no price per team per month or no
+    waitlist link, a placeholder or, once a person sets them, an amount and an
+    `https` link, so that edit needs no change to the test; when it names a
+    command that `cli.ts` does not define and the Commands list does not mark
+    as coming, or leaves one out of the sentence on what stays free forever,
+    even `check`, which other sentences name too; and when a clause
+    names a command not built without "coming" before it, or a built one
+    after it, such as one built since and still called coming here. A command
+    is named in a code span, with or without `npx dbtruth` before it and
+    options after it. The word marks every command after it in its clause and
+    none before, so "`mcp` is coming" fails where "the coming `mcp`" passes.
+    The rest of "nothing promises a feature that is not built or planned",
+    the sentences about the Action, the skill and the license check, was
+    checked by hand against the plan, sentence by sentence (PROGRESS.md,
+    T6.1).
+  - Not done: a release number for what is coming. The Commands list gives
+    one for `init` and `mcp`, and the Action is versioned in its own
+    repository.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 
