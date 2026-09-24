@@ -8,7 +8,7 @@
 // go unverified.
 
 import type { Config } from "./config.js";
-import { DATATYPE_MISMATCH_STATES, q, qualified, querySampled, typeFamily, type Db, type QueryResult } from "./safety.js";
+import { DATATYPE_MISMATCH_STATES, isIntegerType, q, qualified, querySampled, typeFamily, type Db, type QueryResult } from "./safety.js";
 import { findTable, relationshipId, sqlString, suspicionId, type Claims, type Extract, type Measurement, type Relationship, type Suspicion, type Table } from "./schemas.js";
 
 const SECONDS_PER_DAY = 86_400;
@@ -52,9 +52,18 @@ async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimI
   const counts = `count(${col}) AS total, count(*) - count(${col}) AS nulls`;
   // With a condition, only the sampled rows whose column reads as the value, as text, the form the model saw values in.
   const rows = (source: string) => (when ? `(SELECT * FROM ${source} w WHERE w.${q(when.column)}::text = $1)` : source);
+  // Where the key is probed and both columns are integers, the orphans past its highest and past its lowest value are
+  // counted too: a value past either end matches nothing, and each end is one lookup in the key's index. The ends
+  // themselves never leave the database.
+  const integer = (t: Table, name: string) => t.columns.some((c) => c.name === name && isIntegerType(c.type));
+  const ends =
+    integer(from, r.from.column) && integer(to, r.to.column)
+      ? `, count(*) FILTER (WHERE ${col} > (SELECT max(t.${q(r.to.column)}) FROM ${qualified(to)} t)) AS orphans_above` +
+        `, count(*) FILTER (WHERE ${col} < (SELECT min(t.${q(r.to.column)}) FROM ${qualified(to)} t)) AS orphans_below`
+      : "";
   const sql = (source: string, cast: string) =>
     keyed && !cast
-      ? `SELECT ${counts}, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ${qualified(to)} t WHERE t.${q(r.to.column)} = ${col})) AS hits
+      ? `SELECT ${counts}, count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ${qualified(to)} t WHERE t.${q(r.to.column)} = ${col})) AS hits${ends}
   FROM ${rows(source)} f`
       : `SELECT ${counts}, count(t.v) AS hits
   FROM ${rows(source)} f LEFT JOIN (SELECT DISTINCT ${q(r.to.column)}${cast} AS v FROM ${qualified(to)}) t ON t.v = ${col}${cast}`;
@@ -62,11 +71,14 @@ async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimI
   // The statement run holds $1 and never the value; the query kept ends with a note that gives it, so a person can rerun it.
   const query = when ? `${statement}\n-- $1 = ${sqlString(when.equals)}` : statement;
   if (!result.ok) return skip(claimId, kind, result.message, query);
-  const total = Number(result.rows[0]?.total);
-  const hits = Number(result.rows[0]?.hits);
-  const nulls = Number(result.rows[0]?.nulls);
+  const row = result.rows[0];
+  const total = Number(row?.total);
+  const hits = Number(row?.hits);
+  const nulls = Number(row?.nulls);
   if (total === 0) return skipEmpty(claimId, kind, EMPTY_SOURCE, query, { total, nulls });
-  return { claimId, kind, query, numbers: { total, hits, orphans: total - hits, hit: hits / total, nulls } };
+  // Only where the statement counted them. The other orphans lie inside the key's range, and are not a number of their own.
+  const split: Record<string, number> = row && "orphans_above" in row ? { orphansAbove: Number(row.orphans_above), orphansBelow: Number(row.orphans_below) } : {};
+  return { claimId, kind, query, numbers: { total, hits, orphans: total - hits, hit: hits / total, nulls, ...split } };
 }
 
 // ---------- suspicions ----------

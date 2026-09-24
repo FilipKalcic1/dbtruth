@@ -9,7 +9,7 @@ import { config } from "../src/config.js";
 import { connect, type Db, type Row } from "../src/safety.js";
 import { relationshipId, type CheckReport, type Relationship, type Snapshot, type Verified } from "../src/schemas.js";
 import { readSnapshot } from "../src/snapshot.js";
-import { fakeModel } from "./canned.js";
+import { cannedClaims, fakeModel } from "./canned.js";
 
 const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
 const POLYMORPH_URL = FIXTURE_URL.replace(/\/[^/]+$/, "/polymorph");
@@ -36,13 +36,18 @@ const five = claim("invoices", "account_id", "accounts", { column: "account_id",
 const zeroFive = claim("invoices", "account_id", "accounts", { column: "account_id", equals: "05" });
 const CLAIMS = { relationships: [whole, posts, photos, videos, dropping, unknown, hidden, keyed, five, zeroFive] };
 
-/** An offline full run on polymorph, the model replying CLAIMS: what it printed and sent, and what it wrote. */
-async function offline() {
+// Where polymorph's orphans fall: inside the key's range, below it, and above it on the photo branch.
+const owed = claim("invoices", "account_id", "accounts");
+const refunded = claim("refunds", "account_id", "accounts");
+const ORPHANS = { relationships: [owed, refunded, photos] };
+
+/** An offline full run on url, the model replying claims: what it printed and sent, and what it wrote. */
+async function offline(url = POLYMORPH_URL, claims: object = CLAIMS) {
   const cwd = mkdtempSync(join(tmpdir(), "dbtruth-joins-"));
   const out: string[] = [];
   const err: string[] = [];
-  const { transport, requests } = fakeModel(CLAIMS);
-  const code = await run({ url: POLYMORPH_URL, samples: true, reveal: [], json: true, flags: {}, cwd, env: {}, out: (line) => out.push(line), err: (line) => err.push(line) }, { transport });
+  const { transport, requests } = fakeModel(claims);
+  const code = await run({ url, samples: true, reveal: [], json: true, flags: {}, cwd, env: {}, out: (line) => out.push(line), err: (line) => err.push(line) }, { transport });
   assert.notEqual(code, 1, err.join("\n"));
   const snapshot = readSnapshot(cwd, SNAPSHOT);
   if (typeof snapshot === "string") assert.fail(snapshot);
@@ -144,7 +149,7 @@ test("the per-table files show each branch with its condition", LIMIT, async () 
     assert.ok(lines.some((l) => (prefix ? l.startsWith(line) : l === line)), `no line in ${table}.md ${prefix ? "starts" : "is"} ${line}`);
   };
   for (const table of ["comments", "posts"]) has(table, "- comments.commentable_id -> posts.id when commentable_type = 'post': confirmed, 100.0% of 300 sampled rows match (inferred", true);
-  for (const table of ["comments", "photos"]) has(table, "- **BROKEN** comments.commentable_id -> photos.id when commentable_type = 'photo': 66.7% match (120 of 180 sampled), 60 orphans (inferred).", true);
+  for (const table of ["comments", "photos"]) has(table, "- **BROKEN** comments.commentable_id -> photos.id when commentable_type = 'photo': 66.7% match (120 of 180 sampled), 60 orphans, all above the highest photos.id (inferred).", true);
   has("comments", "- comments.commentable_id -> photos.id when commentable_type = 'video' (inferred, not measured: no non-null rows to test)");
   has("comments", "- comments.commentable_id -> posts.id when commentable_type = 'x''; DROP TABLE posts; --' (inferred, not measured: no non-null rows to test)");
 });
@@ -200,4 +205,40 @@ test("no hidden value of polymorph reaches the model, the files, the snapshot or
   assert.doesNotMatch(readFileSync(join(cwd, SNAPSHOT), "utf8"), CANARY);
   const tables = join(cwd, "context", "tables");
   for (const name of readdirSync(tables)) assert.doesNotMatch(readFileSync(join(tables, name), "utf8"), CANARY, name);
+});
+
+test("orphans are counted where they fall: above the key on the fixture, inside it and below it on polymorph", LIMIT, async () => {
+  const ends = (verified: Verified, r: Relationship) => pick(verified.verdicts[relationshipId(r)]!.measurement.numbers, ["orphans", "orphansAbove", "orphansBelow"]);
+  const fixture = await offline(FIXTURE_URL, cannedClaims);
+  assert.deepEqual(ends(fixture.verified, claim("orders", "customer_id", "customers")), { orphans: 60, orphansAbove: 60, orphansBelow: 0 }, "customer ids from 9001 on, past the 250 customers");
+  const { verified } = await offline(POLYMORPH_URL, ORPHANS);
+  assert.deepEqual(ends(verified, owed), { orphans: 40, orphansAbove: 0, orphansBelow: 0 }, "accounts 10 to 19 are missing from the middle");
+  assert.deepEqual(ends(verified, refunded), { orphans: 5, orphansAbove: 0, orphansBelow: 5 }, "-1 to -5, below account 1");
+  assert.deepEqual(ends(verified, photos), { orphans: 60, orphansAbove: 60, orphansBelow: 0 }, "photos 41 to 60, past the 40 photos");
+});
+
+test("only counts leave the database for where the orphans fall", LIMIT, async () => {
+  const { verified, err, requests, cwd, file, snapshot } = await offline(POLYMORPH_URL, ORPHANS);
+  const { statements } = await recorded(POLYMORPH_URL, snapshot);
+  const split = statements.filter((s) => s.sql.includes("AS orphans_above"));
+  assert.equal(split.length, 3, "one statement for each join");
+  for (const { rows } of split) assert.deepEqual(rows.map((row) => Object.keys(row).sort()), [["hits", "nulls", "orphans_above", "orphans_below", "total"]], "never the ends of the key");
+  // Nor anything hidden, in what the run sent, printed and wrote.
+  const tables = readdirSync(join(cwd, "context", "tables")).map((name) => file(`tables/${name}`));
+  for (const text of [...requests, JSON.stringify(verified), ...err, file("snapshot.json"), ...tables]) assert.doesNotMatch(text, CANARY);
+});
+
+test("the per-table files say where the orphans fall, and no cause", LIMIT, async () => {
+  const fixture = await offline(FIXTURE_URL, cannedClaims);
+  const polymorph = await offline(POLYMORPH_URL, ORPHANS);
+  const says = (file: (name: string) => string, tables: string[], words: string) => {
+    for (const table of tables) assert.ok(file(`tables/${table}.md`).includes(words), `${table}.md does not say ${words}`);
+  };
+  says(fixture.file, ["orders", "customers"], "60 orphans, all above the highest customers.id (inferred). An inner join drops the orphans: use LEFT JOIN, or filter them on purpose.");
+  says(polymorph.file, ["invoices", "accounts"], "- **BROKEN** invoices.account_id -> accounts.id: 80.0% match (160 of 200 sampled), 40 orphans, all inside the accounts.id range (inferred). An inner join drops the orphans");
+  says(polymorph.file, ["refunds"], "75.0% match (15 of 20 sampled), 5 orphans, all below the lowest accounts.id (inferred).");
+  says(polymorph.file, ["photos"], "60 orphans, all above the highest photos.id (inferred).");
+  for (const { cwd, file } of [fixture, polymorph]) {
+    for (const name of readdirSync(join(cwd, "context", "tables"))) assert.doesNotMatch(file(`tables/${name}`), /deleted|never loaded|sequence|because|probably/i, name);
+  }
 });

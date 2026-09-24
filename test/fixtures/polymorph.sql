@@ -10,7 +10,9 @@
 --   2. accounts holds ids 1 to 50 except 10 to 19, as if deleted: 40 rows over a range of 50.
 --      invoices.account_id runs over 1 to 50, four invoices each: 160 of 200 match (80%), and all
 --      40 orphans are inside the accounts.id range.
---   3. No foreign key is declared. The text columns hold canary-pii and are hidden.
+--   3. refunds.account_id holds -1 to -5, below the lowest accounts.id, and 21 to 35, which all
+--      exist: 15 of 20 match (75%). refunds has no key.
+--   4. No foreign key is declared. The text columns hold canary-pii and are hidden.
 --
 -- Autovacuum is off on every table here, so nothing changes the catalog's row estimates behind a
 -- test's back.
@@ -26,4 +28,6 @@ CREATE TABLE accounts (id integer PRIMARY KEY, name text NOT NULL) WITH (autovac
 INSERT INTO accounts SELECT i, 'canary-pii account ' || i FROM generate_series(1, 50) AS i WHERE i NOT BETWEEN 10 AND 19;
 CREATE TABLE invoices (id integer PRIMARY KEY, account_id integer NOT NULL) WITH (autovacuum_enabled = false);
 INSERT INTO invoices SELECT i, 1 + i % 50 FROM generate_series(1, 200) AS i;
+CREATE TABLE refunds (account_id integer NOT NULL) WITH (autovacuum_enabled = false);
+INSERT INTO refunds SELECT CASE WHEN i <= 5 THEN -i ELSE 15 + i END FROM generate_series(1, 20) AS i;
 ANALYZE;

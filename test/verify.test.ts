@@ -200,6 +200,33 @@ test("a condition on a column the table lacks, or on one that is not categorical
   assert.deepEqual(db.queries, []);
 });
 
+test("against an integer key it leads, the join also counts the orphans past either end of it", async () => {
+  const db = fakeDb(answer({ total: "500", nulls: "0", hits: "440", orphans_above: "60", orphans_below: "0" }));
+  const [m] = await verify(db, config, extractOf(table("orders", 500), table("customers", 250)), claims({ relationships: [relationship("orders", "customers")] }));
+  const ends =
+    ', count(*) FILTER (WHERE f."customer_id" > (SELECT max(t."id") FROM "public"."customers" t)) AS orphans_above' +
+    ', count(*) FILTER (WHERE f."customer_id" < (SELECT min(t."id") FROM "public"."customers" t)) AS orphans_below';
+  assert.ok(db.queries[0]!.includes(`AS hits${ends}\n`), db.queries[0]!);
+  assert.deepEqual(m?.numbers, { total: 500, hits: 440, orphans: 60, hit: 0.88, nulls: 0, orphansAbove: 60, orphansBelow: 0 });
+});
+
+test("no orphan ends where a column is not an integer or the column does not lead the key", async () => {
+  const counted = { total: "400", nulls: "0", hits: "352" };
+  const numbers = { total: 400, hits: 352, orphans: 48, hit: 0.88, nulls: 0 };
+  const join = claims({ relationships: [relationship("orders", "customers")] });
+  const cases: [string, Extract][] = [
+    ["a numeric from-column", extractOf(table("orders", 500, { columns: [column("customer_id", "numeric", 250, false)] }), table("customers", 250))],
+    ["a numeric key", extractOf(table("orders", 500), table("customers", 250, { columns: [column("id", "numeric", 250, true)] }))],
+    ["a column second in the key", extractOf(table("orders", 500), table("customers", 250, { primaryKey: ["tenant_id", "id"] }))],
+  ];
+  for (const [label, extract] of cases) {
+    const db = fakeDb(answer(counted));
+    const [m] = await verify(db, config, extract, join);
+    assert.doesNotMatch(db.queries[0]!, /orphans_/, label);
+    assert.deepEqual(m?.numbers, numbers, label);
+  }
+});
+
 /** vehicles, dated by one timestamp column, and the suspicion that it is dead. */
 const vehicles = table("vehicles", 120, {
   columns: [{ name: "registered_at", type: "timestamp with time zone", nullable: false, nullRate: 0, distinct: 0, maxLength: 0, visible: false }],

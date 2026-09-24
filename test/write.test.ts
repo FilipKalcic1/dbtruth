@@ -87,6 +87,25 @@ test("a branch reads with its condition, the value as SQL writes it", () => {
   }
 });
 
+test("a broken join's orphan count says where they fall, and nothing without the counts", () => {
+  const broken = (ends: Record<string, number>) => {
+    const numbers = { total: 500, hits: 440, orphans: 60, hit: 0.88, nulls: 0, ...ends };
+    const v = { ...shop, verdicts: { ...shop.verdicts, "relationship:orders.customer_id->customers.id": verdict("broken", numbers) } };
+    return tableFile(v, shop.tables[0]!).split("\n").find((line) => line.startsWith("- **BROKEN**"));
+  };
+  const head = "- **BROKEN** orders.customer_id -> customers.id: 88.0% match (440 of 500 sampled), 60 orphans";
+  const tail = " (inferred). An inner join drops the orphans: use LEFT JOIN, or filter them on purpose.";
+  const shapes: [Record<string, number>, string][] = [
+    [{ orphansAbove: 60, orphansBelow: 0 }, ", all above the highest customers.id"],
+    [{ orphansAbove: 0, orphansBelow: 0 }, ", all inside the customers.id range"],
+    [{ orphansAbove: 0, orphansBelow: 60 }, ", all below the lowest customers.id"],
+    [{ orphansAbove: 48, orphansBelow: 0 }, ", 48 above the highest customers.id and 12 inside the customers.id range"],
+    [{ orphansAbove: 30, orphansBelow: 20 }, ", 30 above the highest customers.id, 20 below the lowest customers.id, and 10 inside the customers.id range"],
+    [{}, ""],
+  ];
+  for (const [ends, shape] of shapes) assert.equal(broken(ends), head + shape + tail, JSON.stringify(ends));
+});
+
 test("a view, a partitioned table and a table without a key say so", () => {
   assert.equal(tableFile(nothing, facts("shipped_orders", { kind: "view", rowEstimate: -1, primaryKey: null })), "# shipped_orders\n\nview, size unknown, primary key: none\n");
   assert.match(tableFile(nothing, facts("events", { partitions: { count: 55, withLocalForeignKeys: 3 }, primaryKey: ["id", "happened_on"] })), /\ntable, 55 partitions, ~500 rows, primary key: id, happened_on\n$/);

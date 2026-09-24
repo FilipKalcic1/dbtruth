@@ -2910,3 +2910,214 @@ of each lost point, in the format of section 4.7 of the plan.
   224 tests, 222 pass, the 2 live tests skipped, and the package smoke test
   passes; `npm run acceptance -- --task T2.3` prints `T2.3: 100/100`, every
   check passing.
+
+## T2.4 Where the orphans fall
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 of the plan and T2.4, with T2.2, T2.3 and
+  Appendices A to C; the design brief's section 3 and ground rules, and the
+  lead's decisions in its section 7; `src/verify.ts`, `src/write.ts`,
+  `src/safety.ts`, `src/schemas.ts`, prompt B and their tests,
+  `test/joins.test.ts`, `test/canned.ts`, `test/integration.test.ts`,
+  `test/readme.test.ts`; README.md, NOTES.md (0.2.0, the string-matching
+  list and the limits), CHANGELOG.md, T2.3's iterations above and
+  `acceptance/`.
+- Where the guidance and the code at HEAD differ: the lead's note says
+  `polymorph` already holds `refunds`, the table for orphans below a key.
+  It does not: T2.3's iteration 2 took it out, with its header item, since
+  nothing of T2.3 read it. It is back as the brief's section 2.6 writes it,
+  header item 3, and the databases were reloaded with `docker compose down
+  -v && docker compose up -d --wait`; `reltuples` 40, 200 and 20 for
+  accounts, invoices and refunds, and by hand 15 of its 20 rows match, 5
+  below account 1, none above. NOTES records it.
+- Tests first: four unit tests (two in `verify.test.ts`, one each in
+  `write.test.ts` and `safety.test.ts`) and three database tests in
+  `test/joins.test.ts`, whose `offline()` now takes the URL and the claims
+  (polymorph and T2.3's claims by default, so T2.3's tests read as before).
+  On the code as committed:
+  - `safety.test.ts` did not load: `The requested module
+    '../src/safety.js' does not provide an export named 'isIntegerType'`.
+  - "against an integer key it leads, ..." found the statement ending `AS
+    hits\n  FROM (SELECT * FROM "public"."orders" LIMIT 50000) f`, with no
+    count of either end.
+  - The write test found the broken line with nothing between "60 orphans
+    (inferred)." and "An inner join drops the orphans".
+  - On the databases: "orphans are counted where they fall ..." failed with
+    `orphansAbove: undefined, orphansBelow: undefined` where 60 and 0 were
+    expected for `orders.customer_id -> customers.id`; "only counts leave
+    the database ..." with "one statement for each join", 0 !== 3; "the
+    per-table files say where the orphans fall ..." with "orders.md does not
+    say 60 orphans (inferred). All 60 are above the highest customers.id.
+    ...".
+  - "no orphan ends where a column is not an integer, ..." passed, as a
+    guard must while nothing counts the ends.
+- Built, as section 3.1 of the brief has it: `isIntegerType` in `safety.ts`
+  beside `typeFamily`, which is unchanged; in `measureRelationship`, when
+  both columns are integers, the probe form of the join, the one taken when
+  the target column leads the key and is compared as is, also counts
+  `orphans_above` and `orphans_below` against one uncorrelated `max` and
+  `min` of the key, without the plan's `<orphan> AND`; the counts are read
+  when the returned row has them, so the fakes of existing tests need no
+  change; `orphanShape` in `write.ts` adds one sentence after
+  "(inferred)." on a broken line, the place only; prompt B gets the two
+  numbers in its numbers paragraph and the rule that where the orphans fall
+  is a hint, not a proven cause.
+- Checked beyond the tests: `EXPLAIN` of the fixture's statement shows each
+  end as an InitPlan, run once, over `Index Only Scan (Backward)` of
+  `customers_pkey` with `Limit`; the stored queries on polymorph and the
+  fixture, and the broken lines of every per-table file, read as the tests
+  expect; a confirmed join into an integer key carries 0 and 0, and one that
+  is not probed (`customers.address -> customers.full_name`) carries
+  neither.
+- Docs: NOTES (the entry under 0.2.0: the two counts and why no second
+  probe, only integers and only where the key is probed, no third number,
+  the file's facts and prompt B's hint, `refunds`, the `offline()` change,
+  the README output left for release, and what is not done;
+  `isIntegerType` under "Where string matching does appear"), README ("How
+  it works"), CHANGELOG (0.2.0), prompt B. No option was added, so `--help`
+  is unchanged. No new message reaches stderr, so the troubleshooting table
+  is unchanged; `readme.test.ts` still passes.
+- `acceptance/checks.json`: T2.4's checks, three for the A-items, seven on
+  tests, the gate, five on docs, three invariants. `acceptance/manual.json`:
+  the sabotage item, empty.
+- The database tests (`joins`, `integration`, `remeasure`, `doctor`,
+  `safety`, `sampling`, `scale`: 87 tests, 85 pass, the 2 live tests
+  skipped) pass on Postgres 12 (12.22) and 18 (18.6), in throwaway
+  containers loaded with every fixture file in compose order, as on 16. No
+  container was left.
+- Under Linux as a non-root user (uid 1000), in `node:20` (20.20.2) and
+  `node:22` (22.23.3), from a copy of the working tree with LF endings and
+  `npm ci`, against the 18.6 server: the task's four test files with
+  `readme`, `ci`, `structure`, `acceptance`, `remeasure` and `integration`,
+  117 tests, 115 pass, the 2 live tests skipped, on each. The first attempt
+  ran without `docker run --init`, and "a check that hangs is killed ..."
+  failed because nothing reaped the killed process, as that test's comment
+  says a container without an init does; with `--init` it passes.
+- `npm run verify` exits 0: 231 tests, 229 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.4`
+  prints `T2.4: 80/100`, every check passing but the sabotage item. `npm run
+  acceptance` over every task: every other task built so far still
+  100/100.
+- Lost Tests (-20): `FAIL T2.4 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+### Iteration 2: 80/100
+- Four reviews gave eight findings. Each was checked against the code and
+  the plan before acting; none rejected. Two overlapped (the reload command
+  for an older volume) and were fixed together.
+- Checked first: on the fixture server `1::smallint = 2::bigint`, `1::int >
+  (SELECT max(x::bigint) ...)` and `3::bigint < 2::smallint` all run, so two
+  integer columns never raise a datatype mismatch and the text fallback
+  never reaches a join that counts ends; a join is confirmed at 95%, so a
+  confirmed one can have orphans, and nothing in `verify.ts` ties the ends
+  to a verdict; `polymorph.sql` starts with `CREATE DATABASE polymorph`, so
+  loading it into a server that has `polymorph` stops there under
+  `ON_ERROR_STOP`.
+- Fixed:
+  - The broken line puts the place in the count, as the plan writes it:
+    "60 orphans, all above the highest customers.id (inferred).", and for a
+    split "60 orphans, 48 above the highest customers.id and 12 inside the
+    customers.id range (inferred).". Iteration 1 added a sentence after
+    "(inferred)." that repeated the count, so that the words existing tests
+    matched stayed as they were. `orphanShape` writes "all" where one place
+    holds every orphan and lists the places with `Intl.ListFormat`, so the
+    branch on how many places there are is gone. Since A3 changes that
+    line, two existing assertions change with it, named in NOTES: the
+    `orders` line in `test/integration.test.ts` and the photo branch's in
+    "the per-table files show each branch with its condition"
+    (`test/joins.test.ts`). The new tests' expectations and the CHANGELOG
+    example follow; NOTES drops the sentence that justified the deviation.
+  - NOTES no longer says a confirmed join carries 0 and 0: every join
+    measured with the ends carries them, whatever its verdict.
+  - NOTES on the fixture: T2.3's entry calls `accounts` and `invoices` two
+    of the tables T2.4 adds; T2.4's gives only the rebuild, `docker compose
+    down -v && docker compose up -d --wait`, and says that loading
+    `polymorph.sql` into the running server fails once `polymorph` exists.
+  - README "How it works" and CHANGELOG name both conditions and speak of
+    counts: a broken join from an integer column into an integer primary
+    key says how many of its orphans lie above the key's highest value and
+    how many below its lowest; the rest lie inside its range.
+  - The text-fallback case is out of "no orphan ends where a column is not
+    an integer or the column does not lead the key" (`verify.test.ts`),
+    with its second `db` and `m`, and NOTES no longer explains the ends of
+    a comparison as text: two integer columns always compare as they are.
+  - `write.test.ts`: the no-cause assertion after the line's full equality
+    is gone, since it could fail only where the equality had. The test is
+    now "a broken join's orphan count says where they fall, and nothing
+    without the counts".
+  - `joins.test.ts`: `says` takes the run's `file` accessor, and the
+    closing loop reads the table files through it, as the test before it
+    does.
+  - `acceptance/checks.json`: the renamed tests (A3, `table-file`,
+    `verify-no-ends`), and the README and CHANGELOG sentences.
+- Sabotage of the fixes, `src/write.ts` restored from a copy and compared
+  with `cmp` each time: "all" replaced by the count, "a broken join's
+  orphan count says ..." failed with the line reading "60 orphans, 60 above
+  the highest customers.id (inferred)" where "60 orphans, all above ..."
+  was expected; the places joined with ", " in place of `Intl.ListFormat`,
+  it failed with "48 above the highest customers.id, 12 inside the
+  customers.id range" where "... and 12 inside ..." was expected.
+- `npm run verify` exits 0: 231 tests, 229 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.4`
+  prints `T2.4: 80/100`, every check passing but the sabotage item; `npm
+  run acceptance -- --task T2.3` still prints `T2.3: 100/100`.
+- Lost Tests (-20): `FAIL T2.4 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record of the task's
+  core; the sabotage check is done by a later stage. The sabotages above
+  are of this iteration's fixes only.
+- Sabotage check of the task's core (section 4.5), with the task's four
+  test files (`joins`, `verify`, `write`, `safety`: 57 tests, all passing
+  before) run after each break. `src/verify.ts`, `src/write.ts` and
+  `src/safety.ts` were copied outside the repository first; after each
+  break the file was restored from its copy, `cmp` identical, and `git
+  diff HEAD -- <file>` printed byte for byte the diff saved before.
+- Sabotage: the ends' names swapped in `measureRelationship`, the count
+  past the key's `max` returned as `orphans_below` and the one past its
+  `min` as `orphans_above`; "orphans are counted where they fall: above
+  the key on the fixture, inside it and below it on polymorph" failed with
+  "customer ids from 9001 on, past the 250 customers", `orphansAbove: 0,
+  orphansBelow: 60` where 60 and 0 were expected, and three other tests
+  with it. Restored.
+- Sabotage: the integer gate weakened to either column, `||` in place of
+  `&&`; "no orphan ends where a column is not an integer or the column
+  does not lead the key" failed with "a numeric from-column", the
+  statement it ran counting `orphans_above` and `orphans_below`. Restored.
+- Sabotage: `orphanShape` returning at once, `if (true) return ""`; "a
+  broken join's orphan count says where they fall, and nothing without the
+  counts" failed with "{"orphansAbove":60,"orphansBelow":0}", the line
+  reading "60 orphans (inferred)." where "60 orphans, all above the
+  highest customers.id (inferred)." was expected, and the two tests of the
+  per-table files with it. Restored.
+- Sabotage: the orphans inside the range computed as `orphans -
+  orphansAbove`, forgetting those below; "a broken join's orphan count
+  says where they fall, and nothing without the counts" failed with
+  "{"orphansAbove":0,"orphansBelow":60}", the line reading "all below the
+  lowest customers.id and all inside the customers.id range", and "the
+  per-table files say where the orphans fall, and no cause" with
+  "refunds.md does not say 75.0% match (15 of 20 sampled), 5 orphans, all
+  below the lowest accounts.id (inferred).". Restored.
+- Sabotage: the statement returning the key's highest value beside the
+  counts, `(SELECT max(t."id") ...) AS key_max`; "only counts leave the
+  database for where the orphans fall" failed with "never the ends of the
+  key", `+ 'key_max'` among the returned columns, and "against an integer
+  key it leads, ..." with the statement it ran. Restored.
+- Sabotage: `isIntegerType` by substring, `/int/.test(type.toLowerCase())`;
+  "isIntegerType is smallint, integer and bigint, by declared type" failed
+  with "integer[]", `true !== false`. Restored.
+- Sabotage: the ends counted in the hashed form of the join too, where the
+  target column does not lead the key; "no orphan ends where a column is
+  not an integer or the column does not lead the key" failed with "a
+  column second in the key", its statement a `LEFT JOIN` counting both
+  ends. Restored.
+- Sabotage: the returned row checked for `orphansAbove`, the name in the
+  numbers, in place of the column `orphans_above`, so the ends are counted
+  and never read; "against an integer key it leads, the join also counts
+  the orphans past either end of it" failed with `orphansAbove: 60,
+  orphansBelow: 0` missing from the numbers, and "orphans are counted
+  where they fall: ..." with "customer ids from 9001 on, past the 250
+  customers", both `undefined`; the two tests of the per-table files
+  failed with them. Restored.
+- No sabotage left every test green, so no test was changed.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  231 tests, 229 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T2.4` prints `T2.4: 100/100`, every
+  check passing.

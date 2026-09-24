@@ -75,6 +75,12 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   its own verdict, and the per-table files give the condition, as in `when
   commentable_type = 'photo'`. The value is sent to the database as a
   parameter, never as SQL.
+- A broken join from an integer column into an integer primary key says
+  where its orphans lie: how many above the key's highest value, how many
+  below its lowest, and the rest inside its range. The per-table files give
+  the place with the count, as in "60 orphans, all above the highest
+  customers.id"; the model, which writes `README.md`, is told what each place
+  usually means, and to give it as a hint, not a cause.
 - README: a quick start that runs `doctor` before the first run, a
   troubleshooting table with a row for every message dbtruth prints when
   something is wrong, and the commands, with those not built yet marked as

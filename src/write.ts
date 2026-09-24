@@ -52,7 +52,7 @@ export function tableFile(v: Verified, t: TableFacts): string {
     const inferred = r.basis === "stated" ? "" : " (inferred)";
     const nulls = n.nulls ? ` ${n.nulls} sampled rows (${pct(n.nulls / (n.total! + n.nulls))}) have no ${r.from.column}; an inner join drops them too.` : "";
     if (verdict.status === "confirmed") return [`- ${edge}: confirmed, ${pct(n.hit!)} of ${n.total} sampled rows match${inferred}.${nulls}`];
-    if (verdict.status === "broken") return [`- **BROKEN** ${edge}: ${pct(n.hit!)} match (${n.hits} of ${n.total} sampled), ${n.orphans} orphans${inferred}. An inner join drops the orphans: use LEFT JOIN, or filter them on purpose.${nulls}`];
+    if (verdict.status === "broken") return [`- **BROKEN** ${edge}: ${pct(n.hit!)} match (${n.hits} of ${n.total} sampled), ${n.orphans} orphans${orphanShape(n, `${r.to.table}.${r.to.column}`)}${inferred}. An inner join drops the orphans: use LEFT JOIN, or filter them on purpose.${nulls}`];
     return [`- ${edge} (inferred, ${verdict.skipped ? `not measured: ${verdict.skipped}` : verdict.status})`];
   });
 
@@ -81,6 +81,18 @@ export function tableFile(v: Verified, t: TableFacts): string {
     ...section("Known problems", problems),
     ...section("Values", values),
   ].join("\n") + "\n";
+}
+
+/** Where a join's orphans fall against the key it points at, when verify counted them: the place, never a cause. */
+function orphanShape(n: Record<string, number>, key: string): string {
+  if (n.orphansAbove === undefined || n.orphansBelow === undefined) return "";
+  const places: [number, string][] = [
+    [n.orphansAbove, `above the highest ${key}`],
+    [n.orphansBelow, `below the lowest ${key}`],
+    [n.orphans! - n.orphansAbove - n.orphansBelow, `inside the ${key} range`],
+  ];
+  const found = places.filter(([count]) => count > 0).map(([count, place]) => `${count === n.orphans ? "all" : count} ${place}`);
+  return `, ${new Intl.ListFormat("en").format(found)}`;
 }
 
 /** Control characters and the set Windows refuses in file names, built without escape sequences. */

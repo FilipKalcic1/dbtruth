@@ -308,10 +308,12 @@ keys. Every verdict carries the query and the numbers so you can rerun it.
 When a column points at different tables depending on another column that is
 categorical, each value of that other column is a claim of its own, measured
 on the rows that hold it, with its own verdict; the value is sent as a
-parameter, never as SQL. Each table's file under `context/tables/` is
-rendered from those measurements directly, so every number in it is the
-measured number; the model writes `README.md` and `ENTITIES.md`, where the
-synthesis is.
+parameter, never as SQL. A broken join from an integer column into an
+integer primary key also says how many of its orphans lie above the key's
+highest value and how many below its lowest; the rest lie inside its range.
+Each table's file under `context/tables/` is rendered from those
+measurements directly, so every number in it is the measured number; the
+model writes `README.md` and `ENTITIES.md`, where the synthesis is.
 
 Views and materialized views are included, with their SQL, so the model knows
 what they read. A partitioned table stands for its partitions: one entry, with

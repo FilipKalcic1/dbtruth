@@ -966,7 +966,7 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     ship first, the format would be 2, and the reader would take both.
   - **The `polymorph` database** (`test/fixtures/polymorph.sql`, mounted as
     `60-polymorph.sql`, before the template) holds the reference above, and
-    the two tables T2.4 adds to it: `accounts`, with ids 10 to 19 missing,
+    two of the tables T2.4 adds to it: `accounts`, with ids 10 to 19 missing,
     and `invoices`, pointing at all 50, whose `account_id`, an integer with
     50 values, is here the condition on a column that is not text. Its text
     columns hold `canary-pii` and are hidden.
@@ -982,6 +982,67 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     finding polymorphic columns in code, from a sibling named like `_type`,
     which reads names for meaning (R4). The model proposes the branches, and
     the database measures them.
+- **A broken join into an integer key says where its orphans fall.** An
+  orphan count said how many rows point nowhere, not where they point, and
+  each place asks for a different fix: past the highest key, parents never
+  loaded or ids from another sequence; inside the key's range, deleted
+  parents; below the lowest key, ids from another source. On the fixture
+  all 60 orphans of `orders.customer_id -> customers.id` are above the
+  highest `customers.id`; on `polymorph` the 40 of `invoices.account_id ->
+  accounts.id` are inside its range, the 5 of `refunds.account_id ->
+  accounts.id` below it, and the 60 of the photo branch above the highest
+  `photos.id`.
+  - **Two counts in the join's own statement.** Where the key is probed,
+    the statement also returns `count(*) FILTER (WHERE col > (SELECT
+    max(t.<key>) FROM <target> t)) AS orphans_above`, and the same with
+    `min` and `<` as `orphans_below`. The plan writes `<orphan> AND col >
+    max`; a value past either end of the key matches no row of it, so it is
+    an orphan already and needs no second probe. Each end is a subquery
+    that does not depend on the row, which Postgres runs once, as a lookup
+    in the key's index. The ends are compared inside the database and only
+    the counts come back (R3): a test reads every row such a statement
+    returns on `polymorph` and finds exactly `total`, `nulls`, `hits`,
+    `orphans_above` and `orphans_below`. The query kept is the statement
+    run, so it reruns to the same counts.
+  - **Only integers, and only where the key is probed.** Both columns must
+    be `smallint`, `integer` or `bigint` as the catalog writes their types
+    (`isIntegerType` in `safety.ts`), and the target column must lead the
+    target's primary key, which is when the join probes it and when its
+    `min` and `max` are index lookups.
+  - **Two numbers, not three.** `orphansAbove` and `orphansBelow` join the
+    measurement when the row the statement returned has them; the orphans
+    inside the range are the rest, worked out where they are written. Every
+    join measured that way carries them, whatever its verdict, in the JSON,
+    the snapshot and what prompt B is sent; `check` still compares a
+    verdict's status and hit rate only.
+  - **The file states the place, and prompt B gets the hint.** A broken
+    line's orphan count says where they fall, as the plan writes it: "60
+    orphans, all above the highest customers.id", "40 orphans, all inside
+    the accounts.id range", "5 orphans, all below the lowest accounts.id",
+    or, when they fall in more than one place, "60 orphans, 48 above the
+    highest customers.id and 12 inside the customers.id range", before
+    "(inferred)". It gives no cause, and a test holds every per-table file of both runs to
+    that. Since A3 changes this line, two existing assertions change with
+    it: the `orders` line in `test/integration.test.ts` and the photo
+    branch's in "the per-table files show each branch with its condition"
+    (`test/joins.test.ts`) now read the count with its place. Prompt B is
+    told what the two numbers count, and a rule: where a broken
+    relationship's orphans fall is a hint, not a proven cause, with what
+    each place usually means.
+  - **`polymorph` gains `refunds`,** for orphans below a key:
+    `refunds.account_id` holds -1 to -5, below account 1, and 21 to 35,
+    which all exist, so 15 of 20 match (75%). It has no key. It was
+    designed with the rest of the fixture, for this task, and T2.3 left it
+    out, since nothing of T2.3 read it. A volume made before it is rebuilt
+    with `docker compose down -v && docker compose up -d --wait`; loading
+    `polymorph.sql` into the running server fails once `polymorph` exists.
+    In `test/joins.test.ts`, `offline()` now takes the URL and the claims,
+    `polymorph` and T2.3's claims unless told otherwise, so this task's
+    tests run the fixture and claims of their own.
+  - The README's fixture output predates this and is regenerated at release
+    (T7.1).
+  - Not done: where the orphans fall against a key of text, uuid or dates,
+    or of more than one column.
 
 ## 0.3.0 (unreleased)
 
@@ -1381,7 +1442,9 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   model's reply is validated, and spells it as the extract does from then on.
 - `safety.ts` checks that a statement begins with SELECT or WITH, quotes
   identifiers, and parses one line of `.env`.
-- `verify.ts` recognises timestamp types for the dead-table measurement.
+- `verify.ts` recognises timestamp types for the dead-table measurement, and
+  `isIntegerType` in `safety.ts` the integer types, by declared type, for
+  where a join's orphans fall.
 - `write.ts` normalises output paths into `context/`.
 - Verdict ids are prefixed `relationship:` / `suspicion:` so the exit code and
   the summary can tell them apart. A branch's id ends in `[column=value]`,

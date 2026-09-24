@@ -308,6 +308,11 @@ export function typeFamily(type: string): "text" | "time" | "other" {
   return "other";
 }
 
+/** smallint, integer or bigint, as the catalog writes a column's type; an array of them, or a domain over one, is not. */
+export function isIntegerType(type: string): boolean {
+  return ["smallint", "integer", "bigint"].includes(type.trim().toLowerCase());
+}
+
 // ---------- SQL text helpers: every module that builds SQL uses these ----------
 
 /** Double-quoted identifier. */
