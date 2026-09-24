@@ -26,8 +26,9 @@
 // part's checks alone split its points.
 
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -96,7 +97,13 @@ async function main() {
     for (const entry of entries.filter((e) => e.task === task)) {
       const r = { ...entry, ...(await judge(entry)) };
       console.log(`${r.pass ? "PASS" : "FAIL"} ${r.task} ${r.id} ${r.part}${r.pass ? "" : `: ${r.reason}`}`);
-      if (!r.pass && r.output) for (const line of r.output.trimEnd().split("\n").slice(0, 20)) console.log(`  ${line}`);
+      if (!r.pass && r.output) {
+        for (const line of r.output.trimEnd().split("\n").slice(0, 20)) console.log(`  ${line}`);
+        // The first lines of a long command, such as npm run verify, are its preamble; the failure is further down.
+        const saved = join(mkdtempSync(join(tmpdir(), "dbtruth-acceptance-")), `${r.task}-${r.id}.txt`);
+        writeFileSync(saved, r.output);
+        console.log(`  full output: ${saved}`);
+      }
       results.push(r);
     }
     scores.push(score(results));

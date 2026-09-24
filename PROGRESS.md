@@ -2384,3 +2384,21 @@ of each lost point, in the format of section 4.7 of the plan.
   passes; `npm run acceptance -- --task T6.1` prints `T6.1: 100/100`, every
   check passing. T1.5, whose checks run the same test file, is still
   100/100.
+
+## A rare failure of the verify gate (the lead, after T6.1)
+- Seen three times, never with its cause: once while T0.1 was built (a
+  database test file, output not kept), and twice as `FAIL <task> verify
+  gates: exit 1` inside `npm run acceptance` (T0.2 after T3.1, T1.5 after
+  T6.1), each time with every other task's identical `verify` passing in the
+  same batch. A rerun of the task passed each time.
+- Not reproduced outside the acceptance runs: 12 runs of `npm test`, 5 and
+  then 30 runs of `npm run verify` in a row, all green. Two suspects measured
+  and cleared: the 40,000-suspicion parse takes about 200 ms of its 2 s limit,
+  and `connect()` 28 ms at the median and 57 ms at most, under load, of the
+  0.2 s limit one safety test sets.
+- The first 20 lines the acceptance script prints of a failed `npm run
+  verify` are its preamble, so the cause was cut off every time. A failed
+  check's whole output is now also written to a file in the temporary
+  directory and its path printed (`full output: ...`); test "one passing and
+  one failing check ..." asserts it. Sabotage: the path line removed; that
+  test failed. Restored. The next occurrence will show its cause.

@@ -1135,6 +1135,13 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     one for `init` and `mcp`, and the Action is versioned in its own
     repository.
 
+- **A failed check keeps its whole output.** The acceptance script prints
+  the first 20 lines of a failed check, as the plan says; for `npm run
+  verify` those are npm's preamble, and a rare failure of that gate (three
+  times in some forty runs, never outside an acceptance run) was cut off each
+  time. The whole output is now also written to a file in the temporary
+  directory, and its path printed beneath the 20 lines.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values
