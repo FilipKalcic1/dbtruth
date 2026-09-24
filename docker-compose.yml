@@ -15,6 +15,7 @@ services:
       - ./test/fixtures/scale.sql:/docker-entrypoint-initdb.d/30-scale.sql:ro
       - ./test/fixtures/roles.sql:/docker-entrypoint-initdb.d/40-roles.sql:ro
       - ./test/fixtures/sampling.sql:/docker-entrypoint-initdb.d/50-sampling.sql:ro
+      - ./test/fixtures/template.sql:/docker-entrypoint-initdb.d/90-template.sql:ro
     healthcheck:
       # TCP on purpose: during init the entrypoint runs a socket-only server, and a socket check passes too early.
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U dbtruth -d fixture"]

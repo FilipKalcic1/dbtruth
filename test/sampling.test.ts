@@ -6,7 +6,7 @@ import { join } from "node:path";
 import pg from "pg";
 import { config } from "../src/config.js";
 import { doctor } from "../src/doctor.js";
-import { extract } from "../src/extract.js";
+import { extract, readCatalog } from "../src/extract.js";
 import { connect, DESCRIBED_RELATIONS, sampleSource } from "../src/safety.js";
 import type { Extract, Table } from "../src/schemas.js";
 import { assemble } from "../src/verdict.js";
@@ -20,7 +20,7 @@ const ROWS = 300_000;
 async function sampled(): Promise<Extract> {
   const db = await connect(SAMPLING_URL, config);
   try {
-    return await extract(db, config, { samples: true, reveal: new Set() });
+    return await extract(db, config, await readCatalog(db), { samples: true, reveal: new Set() });
   } finally {
     await db.close();
   }
@@ -99,7 +99,7 @@ test("the listing opens no file the catalog has sized, so a table another sessio
     const locked = { ...config, statementTimeoutSeconds: 2 };
     const db = await connect(SAMPLING_URL, locked);
     try {
-      const e = await extract(db, locked, { samples: false, reveal: new Set() });
+      const e = await extract(db, locked, await readCatalog(db), { samples: false, reveal: new Set() });
       for (const [name, rowEstimate, estimateSource] of [["ev", 300_000, "partitions"], ["analyzed", 1_000, "catalog"]] as const) {
         const t = relation(e, name);
         assert.deepEqual([t.rowEstimate, t.estimateSource], [rowEstimate, estimateSource], `${name}: its statistics timed out, and its estimate stands`);
@@ -126,7 +126,7 @@ test("a partitioned table is not one of its own leaves: the fixture's events, an
   // at 0), and a sample smaller than 300 keeps the estimate from being replaced by a count.
   const db = await connect(FIXTURE_URL, config);
   try {
-    const events = relation(await extract(db, { ...config, sampleRows: 100 }, { samples: false, reveal: new Set() }), "events");
+    const events = relation(await extract(db, { ...config, sampleRows: 100 }, await readCatalog(db), { samples: false, reveal: new Set() }), "events");
     assert.equal(events.rowEstimate, 300);
     assert.equal(events.estimateSource, "partitions");
   } finally {

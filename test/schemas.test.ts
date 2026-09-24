@@ -38,3 +38,15 @@ test("validated claims spell every table as the extract does, and are deduplicat
   );
   assert.deepEqual(claims.suspicions, [{ kind: "dead_table", tables: ["orders"], detail: "a; b" }], "suspicions on one table merge their details");
 });
+
+test("copies of one claim come to the same claim whatever order the reply gives them in", () => {
+  const join = (confidence: number, reason: string) => ({ from: { table: "orders", column: "customer_id" }, to: { table: "customers", column: "id" }, basis: "inferred", confidence, reason });
+  const dead = (detail: string) => ({ kind: "dead_table", tables: ["cars"], detail });
+  const reply = { relationships: [join(0.8, "named like it"), join(0.9, "orders belong to customers")], suspicions: [dead("empty beside vehicles"), dead("empty"), dead("empty")] };
+  const reversed = { relationships: [...reply.relationships].reverse(), suspicions: [...reply.suspicions].reverse() };
+  const [forward, backward] = [reply, reversed].map((r) => claimsSchema([]).parse(r));
+
+  assert.deepEqual(backward, forward);
+  assert.deepEqual(forward!.relationships.map((r) => r.reason), ["named like it"], "of two copies with one basis, the one whose text sorts first");
+  assert.deepEqual(forward!.suspicions.map((s) => s.detail), ["empty; empty beside vehicles"], "each detail once, in code-unit order, one inside another or not");
+});

@@ -42,11 +42,12 @@ npx dbtruth doctor     # one line per check: ok, FAIL with what to fix, or note 
 npx dbtruth            # writes ./context/ and prints a summary
 ```
 
-You get `context/README.md`, `context/ENTITIES.md` and one file per table in
-`context/tables/`. Exit code `2` means it found something an agent must know
-before writing SQL, `1` means it could not run, `0` means nothing found. The
-database URL can also be passed as `--url`, and both settings can come from
-the environment instead of `.env`.
+You get `context/README.md`, `context/ENTITIES.md`, one file per table in
+`context/tables/`, and `context/snapshot.json`, what was claimed and measured,
+for `check` (coming in 0.3.0) to measure again. Exit code `2` means it found
+something an agent must know before writing SQL, `1` means it could not run,
+`0` means nothing found. The database URL can also be passed as `--url`, and
+both settings can come from the environment instead of `.env`.
 
 `doctor` checks, one line each, Node, where the settings came from, the
 database URL, the connection, the Postgres version, the read-only proof, how
@@ -81,7 +82,7 @@ comes from the system or from a library dbtruth uses, in its own words.
 
 | Message | Cause, and what to do |
 |---|---|
-| `could not read <path> (<error>)` | A `.env` on the way up to the repository root exists but cannot be read, usually because of its permissions. It is passed over, and the next `.env` up, if there is one, is read instead. Make it readable, or remove it. |
+| `could not read <path> (<error>)` | A `.env` on the way up to the repository root exists but cannot be read, usually because of its permissions. It is passed over, and the next `.env` up, if there is one, is read instead. Make it readable, or remove it. Printed for `context/snapshot.json` too, by `check` (coming in 0.3.0), which has no other file to read instead: make it readable. |
 | `--dotenv <path>: no such file`<br>`--dotenv <path>: could not read it (<error>)` | The file given to `--dotenv` does not exist, relative to the current directory, or cannot be read. No other settings file is read in its place. Check the path. |
 | `no database URL: DATABASE_URL is not in the environment or in <file>`<br>`FAIL no database URL: set DATABASE_URL in <file>, in the environment, pass --url, or read a file elsewhere with --dotenv <path>` | No `--url`, and no `DATABASE_URL` in the environment or in the `.env` that was read. After the full run's line come the directories searched and the ways to set it. A `DATABASE_URL` that is set but empty in the environment counts as unset, and hides the one in the file. Add `DATABASE_URL=postgres://user:password@host:5432/dbname` to the `.env` at the repository root. |
 | `<VARIABLE> / --<flag>: "<value>" is not a number`<br>`<VARIABLE> / --<flag>: <n> is below the minimum <min>`<br>`<VARIABLE> / --<flag>: <n> is above the maximum <max>`<br>`<VARIABLE> / --<flag>: <n> must be a whole number`<br>`DBTRUTH_MODEL_EFFORT / --model-effort: "<value>" is not auto or one of low, medium, high, xhigh, max`<br>`join.broken (<n>) must not exceed join.confirmed (<n>)`<br>`sampleRowsShown (<n>) must not exceed sampleRows (<n>)`<br>`effortBands.low (<n>) must not exceed effortBands.medium (<n>)` | A tunable, set by a `DBTRUTH_*` variable in the environment or a `.env`, or by its flag, is outside the range its comment in `src/config.ts` gives, and the run does not start. The last three name pairs that must stay in order: `DBTRUTH_JOIN_BROKEN` at most `DBTRUTH_JOIN_CONFIRMED`, `DBTRUTH_SAMPLE_ROWS_SHOWN` at most `DBTRUTH_SAMPLE_ROWS`, `DBTRUTH_EFFORT_LOW_UP_TO_TOKENS` at most `DBTRUTH_EFFORT_MEDIUM_UP_TO_TOKENS`. Correct the value, or remove it to use the default. |
@@ -111,8 +112,10 @@ comes from the system or from a library dbtruth uses, in its own words.
 | `--reveal <table.column>: no such column, nothing revealed` | The value of `--reveal` names no column of a relation dbtruth read, often a typo; the run goes on without revealing anything for it. Write it as `table.column`, or `schema.table.column`. |
 | `(<n> skipped)`<br>`relations: <kinds>, <n> not examined` | The first is part of the line that starts `Sending to`, the second of the summary. Some relations were not read: sampling used up its share of the time budget (`--extract-budget-share` of `--budget-seconds`) before it reached them, or they were dropped to fit the model's input (next row). Nothing is measured on them, and a measurement the budget cut off is marked `not measured: time budget exhausted` in `context/tables/`. Raise `--budget-seconds`. |
 | `sample rows dropped to fit the model's input limit`<br>`sample rows and value lists dropped to fit the model's input limit`<br>`sample rows, value lists and <n> tables dropped to fit the model's input limit` | Printed as part of the line that starts `Sending to`. The schema with its samples is larger than the model's input ceiling, `DBTRUTH_MODEL_MAX_INPUT_TOKENS`, so detail was dropped until it fit: sample rows first, then value lists, then whole tables. The model sees less and proposes less; what it proposes is still measured on the database. Raise `--model-max-input-tokens` only for a model that takes more. |
-| `could not write <path>: <error>` | One file under `context/` could not be written: a directory this user cannot write, or a full disk. The other files were written. Fix the cause and run again. |
-| `EBUSY: resource busy or locked, unlink '<path>'`<br>`EACCES: permission denied, unlink '<path>'` | A file the last run wrote under `context/` could not be removed to make way for the new ones: on Windows another program holds it open, elsewhere its directory is not writable by this user. The run stops there, after the model calls: none of the new files is written, and those removed before it are gone. Close the program, or fix the permissions, and run again. |
+| `could not write <path>: <error>` | A file under `context/` could not be written, or, when the error names `unlink` or `rm`, a file the last run wrote there for a table since renamed or dropped could not be removed. The cause is a directory this user cannot write (`EACCES`), a full disk, or on Windows another program that holds the file open (`EBUSY`). The other files were written, and a file that could not be removed stays as the last run left it. Close the program, or fix the cause, and run again. |
+| `no <path>: run npx dbtruth first` | There is no snapshot at that path, relative to the current directory. Every full run writes `context/snapshot.json`, and `check` (coming in 0.3.0) measures the database against it. Run `npx dbtruth` in the directory that holds `context/`, and commit `context/` with the snapshot in it. |
+| `<path> is not a file`<br>`<path> is larger than 10 MB, the most dbtruth reads`<br>`<path> is not valid JSON: run npx dbtruth and commit context/`<br>`<path> is not a dbtruth snapshot: <where>: <problem>`<br>`<path> is not a dbtruth snapshot: measuredWith: <problem>` | The path holds something other than a snapshot dbtruth wrote: a directory, a file a merge left conflict markers in, or one edited by hand. `<where>` is the first value that is wrong, such as `verdicts.<claim>.status`, and `<problem>` says what is wrong with it; after `measuredWith`, it is a setting outside the range its flag allows, in that flag's words, or join bands out of order. Nothing else is read from the file. A snapshot takes about half a kilobyte per relation, so one larger than 10 MB is not dbtruth's, or is of a schema of some twenty thousand relations, which `check` cannot read. Run `npx dbtruth` and commit `context/` to write it again. |
+| `<path> was written by a newer dbtruth (snapshot format <n>); upgrade dbtruth to check it` | A newer dbtruth wrote the snapshot, in a format this one does not read. Upgrade dbtruth where `check` runs, such as CI, to the version that wrote it or a later one. |
 | `FAIL Node <version>: dbtruth needs Node 20 or newer` | Install Node 20 or newer. |
 | `FAIL Postgres <n>: dbtruth needs Postgres 12 or newer` | The server is older than dbtruth supports: its queries read catalog columns and use SQL that Postgres 12 added. Point it at Postgres 12 or newer. |
 | `error: too many arguments. Expected 0 arguments but got 1: <word>.`<br>`error: unknown option '<option>'`<br>`error: option '<option>' argument missing` | A command or an option this dbtruth does not have, or an option given without its value. `init`, `check` and `mcp` are not built yet, and a dbtruth older than 0.2.0 has neither `doctor` nor `--version`. `npx dbtruth --help` lists what there is. |
@@ -143,6 +146,15 @@ there before it writes SQL:
 Commit `context/` next to your code. It is small, it reads well in a diff, and
 everyone on the project gets the same warnings. Run the tool again when the
 schema changes.
+
+Commit `context/snapshot.json` with it, from the same run. It holds the
+claims, every verdict with the query and the numbers behind it, the settings
+they were measured with, and the schema: what `check` (coming in 0.3.0)
+measures the database against again, without a model. It is
+written in a fixed order and without a timestamp, so its diff shows only what
+changed: in the data, in the schema, or in the claims, which the model words
+anew on every run. Like the rest of `context/`, it holds no hidden value, and
+it leaves out the value lists the per-table files show.
 
 ## What it sends, and what it never does
 
@@ -297,14 +309,15 @@ refused before anything runs.
 ## What it does not do
 
 - It never writes to your database. Not once, not in a test, not behind a flag.
-- No history, no snapshots, no diffing. Each run is point-in-time.
+- No history: each run replaces `context/`, `snapshot.json` included; git keeps
+  the history.
 - Postgres only.
 - No UI.
 
 ## Development
 
 ```bash
-docker compose up -d --wait         # fixture, clean, scale and sampling databases on port 54329
+docker compose up -d --wait         # fixture, clean, scale, sampling and fixture_template on port 54329
 npm test                            # every test file
 npm run test:unit                   # only the tests that need no database
 npm run test:db                     # only the tests that need the databases
@@ -314,6 +327,11 @@ npm run acceptance -- --task T1.1   # score one task of BUILD_PLAN.md
 npm run acceptance                  # score every task, then their mean
 python scripts/render-demo.py       # regenerates docs/demo.gif from real output (needs Pillow)
 ```
+
+The databases are loaded once, when the volume is made. After a file in
+`test/fixtures/` changes, `docker compose down -v && docker compose up -d --wait`
+loads them again; the tests that change data work on copies of
+`fixture_template`, and say so when it is missing.
 
 The package smoke test (`npm run test:pack`, the last step of `verify`) packs
 the package, installs the tarball into an empty project and runs the installed

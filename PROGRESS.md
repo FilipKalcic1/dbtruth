@@ -1578,3 +1578,319 @@ of each lost point, in the format of section 4.7 of the plan.
 - After the record, `npm run verify` exits 0: 139 tests, 137 pass, the 2
   live tests skipped, and the package smoke test passes. `npm run acceptance
   -- --task T2.1` prints `T2.1: 100/100`, every check and item passing.
+
+## T3.1 `context/snapshot.json`
+### Iteration 1: 80/100
+- Read first: the design brief for T3.1 and T3.2, with the lead's decisions in
+  its section 12, and `git show HEAD:src/extract.ts` for T2.1's names as
+  committed: `Size { estimate, pages }`, `leaves`, `estimateRows(rel,
+  pilotPages, pilot)`. The brief's section 1 used the same names; the code was
+  followed where it spoke of T2.1 as planned.
+- Tests first, run against HEAD's source:
+  - `test/snapshot.test.ts` (new, in `test:unit`) and the five database tests
+    appended to `test/integration.test.ts` failed to load, `Cannot find module
+    .../src/snapshot.js`; `test/extract.test.ts` and `test/sampling.test.ts`,
+    whose five call sites now read the catalog first, on `does not provide an
+    export named 'readCatalog'`.
+  - "a dead-table age that is not a finite number is left out" got `{ exact:
+    1, count: 120, ageDays: -Infinity }`; "the dead-table age is counted in
+    whole days by the statement ..." the statement with `EXTRACT(...) /
+    86400.0` and no `floor`; "a file of the last run that cannot be removed
+    is reported ..." threw `SystemError [ERR_FS_EISDIR]: Path is a directory:
+    rm returned EISDIR (is a directory) ...\context\tables\held.md`; "the last
+    run's snapshot is cleared with its other files ..." found it still there;
+    "fixture_template is created last ..." `'sampling.sql'` for
+    `'template.sql'`. The structure test passed: `snapshot.ts` did not exist.
+  - To see each snapshot test fail on its own assertion, they were then run
+    against the real declarations in `schemas.ts` and a stub `snapshot.ts`
+    that wrote plain `JSON.stringify` in the order it was given, with no
+    marking, no fingerprint and no validation, beside the refactored
+    `extract.ts` and a `cli.ts` that wrote no snapshot. "serialize writes
+    sorted keys ..." got the one-line JSON with the keys in the order they
+    were built; "claims and relations are ordered by code units ..." `['b',
+    'ä', 'B', 'a', 'Z']` for `['B', 'Z', 'a', 'b', 'ä']`; "the fingerprint is
+    sha256 of the schema only" `''`; "toSnapshot lists every catalog relation
+    ..." `['orders', undefined]` first where `['audit', false]` was expected;
+    "parseSnapshot refuses ..." threw `Unterminated string in JSON at position
+    25`; "readSnapshot refuses ..." threw `ENOENT`; "a claim stated twice ..."
+    two claims, `inferred` and `stated`. "claim text with newlines ..." passed:
+    plain JSON round-trips text. The three full-run tests failed on `ENOENT
+    ... context\snapshot.json`, the two on copies on `fixture_template does
+    not exist: recreate the fixture databases with docker compose down -v &&
+    docker compose up -d --wait`, and once the template was loaded, the
+    fingerprint test on `Expected "actual" to be strictly unequal to: ''`.
+  - "readCatalog reads three catalog statements and nothing inside the
+    budget" and "extract profiles only the relations of the catalog it is
+    given" failed only on the missing export, and passed with the refactor
+    before anything else was built: they pin a move of code that changes
+    nothing it does. Every existing extract and sampling test passed on it
+    too, so no test depends on the row estimate now coming after the keys
+    inside a `Table`.
+- Built, as the brief and its section 12 say: `CatalogRelation`,
+  `schemaOnly` (moved), `SNAPSHOT_FORMAT` and `SnapshotSchema` in
+  `schemas.ts`; `readCatalog` and `extract(db, cfg, catalog, opts)` in
+  `extract.ts`, and `ORDER BY conrelid, conname` in `listKeys`; `snapshot.ts`
+  (`measuredWith`, `schemaOf`, `toSnapshot`, `serialize`, `parseSnapshot`,
+  `readSnapshot`); `SNAPSHOT_FILE` in `write.ts`, cleared with the last run's
+  files, and a stale file that cannot be removed reported in `failed`;
+  `VERSION` at module scope in `cli.ts`, the server version read once after
+  the catalog, the snapshot added to the files `persist` writes; in
+  `verify.ts` the age floored to whole days in SQL and kept only when finite;
+  `test/fixtures/template.sql`, mounted last as `90-template.sql`, and
+  `test/copies.ts`. The fixture databases were reloaded with `docker compose
+  down -v && docker compose up -d --wait`; `fixture_template` is there, a
+  template that takes no connections.
+- Docs: README (the quick start names the snapshot; "Giving it to your
+  agent": commit `context/snapshot.json`; "What it does not do": the history
+  line; rows for the seven snapshot sentences; the `could not write` row
+  takes the failed removal, and the row for the system's `EBUSY` and `EACCES`
+  is gone; Development: `fixture_template` and reloading the databases),
+  NOTES (the T3.1 entry, and T1.5's not-done item on `persist` marked done
+  here), CHANGELOG. No option was added, so `--help` is unchanged.
+- Checks of the new tests, not the sabotage record: with `ORDER BY conrelid,
+  conname` removed from `listKeys`, "the fingerprint changes when a column is
+  added in a copy of fixture_template, and not otherwise" failed on Postgres
+  16, twice, with "a key dropped and added again under its name is the same
+  key" (`sha256:0497...` for `sha256:743c...`); `src/extract.ts` restored
+  from a copy and matched with `cmp`. The brief expected this test might stay
+  green; on 16 it does not.
+- One assertion of mine was wrong at first: with `--model-max-input-tokens
+  500` two relations fit, not one. The test now reads how many were sent
+  from the disclosure line and expects exactly those to be examined.
+- Sizes, for the 10 MB limit's comment and README row: the fixture's
+  snapshot is 6,027 bytes; the `scale` database's, 300 tables of five
+  columns and no claims, 145,203 bytes.
+- The database tests (`doctor`, `integration`, `safety`, `sampling`,
+  `scale`: 58 tests, 56 pass, the 2 live tests skipped) pass on Postgres 12
+  (`12-alpine`, 12.22) and 18 (18.6), in throwaway containers loaded with
+  every fixture file in compose order, the template last, as on 16. No copy
+  was left on either.
+- Existing tests: `git diff -U0 -- test/*.test.ts` removes only the import
+  lines, the five `extract` call sites (`sized` and `tablesOf` in
+  `extract.test.ts`, three in `sampling.test.ts`), `fakeModel`'s signature
+  and reply line in `integration.test.ts`, which now takes the claims to
+  reply with and defaults to the old ones, and `cli.ts`'s line of the
+  structure map; everything else is added.
+- `npm run verify` exits 0: 159 tests, 157 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T3.1`
+  prints `T3.1: 80/100`, every check passing. `npm run acceptance` over every
+  task: T0.1, T0.2, T1.1, T1.2, T1.3, T1.5 and T2.1 still 100/100.
+- `acceptance/manual.json` has the T3.1 sabotage item with empty evidence, as
+  every task has; before it was added the script printed 100/100 for a task
+  with no record.
+- Lost Tests (-20): `FAIL T3.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead, no point depends on either:
+  - T7.1 puts T3.1 in 0.3.0, while NOTES and CHANGELOG have one open heading,
+    0.2.0 (unreleased), where the entries went. If 0.2.0 is cut before T3.1,
+    they move to a 0.3.0 heading.
+  - README's "Output on the fixture" is a pasted live run that wrote thirteen
+    files; a run now writes fourteen. It is regenerated at release (T7.1,
+    step 5), which needs an API key.
+### Iteration 2: 80/100
+- Sixteen review findings, each checked against the code and the plan
+  first. Tests were written or changed before each fix, and each new or
+  changed one failed on iteration 1's code for the reason it names.
+- Fixed, the order of copies decided the snapshot (bugs): `claimsSchema`
+  kept the first of two copies of a relationship with one basis, and
+  extended the first suspicion's detail with each later one not already
+  inside it, so a reply that gave a claim twice in other words wrote other
+  bytes in another order, against A2. Of two copies with one basis, the one
+  whose JSON sorts first is kept; details are each kept once and joined in
+  code-unit order. The byte-identical test now gives a relationship and a
+  suspicion twice; on iteration 1's code it failed with the reversed run
+  keeping `"reason": "orders belong to customers"` where the first kept
+  `"name"`. New unit test "copies of one claim come to the same claim
+  whatever order the reply gives them in" failed with the two parses
+  unequal. A detail inside another (`empty`, `empty beside vehicles`) is now
+  kept, a change for model replies too; the existing `a; b` test is
+  unchanged and passes.
+- Fixed, the merge took quadratic time (bugs): details are gathered in a set
+  and joined once. "forty thousand copies of one suspicion parse in under
+  two seconds" failed with `22424 ms` and now takes about 400.
+- Fixed, a stale file reported twice (quality, major): `persist` removes only
+  what this run does not write again; a file it writes again is replaced by
+  the write. New test "a file this run writes again is replaced, not removed
+  first, so one that cannot be is reported once" failed with `[
+  'context\tables\orders.md', 'context/tables/orders.md' ]`. A writable
+  file in a directory this user cannot write is now replaced and not reported
+  as not removed. A read-only file in a writable directory, which the old
+  removal got past, is now reported as not written. README row, NOTES and
+  CHANGELOG say so; the snapshot test, whose "leaves none" no longer holds, is
+  retitled "the last run's snapshot is cleared like its other files, and
+  only the one at the top of context/".
+- Fixed, `measuredWith` took any number (rules, major): `parseSnapshot` puts
+  the settings through `resolveConfig` as flags, so each range in
+  `overridable` and the order of the join bands are checked by the code that
+  checks them for flags, and a failure reads `<file> is not a dbtruth
+  snapshot: measuredWith: <the flag's sentence>`. The reviewer's call as
+  written would refuse a snapshot from `--sample-rows 10`, since the default
+  `sampleRowsShown` of 15 would exceed it; `sampleRowsShown` goes in as 0,
+  which the snapshot does not record and `check` does not use. Three
+  refusals and that acceptance were added to "parseSnapshot refuses ...",
+  which failed with the parsed object where the sentence was expected. The
+  README row has the new form, as `readme.test.ts` required.
+  `sampleOversample` and `sampleSeed` have no range (T2.1): named in NOTES.
+- Fixed, the dead-table age rounded down (rules): `ceil`, not `floor`. For a
+  whole `staleAfterDays` the rounded age is over it exactly when the age is,
+  so the verdict boundary stays where it was, and floor had moved it by up
+  to a day, which section 4.4 does not allow without an A-item. The query
+  test failed on the `floor(` statement. NOTES and CHANGELOG say the
+  boundary did not move; a fraction in the setting now counts as the whole
+  days below it (90.5 acts as 90).
+- Fixed, `serverVersionNum` and `toolVersion` untested (plan): "every full
+  run writes ..." compares them with `current_setting('server_version_num')`
+  read on a connection of its own and with `package.json`. With
+  `serverVersionNum = 0` in `cli.ts` it failed with `actual: 0, expected:
+  160015`; `cli.ts` restored and matched with `cmp`.
+- Fixed, no reader-role run (plan, section 5.3 item 4): the same test runs a
+  fifth time as `reader`, asserts no `WARNING:` line, and compares its
+  fingerprint and relations with the full run's. It passed at once: the
+  behaviour was right and is now pinned.
+- Fixed, the fitted run's check (quality): it compares the names of the
+  relations the model was sent, read from the request as the whole-loop test
+  does, with those not marked, instead of a count parsed from the disclosure
+  line. Not `--json` as proposed: `Verified.tables` is what `toSnapshot`
+  itself reads, and the request is a source of its own.
+- Fixed, T3.1 under 0.2.0 (plan): T7.1 puts T3.1 in 0.3.0, so CHANGELOG and
+  NOTES have a `0.3.0 (unreleased)` heading with the T3.1 entries under it,
+  and the `changelog` and `notes` checks are anchored to it, the changelog
+  one between it and 0.2.0. The CHANGELOG entry no longer says "coming in
+  0.3.0" inside 0.3.0.
+- Fixed, smaller: the `measuredWith` function is gone,
+  `SnapshotSchema.shape.measuredWith.parse(cfg)` keeps the settings the
+  schema lists (the unit test that pins them is unchanged and passes);
+  `RelationKind` and `Verdict` are inferred from zod schemas that
+  `SnapshotSchema` uses, so their literals are written once; README says the
+  snapshot is for `check` to measure again, not read back, and not "on every
+  pull request", which is the Action's; NOTES no longer cites a design brief
+  that is not in the repository.
+- Partly taken, the 10 MB limit outside `config.ts` (rules): kept a
+  constant. The plan sets 10 MB in T3.2 and lists no tunable for it in
+  Appendix C, and a config number the plan does not ask for is against the
+  lead's bar. The reason is now the real one, in the source and in NOTES
+  under R5's wording: the file is written on one machine and read on
+  another. The write-time warning is not added: it would still leave no way
+  to check such a snapshot. Open for the lead.
+- Rejected, the `staleAfterDays` comment (quality): with `ceil` the comment,
+  "older than this many days is dead", is true again for a whole number of
+  days; the fraction is in NOTES.
+- Rejected, `SET search_path = public` in `connect` (bugs, major): the
+  finding is right that `format_type` and `pg_get_viewdef` follow the
+  session's path, so another role's path writes another fingerprint. The fix
+  would make things worse. On a scratch database on the fixture server
+  (dropped after) with `citext` in schema `extensions`, as Supabase installs
+  it, the path `"$user", public, extensions` gave type `citext` and 1 match
+  for `posts.author = users.email`; `public` alone gave
+  `extensions.citext`, which `typeFamily` does not take for text, so a
+  `citext` key column would be shown to the model (R3), and 0 matches, a
+  false broken relationship. Named in NOTES' not done, for T3.2.
+- `npm run verify` exits 0: 162 tests, 160 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T3.1`
+  prints `T3.1: 80/100`, every check passing, with the new checks
+  `rewritten-once`, `claims-any-order` and `merge-linear`, and
+  `test/schemas.test.ts` added to the T3.1 command.
+  `npm run acceptance` over every task: T0.1, T0.2, T1.1, T1.2, T1.3, T1.5
+  and T2.1 still 100/100.
+- Lost Tests (-20): `FAIL T3.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage. The two breakages above check the new
+  assertions; they are not that record.
+- Open for the lead, no point depends on any:
+  - Whether the 10 MB limit should become a tunable, which Appendix C does
+    not list; a schema of some twenty thousand relations writes a snapshot
+    `check` will refuse.
+  - The session's `search_path` in the fingerprint (above), for T3.2.
+  - Seen on the way, outside T3.1: `typeFamily` takes `extensions.citext`
+    for "other", so on a role whose path lacks the extension's schema a
+    `citext` key column is shown to the model today.
+  - README's "Output on the fixture" still shows thirteen files written
+    (iteration 1); it is regenerated at release, which needs an API key.
+- The sabotage check of the task. `src/snapshot.ts`, `src/cli.ts`,
+  `src/write.ts`, `src/schemas.ts` and `src/verify.ts` were copied outside
+  the repository first; the task's test command (`snapshot`, `schemas`,
+  `extract`, `verify`, `write`, `ci`, `sampling`, `integration`: 82 tests,
+  80 passing and the 2 live tests skipped before) was run under each
+  sabotage.
+- Sabotage: `canonical` kept each object's keys in the order they were built
+  (`Object.keys(object)` without `.sort()`); "serialize writes sorted keys
+  at every level, two-space indent and a final newline" failed with
+  "Expected values to be strictly equal": `"verdicts"` first where
+  `"claims"` was expected, and "claims and relations are ordered by code
+  units, whatever their order" with "the same claims and relations in
+  reverse give the same bytes"; 4 tests failed, "two runs whose claims come
+  in different orders write byte-identical snapshots" among them. Restored.
+- Sabotage: `toSnapshot` marked no relation as not examined (the relations
+  written as `schemaOf` gives them); "toSnapshot lists every catalog
+  relation, marks those not examined, and carries no categorical value"
+  failed with "skipped over budget or dropped to fit the model: in the
+  catalog, not in Verified": `['audit', undefined]` where `['audit',
+  false]` was expected, and "every full run writes context/snapshot.json,
+  and it validates" with "every relation listed, with its columns, and none
+  examined". Restored.
+- Sabotage: `run` built the snapshot and handed `persist` only the model's
+  files (`persist(opts.cwd, files)`); "every full run writes
+  context/snapshot.json, and it validates" failed with "no
+  context/snapshot.json: run npx dbtruth first", as did "a relation whose
+  name needs quoting is listed as the catalog names it", and the
+  byte-identical and canary runs with `ENOENT ... context\snapshot.json`; 4
+  tests failed. Restored.
+- Sabotage: `previousOutputs` no longer listed `snapshot.json`; "the last
+  run's snapshot is cleared like its other files, and only the one at the
+  top of context/" failed, but with "The expression evaluated to a falsy
+  value" and, through tsx's source map, the text of another test: nothing
+  said what was wrong. Its first assertion had no message, unlike the one
+  beside it; it now has one, "the last run's snapshot does not survive a
+  run that writes none", and the repeated sabotage failed the test with
+  exactly that. Restored.
+- Sabotage: `parseSnapshot` returned before holding `measuredWith` to the
+  flags' ranges (`return parsed.data;` ahead of `resolveConfig`);
+  "parseSnapshot refuses what is not a snapshot, each with its own
+  sentence" failed with the parsed snapshot where "context/snapshot.json is
+  not a dbtruth snapshot: measuredWith: DBTRUTH_SAMPLE_ROWS / --sample-rows:
+  0 is below the minimum 1" was expected. Restored.
+- Sabotage: `readSnapshot` lost its size check; "readSnapshot refuses a
+  missing file, a directory and a file over 10 MB before parsing" failed
+  with the parsed snapshot where "context\large.json is larger than 10 MB,
+  the most dbtruth reads" was expected. Restored.
+- Sabotage: `toSnapshot` also wrote `Verified.tables` (`tables:
+  verified.tables` after the verdicts); "toSnapshot lists every catalog
+  relation, marks those not examined, and carries no categorical value"
+  failed with "The input was expected to not match the regular expression
+  /canary-pii/", and "the snapshot carries only what Verified carries, and
+  no hidden value, even with --reveal" with `'tables'` among the top-level
+  keys; 3 tests failed. Restored.
+- Sabotage: `claimsSchema` kept the first of two copies of a relationship
+  with one basis again (HEAD's `prev.basis === "inferred" && named.basis ===
+  "stated"`); "copies of one claim come to the same claim whatever order the
+  reply gives them in" failed with "Expected values to be strictly
+  deep-equal": `reason: 'orders belong to customers'` where `'named like
+  it'` was expected, and "two runs whose claims come in different orders
+  write byte-identical snapshots" with the reversed run keeping `"reason":
+  "orders belong to customers"` where the first kept `"reason": "name"`.
+  Restored.
+- Sabotage: the dead-table age went back to a fraction of days (HEAD's
+  `EXTRACT(...) / 86400.0`, without `ceil`); "the dead-table age is counted
+  in whole days by the statement, so the number kept is the number it
+  reruns to" failed with "Expected values to be strictly equal": the
+  statement without `ceil(` where the one with it was expected, and "two
+  runs whose claims come in different orders write byte-identical
+  snapshots" with the two files unequal from the verdicts on. Restored.
+- Sabotage: the fingerprint was taken over the relation names alone
+  (`JSON.stringify(sorted.map((r) => r.name))`); "the fingerprint is sha256
+  of the schema only" failed with "a column added", and "the fingerprint
+  changes when a column is added in a copy of fixture_template, and not
+  otherwise" with "Expected "actual" to be strictly unequal to:
+  'sha256:e1e5...'". Restored.
+- `src/snapshot.ts` (the first, second, fifth to seventh and tenth),
+  `src/cli.ts` (the third), `src/write.ts` (the fourth), `src/schemas.ts`
+  (the eighth) and `src/verify.ts` (the ninth) were restored each time from
+  the copy and matched it byte for byte (`cmp`); for the four tracked files
+  `git diff HEAD -- <file>` printed the same diff as before, and
+  `src/snapshot.ts`, untracked, has none. No copy of `fixture_template` was
+  left. No sabotage left every test green; the one test change is the
+  message above, in `test/write.test.ts`.
+- After the record, `npm run verify` exits 0: 162 tests, 160 pass, the 2
+  live tests skipped, and the package smoke test passes. `npm run acceptance
+  -- --task T3.1` prints `T3.1: 100/100`, every check and item passing.

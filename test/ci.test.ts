@@ -21,3 +21,13 @@ test("every fixture file is an init script of docker-compose.yml, which CI loads
   assert.deepEqual([...mounted].sort(), files.sort(), "a fixture file that is not mounted is loaded neither by docker compose nor by CI");
   assert.match(read(".github/workflows/ci.yml"), /grep -o 'test\/fixtures\/\[A-Za-z0-9_\]\*\\\.sql' docker-compose\.yml/, "CI reads the order from docker-compose.yml");
 });
+
+test("fixture_template is created last, from postgres, after every other fixture file", () => {
+  // CI loads the files in the order the lines list them, the image in the order of the names they are mounted as.
+  const mounts = [...read("docker-compose.yml").matchAll(/test\/fixtures\/([A-Za-z0-9_]+\.sql):\/docker-entrypoint-initdb\.d\/([^:]+):ro/g)];
+  assert.equal(mounts.at(-1)?.[1], "template.sql", "the last line");
+  const names = mounts.map((m) => m[2]!);
+  assert.deepEqual([...names].sort(), names, "and the last name");
+  // A database cannot be copied while a session is connected to it, and each file starts connected to fixture.
+  assert.match(read("test/fixtures/template.sql"), /^\\connect postgres\r?\nCREATE DATABASE fixture_template TEMPLATE fixture IS_TEMPLATE true ALLOW_CONNECTIONS false;$/m);
+});
