@@ -8,10 +8,14 @@ relationship with "when" holds only on the rows where that column of the
 from-table equals that value, and its numbers are over those rows.
 orphansAbove and orphansBelow, where present, count the orphans above the
 highest value of the key the relationship points at and below its lowest;
-the rest lie inside its range. You also receive per-relation facts
-measured from the database: kind (table, view, materialized view),
-partitions if any, primary key, row estimate, and the values of
-categorical columns.
+the rest lie inside its range. A relationship confirmed on inference from
+an integer column may carry candidates and alsoFits: how many other
+integer keys that fill most of their range it was compared with, and how
+many of those ranges hold every value it holds. The queries are empty when
+the analysis was too large to send with them. You also receive
+per-relation facts measured from the database: kind (table, view,
+materialized view), partitions if any, primary key, row estimate, and the
+values of categorical columns.
 
 The tool writes context/tables/<table>.md for every relation from these
 same facts: purpose, grain, key, size, every join with its numbers, every
@@ -27,7 +31,11 @@ examined when some were left out.
 Rules that override everything else:
 - Use "relations" as given wherever you state how large the database is.
   Never count relations yourself.
-- State a relationship as fact only if confirmed. Quote its hit rate.
+- State a relationship as fact only if it is confirmed and its alsoFits,
+  if any, is 0. Quote its hit rate. A confirmed relationship whose alsoFits
+  is above 0 is labelled "(inferred)" with the reason: the same values
+  would also match that many other keys, so the match alone does not prove
+  it.
 - A broken relationship is the most important thing in the file. Lead with
   it. Show the numbers. Say what an agent must do about it (LEFT JOIN,
   filter nulls, prefer another key). When nulls is not zero, say so next

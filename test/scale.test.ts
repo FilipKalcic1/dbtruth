@@ -4,8 +4,10 @@ import { existsSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/cli.js";
+import { config } from "../src/config.js";
 import type { Transport } from "../src/model.js";
 import type { Extract, Verified } from "../src/schemas.js";
+import { readSnapshot } from "../src/snapshot.js";
 
 const SCALE_URL = (process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture").replace(/\/[^/]+$/, "/scale");
 
@@ -86,4 +88,29 @@ test("300 tables with the full budget: every table extracted", async () => {
   assert.equal(verified.fitsInContext, false, "300 tables do not fit in an agent's context");
   assert.equal(readdirSync(join(cwd, "context", "tables")).length, 300, "every relation gets a file from a two-file model reply");
   assert.ok(seconds < 90, `took ${seconds.toFixed(1)}s`);
+});
+
+test("300 weighed joins: prompt B is sent Verified without its queries, under the model's input limit, and the snapshot keeps every query", { timeout: 90_000 }, async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "dbtruth-scale-"));
+  const out: string[] = [];
+  const err: string[] = [];
+  const model = fakeModel();
+  let told = "";
+  const transport: Transport = (system, messages) => {
+    if (system.includes("writing reference files")) told = messages[0]!.content as string;
+    return model(system, messages);
+  };
+  await run({ url: SCALE_URL, samples: true, reveal: [], json: true, flags: {}, cwd, env: {}, out: (l) => out.push(l), err: (l) => err.push(l) }, { transport });
+  const verified = JSON.parse(out.join("\n")) as Verified;
+  const tokens = (text: string) => Math.ceil(text.length / config.charsPerToken);
+  assert.equal(Object.values(verified.verdicts).filter((v) => v.measurement.numbers.alsoFits === 49).length, 300, "each ref_id -> t_1.id join weighed against the 49 other keys the cap takes");
+  assert.ok(tokens(JSON.stringify(verified)) > config.modelMaxInputTokens, `Verified is ${tokens(JSON.stringify(verified))} tokens whole`);
+  assert.ok(tokens(told) <= config.modelMaxInputTokens, `prompt B was sent ${tokens(told)} tokens`);
+  const sent = JSON.parse(told) as Verified;
+  const without = (v: Verified) => Object.fromEntries(Object.entries(v.verdicts).map(([id, x]) => [id, { ...x, measurement: { ...x.measurement, query: "" } }]));
+  assert.deepEqual(sent.verdicts, without(verified), "every query left out, and every number kept");
+  assert.ok(err.some((l) => /^write: 302 files, [\d.]+s; the verdicts' queries dropped to fit the model's input limit$/.test(l)), err.join("\n"));
+  const snapshot = readSnapshot(cwd, "context/snapshot.json");
+  if (typeof snapshot === "string") assert.fail(snapshot);
+  assert.deepEqual(snapshot.verdicts, verified.verdicts, "the snapshot keeps every query, as --json does");
 });

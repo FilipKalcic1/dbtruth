@@ -19,6 +19,8 @@ export type Config = {
   categoricalMaxDistinct: number;
   categoricalMaxValueLength: number;
   join: { confirmed: number; broken: number };
+  denseKeyShare: number;
+  weakEvidenceMaxCandidates: number;
   staleAfterDays: number;
   duplicateOverlap: number;
   checkHitRateTolerance: number;
@@ -68,6 +70,16 @@ export const config: Config = {
   // relationship the output leads with; below broken is rejected. broken must not exceed confirmed.
   // Too low a broken bound: coincidental matches are reported. Too high: real problems vanish.
   join: { confirmed: 0.95, broken: 0.5 },
+
+  // An integer key counts as covering its range when its rows fill at least this share of the values from its lowest
+  // to its highest; a join confirmed on inference whose values would fit inside other such keys says so.
+  // Too low: sparse keys count as covering, and real joins are noted as weak evidence. Too high: a key with a few deleted rows stops counting.
+  denseKeyShare: 0.9,
+
+  // How many single-column integer keys that hold rows, in catalog order, are probed to weigh joins confirmed on
+  // inference against; each join then leaves out its target and any key that does not fill its range. 0 turns it off.
+  // Too high: two index lookups per key for every join weighed, and a longer query kept with each. Too low: a coincidence with a key left out goes unsaid.
+  weakEvidenceMaxCandidates: 50,
 
   // A table whose newest timestamp is older than this many days is dead.
   // Too low: seasonal tables look dead. Too high: dead tables look alive.
@@ -143,6 +155,8 @@ export const overridable = [
   { path: "categoricalMaxValueLength", env: "DBTRUTH_CATEGORICAL_MAX_VALUE_LENGTH", flag: "categorical-max-value-length", min: 0, integer: true },
   { path: "join.confirmed", env: "DBTRUTH_JOIN_CONFIRMED", flag: "join-confirmed", min: 0, max: 1 },
   { path: "join.broken", env: "DBTRUTH_JOIN_BROKEN", flag: "join-broken", min: 0, max: 1 },
+  { path: "denseKeyShare", env: "DBTRUTH_DENSE_KEY_SHARE", flag: "dense-key-share", min: 0, max: 1 },
+  { path: "weakEvidenceMaxCandidates", env: "DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES", flag: "weak-evidence-max-candidates", min: 0, integer: true },
   { path: "staleAfterDays", env: "DBTRUTH_STALE_AFTER_DAYS", flag: "stale-after-days", min: 0 },
   { path: "duplicateOverlap", env: "DBTRUTH_DUPLICATE_OVERLAP", flag: "duplicate-overlap", min: 0, max: 1 },
   { path: "checkHitRateTolerance", env: "DBTRUTH_CHECK_HIT_RATE_TOLERANCE", flag: "check-hit-rate-tolerance", min: 0, max: 1 },

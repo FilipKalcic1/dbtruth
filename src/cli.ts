@@ -13,7 +13,7 @@ import { FAIL_ON, fails, remeasure, reportLines, type FailOn } from "./check.js"
 import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Config, type Overrides } from "./config.js";
 import { contextualize } from "./contextualize.js";
 import { doctor } from "./doctor.js";
-import { extract, fitToContext, readCatalog } from "./extract.js";
+import { extract, fitToContext, integerKeys, readCatalog } from "./extract.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
 import { connect, readSettings, repositoryRoot, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
@@ -93,13 +93,13 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
     const claims = await contextualize(ai, extracted, { effort });
     const t1 = performance.now();
     opts.err(`contextualize: ${claims.tables.length} tables described, ${claims.relationships.length + claims.suspicions.length} claims to test, ${seconds(t1 - t0)}`);
-    const measurements = await verify(db, cfg, extracted, claims);
+    const measurements = await verify(db, cfg, extracted, claims, () => integerKeys(db, cfg, catalog));
     const verified = assemble(extracted, claims, measurements, cfg);
     const t2 = performance.now();
     opts.err(`verify: ${measurements.length} measurements, ${seconds(t2 - t1)}`);
-    const files = await write(ai, verified, { effort });
+    const { files, reduced: withheld } = await write(ai, verified, cfg, { effort });
     const modelMs = { contextualize: t1 - t0, write: performance.now() - t2 };
-    opts.err(`write: ${Object.keys(files).length} files, ${seconds(modelMs.write)}`);
+    opts.err(`write: ${Object.keys(files).length} files, ${seconds(modelMs.write)}${withheld ? `; ${withheld}` : ""}`);
 
     // 8. Write the files and the snapshot, print the summary, exit. The snapshot lists every relation of the catalog.
     const snapshot = serialize(toSnapshot(verified, catalog, cfg, { toolVersion: VERSION, serverVersionNum }));
@@ -247,13 +247,15 @@ function summary(v: Verified, fileCount: number, spentMs: number, modelMs: { con
   const count = (prefix: string, status: string) => Object.entries(v.verdicts).filter(([id, x]) => id.startsWith(prefix) && x.status === status).length;
   const rel = (s: string) => count("relationship:", s);
   const sus = (s: string) => count("suspicion:", s);
+  // Confirmed, and matched as well by other keys: the match alone proves nothing.
+  const weak = Object.entries(v.verdicts).filter(([id, x]) => id.startsWith("relationship:") && x.status === "confirmed" && (x.measurement.numbers.alsoFits ?? 0) > 0).length;
   const broken = Object.entries(v.verdicts)
     .filter(([id, x]) => id.startsWith("relationship:") && x.status === "broken")
     .map(([id, x]) => `  ${id.slice("relationship:".length)}  hit rate ${(x.measurement.numbers.hit! * 100).toFixed(1)}%`);
   return [
     `dbtruth: ${v.database}`,
     `relations: ${v.relations}${v.fitsInContext ? " (fits in an agent's context)" : ""}`,
-    `relationships: ${rel("confirmed")} confirmed, ${rel("broken")} broken, ${rel("rejected")} rejected, ${rel("unverifiable")} unverifiable, ${rel("empty")} empty`,
+    `relationships: ${rel("confirmed")} confirmed${weak > 0 ? ` (${weak} on weak evidence)` : ""}, ${rel("broken")} broken, ${rel("rejected")} rejected, ${rel("unverifiable")} unverifiable, ${rel("empty")} empty`,
     ...broken,
     `suspicions: ${sus("confirmed")} confirmed, ${sus("rejected")} rejected, ${sus("unverifiable")} unverifiable, ${sus("empty")} empty`,
     ...emptyClaims(v),

@@ -1,23 +1,38 @@
 // verify.ts: Claims -> Measurements. One bounded query per claim, numbers only.
 //
-// This module knows nothing about thresholds. It runs the query, returns the
-// numbers and the query text, and marks a measurement `skipped` when it could
-// not be taken (timeout, budget, unknown table, no way to measure), and also
-// `empty` when a relation the claim names held no rows to measure. Claims are
-// measured strongest first, so when the budget runs out it is the weakest that
-// go unverified.
+// This module decides no verdict. It runs the query, returns the numbers and
+// the query text, and marks a measurement `skipped` when it could not be taken
+// (timeout, budget, unknown table, no way to measure), and also `empty` when a
+// relation the claim names held no rows to measure. Claims are measured
+// strongest first, so when the budget runs out it is the weakest that go
+// unverified.
+//
+// Then a join that reaches join.confirmed on inference, from an integer column,
+// is weighed with one statement more: how many other integer keys that fill
+// their range would hold every value it holds, since a small number such as a
+// quantity matches any of them. join.confirmed only picks the joins worth
+// weighing. The keys are asked for, and each probed, once per run and only when
+// a join is weighed, and the weighing comes after every claim, so that it never
+// costs a claim its own measurement.
 
 import type { Config } from "./config.js";
 import { DATATYPE_MISMATCH_STATES, isIntegerType, q, qualified, querySampled, typeFamily, type Db, type QueryResult } from "./safety.js";
-import { findTable, relationshipId, sqlString, suspicionId, type Claims, type Extract, type Measurement, type Relationship, type Suspicion, type Table } from "./schemas.js";
+import { findTable, relationshipId, sqlString, suspicionId, type Claims, type Extract, type IntegerKey, type Measurement, type Relationship, type Suspicion, type Table } from "./schemas.js";
 
 const SECONDS_PER_DAY = 86_400;
 
-export async function verify(db: Db, cfg: Config, extract: Extract, claims: Claims): Promise<Measurement[]> {
+export async function verify(db: Db, cfg: Config, extract: Extract, claims: Claims, keys: () => Promise<IntegerKey[]>): Promise<Measurement[]> {
   const out: Measurement[] = [];
   const byConfidence = [...claims.relationships].sort((a, b) => b.confidence - a.confidence);
   for (const r of byConfidence) out.push(await measureRelationship(db, cfg, extract, relationshipId(r), r));
   for (const s of claims.suspicions) out.push(await measureSuspicion(db, cfg, extract, suspicionId(s), s));
+  // The joins come first, in the order measured, so out[i] is the measurement of byConfidence[i].
+  let dense: IntegerKey[] | undefined;
+  for (const [i, r] of byConfidence.entries()) {
+    if (!worthWeighing(cfg, extract, r, out[i]!)) continue;
+    dense ??= await denseKeys(db, cfg, await keys());
+    out[i] = await weigh(db, cfg, extract, r, out[i]!, dense);
+  }
   return out;
 }
 
@@ -50,14 +65,12 @@ async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimI
   const keyed = to.primaryKey?.[0] === r.to.column;
   const col = `f.${q(r.from.column)}`;
   const counts = `count(${col}) AS total, count(*) - count(${col}) AS nulls`;
-  // With a condition, only the sampled rows whose column reads as the value, as text, the form the model saw values in.
-  const rows = (source: string) => (when ? `(SELECT * FROM ${source} w WHERE w.${q(when.column)}::text = $1)` : source);
+  const { rows, params, note } = claimRows(r);
   // Where the key is probed and both columns are integers, the orphans past its highest and past its lowest value are
   // counted too: a value past either end matches nothing, and each end is one lookup in the key's index. The ends
   // themselves never leave the database.
-  const integer = (t: Table, name: string) => t.columns.some((c) => c.name === name && isIntegerType(c.type));
   const ends =
-    integer(from, r.from.column) && integer(to, r.to.column)
+    isIntegerColumn(from, r.from.column) && isIntegerColumn(to, r.to.column)
       ? `, count(*) FILTER (WHERE ${col} > (SELECT max(t.${q(r.to.column)}) FROM ${qualified(to)} t)) AS orphans_above` +
         `, count(*) FILTER (WHERE ${col} < (SELECT min(t.${q(r.to.column)}) FROM ${qualified(to)} t)) AS orphans_below`
       : "";
@@ -67,9 +80,8 @@ async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimI
   FROM ${rows(source)} f`
       : `SELECT ${counts}, count(t.v) AS hits
   FROM ${rows(source)} f LEFT JOIN (SELECT DISTINCT ${q(r.to.column)}${cast} AS v FROM ${qualified(to)}) t ON t.v = ${col}${cast}`;
-  const { query: statement, result } = await runWithTextFallback(db, cfg, from, sql, when ? [when.equals] : []);
-  // The statement run holds $1 and never the value; the query kept ends with a note that gives it, so a person can rerun it.
-  const query = when ? `${statement}\n-- $1 = ${sqlString(when.equals)}` : statement;
+  const { query: statement, result } = await runWithTextFallback(db, cfg, from, sql, params);
+  const query = statement + note;
   if (!result.ok) return skip(claimId, kind, result.message, query);
   const row = result.rows[0];
   const total = Number(row?.total);
@@ -79,6 +91,61 @@ async function measureRelationship(db: Db, cfg: Config, extract: Extract, claimI
   // Only where the statement counted them. The other orphans lie inside the key's range, and are not a number of their own.
   const split: Record<string, number> = row && "orphans_above" in row ? { orphansAbove: Number(row.orphans_above), orphansBelow: Number(row.orphans_below) } : {};
   return { claimId, kind, query, numbers: { total, hits, orphans: total - hits, hit: hits / total, nulls, ...split } };
+}
+
+// ---------- weighing: would the same values match other keys too? ----------
+
+/**
+ * A join a coincidence could confirm: measured at join.confirmed or above, on inference, from an integer column, and
+ * not a declared foreign key, which Postgres enforces whatever basis the claim gives it.
+ */
+function worthWeighing(cfg: Config, extract: Extract, r: Relationship, m: Measurement): boolean {
+  if (m.skipped !== undefined || m.numbers.hit! < cfg.join.confirmed || r.basis !== "inferred") return false;
+  const from = findTable(extract.tables, r.from.table)!;
+  const to = findTable(extract.tables, r.to.table)!;
+  return isIntegerColumn(from, r.from.column) && !from.foreignKeys.some((k) => k.column === r.from.column && k.refTable === to.name && k.refColumn === r.to.column);
+}
+
+/**
+ * The keys whose rows fill at least denseKeyShare of the values from their lowest to their highest. One probe each,
+ * which returns the span, how many values that is, and never an end; the span is taken in numeric, which holds any
+ * bigint key's, and the share is applied here, so no setting becomes SQL text. A key that is empty, cannot be read or
+ * is past the budget has no span, and is left out.
+ */
+async function denseKeys(db: Db, cfg: Config, keys: IntegerKey[]): Promise<IntegerKey[]> {
+  const dense: IntegerKey[] = [];
+  for (const k of keys) {
+    const probe = await db.query(`SELECT max(${q(k.column)})::numeric - min(${q(k.column)}) + 1 AS span FROM ${qualified(k)}`);
+    const span = probe.ok ? probe.rows[0]?.span : null;
+    if (span !== null && span !== undefined && k.rowEstimate >= cfg.denseKeyShare * Number(span)) dense.push(k);
+  }
+  return dense;
+}
+
+/**
+ * The join's measurement with two numbers more: how many dense keys it was compared with, all but its target and its
+ * from-column's own key (candidates), and how many of those have its rows' lowest and highest value within their range
+ * (alsoFits). One statement over the rows the join was measured on, which compares the ends in the database; the query
+ * kept is the join's statement, then this one. With no key to compare, or a statement that did not run, the
+ * measurement is as it was: nothing is claimed either way.
+ */
+async function weigh(db: Db, cfg: Config, extract: Extract, r: Relationship, m: Measurement, dense: IntegerKey[]): Promise<Measurement> {
+  const from = findTable(extract.tables, r.from.table)!;
+  const to = findTable(extract.tables, r.to.table)!;
+  const others = dense.filter((k) => k.name !== to.name && !(k.name === from.name && k.column === r.from.column));
+  if (others.length === 0) return m;
+  const { rows, params, note } = claimRows(r);
+  const col = `f.${q(r.from.column)}`;
+  const arms = others.map((k) => `SELECT min(${q(k.column)}) AS lo, max(${q(k.column)}) AS hi FROM ${qualified(k)}`);
+  const sql = (source: string) => `SELECT count(*) AS candidates, count(*) FILTER (WHERE k.lo <= v.lo AND k.hi >= v.hi) AS also_fits
+  FROM (SELECT min(${col}) AS lo, max(${col}) AS hi FROM ${rows(source)} f) v,
+       (${arms.join("\n        UNION ALL ")}) k`;
+  const { source, result } = await querySampled(db, from, cfg, sql, params);
+  if (!result.ok) return m;
+  const row = result.rows[0];
+  // The note, which gives $1 for both statements, stays last.
+  const join = m.query.slice(0, m.query.length - note.length);
+  return { ...m, query: `${join};\n${sql(source)}${note}`, numbers: { ...m.numbers, candidates: Number(row?.candidates), alsoFits: Number(row?.also_fits) } };
 }
 
 // ---------- suspicions ----------
@@ -244,8 +311,23 @@ function nothingToMeasure(claimId: string, kind: Measurement["kind"], source: Ta
   return empty(source, EMPTY_SOURCE) ?? (target && empty(target, EMPTY_TARGET));
 }
 
+/**
+ * The sampled rows a claim is about, their bind parameters, and the note that ends its query: every row, or with a
+ * condition those whose column reads as the value, as text, the form the model saw values in. The statements run hold
+ * $1 and never the value; the note gives it, so that a person can rerun them.
+ */
+function claimRows({ when }: Relationship): { rows: (source: string) => string; params: string[]; note: string } {
+  if (!when) return { rows: (source) => source, params: [], note: "" };
+  return { rows: (source) => `(SELECT * FROM ${source} w WHERE w.${q(when.column)}::text = $1)`, params: [when.equals], note: `\n-- $1 = ${sqlString(when.equals)}` };
+}
+
 function hasColumn(table: Table, column: string): boolean {
   return table.columns.some((c) => c.name === column);
+}
+
+/** smallint, integer or bigint, as the catalog gives the column's type. */
+function isIntegerColumn(table: Table, column: string): boolean {
+  return table.columns.some((c) => c.name === column && isIntegerType(c.type));
 }
 
 const NEVER_REFRESHED = "a materialized view that has never been refreshed cannot be read";

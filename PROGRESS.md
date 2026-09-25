@@ -3121,3 +3121,384 @@ of each lost point, in the format of section 4.7 of the plan.
   231 tests, 229 pass, the 2 live tests skipped, and the package smoke test
   passes; `npm run acceptance -- --task T2.4` prints `T2.4: 100/100`, every
   check passing.
+
+## T2.2 Weak-evidence note for small value ranges
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 of the plan, T2.2 with T2.3, T2.4, T3.1, T3.2
+  and Appendices A to C; the design brief for T2.3, T2.4 and T2.2, section 4
+  and the ground rules of section 1, and the lead's decisions in its
+  section 7, which include bounding prompt B's input (decision 9);
+  `src/verify.ts`, `src/write.ts`, `src/extract.ts`, `src/check.ts`,
+  `src/cli.ts`, `src/config.ts`, `src/schemas.ts`, `src/snapshot.ts`,
+  `src/safety.ts`, both prompts and their tests, `test/joins.test.ts`,
+  `test/scale.test.ts`, `test/integration.test.ts`, `test/readme.test.ts`;
+  README.md, NOTES.md (0.2.0, 0.3.0, the limits), CHANGELOG.md, the
+  iterations of T2.3 and T2.4 above and `acceptance/`.
+- Where the brief and the code at HEAD differ, the code won:
+  - The `$1` note ends a branch's query (T2.3 iteration 2), where the brief
+    puts it first. A weighed branch's query is the join's statement, `;`,
+    the weighing, then the one note, which gives the value both statements
+    bind. Appending `;` and the weighing after the note would have put the
+    `;` inside the comment, and the two statements would read as one.
+  - T2.3 folded `claimRows` into its one caller. With the weighing it has
+    two again, so it is back, and returns the note with the rows and the
+    parameters, so both statements are built from one place.
+  - `polymorph`'s claims at HEAD include `keyed` and not `invoices` or
+    `refunds`, so its summary is `3 confirmed (3 on weak evidence), 1
+    broken, 0 rejected, 3 unverifiable, 3 empty`, not the brief's.
+  - The orphan place is inline in the broken line (T2.4); the weak-evidence
+    wording goes in the confirmed line only, where "(inferred)" goes, so
+    the two never meet: only a confirmed join is weighed.
+- Checked before building, on the fixture server (Postgres 16): every
+  single-column integer key of the fixture fills its range (customers 250,
+  order_items 1200, orders 500, products 80, products_legacy 70, vehicles
+  120, from `reltuples`); `cars` is 0 over 0 pages, `events` has two
+  columns; on `polymorph`, `accounts` has 40 rows over 50 ids and the other
+  four keys fill theirs.
+- Tests first, on the code as committed:
+  - `config.test.ts`: both new tests failed with `actual: undefined` where
+    0.9 and 50 were expected.
+  - `extract.test.ts` and `write.test.ts` did not load: `The requested
+    module '../src/extract.js' does not provide an export named
+    'integerKeys'`, and the same for `fitForWriter` in `write.js`.
+  - `snapshot.test.ts`: `measuredWith` lacked both settings, `[ undefined,
+    undefined ]` where `[ 0.9, 50 ]`.
+  - `verify.test.ts`: no probe was sent, `actual: undefined` where the
+    probe of `customers` was expected; the leave-out test found `[]` where
+    six probes were expected; out of budget, `1` statement where 4. "a join
+    stated, declared, broken, empty or unmeasured, ... is not weighed"
+    passed, as a guard must while nothing weighs.
+  - `joins.test.ts`: the quantity join `candidates: undefined, alsoFits:
+    undefined` where 5 and 5; "only counts leave the database when a join
+    is weighed" found `0` probes where 6; the edge copy `candidates:
+    undefined` where 8; the branch test the same where 3 and 2; T2.3's
+    bound-value test found no weighing among the statements that bind a
+    value. "a declared foreign key is never weighed ..." passed, as a
+    guard.
+  - `integration.test.ts`: prompt B was sent over the limit, `actual: 2,
+    expected: 1` requests. `scale.test.ts`: the new test failed, since
+    before the change no verdict carries `alsoFits`.
+- Built, as section 4.1 of the brief has it, with the code at HEAD:
+  `denseKeyShare` and `weakEvidenceMaxCandidates` in `config.ts`, with
+  their comments, ranges, variables and flags; `IntegerKey` and both
+  settings, optional, in the snapshot's `measuredWith` (`schemas.ts`);
+  `integerKeys(catalog)` in `extract.ts`; in `verify.ts`, `keys` as a
+  required argument, and after every claim, for each join worth weighing,
+  one probe per key once per run (`denseKeys`) and one statement per join
+  (`weigh`); `check.ts` and `cli.ts` pass `integerKeys(catalog)`; the
+  confirmed line of `tableFile`; the summary's parenthesis; prompt B's
+  sentence and rule.
+- Built for decision 9: `fitForWriter` in `write.ts` holds what prompt B is
+  sent to `modelMaxInputTokens` as `fitToContext` holds prompt A's extract:
+  every verdict's query emptied when Verified is over it, and nothing sent
+  when that is still over it, in which case `render()` writes the
+  per-table files alone; the note ends the line that starts `write:`.
+  Prompt B is told a query may be empty.
+- Checked beyond the tests: `EXPLAIN` shows each end of a key, in the probe
+  and in the weighing, as an InitPlan over an index-only scan of its primary
+  key. Measured on `scale`, 300 joins weighed against 49 keys each:
+  `Verified` 1,652,576 characters (413,144 tokens at 4 a token), 271,484
+  with the weighing off; prompt B sent 141,496 characters (35,374 tokens);
+  the snapshot 1,859,232 bytes, 470,939 with the weighing off; a weighed
+  join's query 4,540 characters; `verify` 3.4 s, 1.0 s with the weighing
+  off.
+- Docs: NOTES (the entry under 0.2.0 and one for prompt B's input, with the
+  measured sizes and the test changes; "One sample, one target" and the
+  unconditional-join limit point at the note; the 0.3.0 snapshot bullet no
+  longer says `denseKeyShare` comes later; the T3.2 bullet says `check`
+  probes the whole catalog's keys; the 10 MB bullet gives a weighed join's
+  size; `isIntegerType` picks the joins and keys), README ("How it works",
+  a troubleshooting row for both notes on the `write:` line), CHANGELOG
+  (0.2.0, two bullets), `--help` (the two flags, from `overridable`), both
+  config comments, prompt B, and a header item in `polymorph.sql` on the
+  keys its numbers depend on, a comment only.
+- Test changes, named in NOTES: the 21 `verify(...)` calls in
+  `verify.test.ts` gain `, []` and the `measuredWith` deep-equal in
+  `snapshot.test.ts` gains the two settings, both approved; T2.3's "a
+  discriminator value is always a bind parameter, ..." expects the two
+  weighing statements that bind `post` and `5` besides the joins', and
+  `offline()` in `joins.test.ts` takes flags.
+- `acceptance/checks.json`: T2.2's checks, five for the A-items (A4 twice:
+  the per-table line with prompt B's input, and prompt B's rule, as the
+  lead scores A4 on the offline evidence), nineteen on tests, the gate,
+  eight on docs, three invariants. `acceptance/manual.json`: the sabotage
+  item, empty.
+- The database tests (`joins`, `integration`, `remeasure`, `doctor`,
+  `safety`, `sampling`, `scale`: 94 tests, 92 pass, the 2 live tests
+  skipped) pass on Postgres 12 (12.22) and 18 (18.6), in throwaway
+  containers loaded with every fixture file in compose order, as on 16. No
+  container and no copy of `fixture_template` was left.
+- Under Linux as a non-root user (uid 1000), with `docker run --init`, in
+  `node:20` (20.20.2) and `node:22` (22.23.3), from a copy of the working
+  tree with LF endings and `npm ci`, against the 18.6 server: the task's
+  eight test files with `remeasure`, `check`, `readme`, `ci`, `structure`
+  and `acceptance`, 166 tests, 164 pass, the 2 live tests skipped, on each.
+- `npm run verify` exits 0: 249 tests, 247 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.2`
+  prints `T2.2: 80/100`, every one of its 36 checks passing but the
+  sabotage item. `npm run acceptance` over every task: every other task
+  built so far still 100/100. (That run read T2.2's NOTES check before its
+  heading "Test changes" was renamed from "Test changes the lead
+  approved", and failed it; the run of T2.2 alone after the rename passes
+  it.)
+- Lost Tests (-20): `FAIL T2.2 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead:
+  - The snapshot grows by about 4.6 KB per weighed join at the default cap,
+    so `check`'s 10 MB limit is reached near two thousand weighed joins,
+    where T3.1 put it at some twenty thousand relations. Whether to lower
+    the default cap, shorten the stored weighing, or leave it.
+  - T2.3's test "a discriminator value is always a bind parameter, ..."
+    now expects the two weighing statements that bind a value besides the
+    joins'. Named in NOTES; approval asked, since the lead approved only
+    the `verify` call sites and the `measuredWith` deep-equal.
+### Iteration 2: 80/100
+- Four reviews gave ten findings. Each was checked against the code and
+  the plan before acting; none rejected. One was fixed otherwise than it
+  proposed (R8), and one was kept as built, as it allowed, with its
+  rationale corrected and put to the lead (the weighing statement).
+- Checked first: A2's two tests assert only that something is absent, so
+  on the code before T2.2 both pass (iteration 1 recorded it). `integerKeys`
+  dropped every key whose catalog estimate is unknown, the case T2.1 sizes
+  by a pilot, where the plan asks for "a known `rowEstimate > 0`"; on a
+  database loaded since its last `ANALYZE` no key was weighed against, or
+  only the analyzed few, and an `alsoFits` of 0 read as strong evidence. It
+  also dropped a partitioned key whose empty leaf was never analyzed,
+  which reads -1 on Postgres 14 and later, where `estimateRows` counts that
+  leaf as empty. The probe wrote `denseKeyShare`, which comes from a flag,
+  a variable or the snapshot, into its SQL text (R8).
+- Fixed:
+  - A2: "a declared foreign key is never weighed, ..." also asserts that
+    the quantity join of the same run is weighed (5 and 5, `also_fits` in
+    its query), and "a join stated, declared, ... is not weighed" ends with
+    the same join, inferred and confirmed, on the same answers: 5
+    statements, 2 and 2.
+  - Keys: `integerKeys(db, cfg, catalog)` sizes each key by `estimateRows`
+    with the pilot `extract` runs, now one function, `pilot()`, and takes
+    the first `weakEvidenceMaxCandidates` keys that hold rows, so the cap
+    bounds the pilots as well as the probes, and `denseKeys` no longer
+    slices. `verify` is handed `() => integerKeys(...)`, so the keys are
+    sized, as they are probed, only when a join is weighed. The empty leaf
+    needs no rule of its own: rule 3 counts a leaf with no pages as empty.
+    `IntegerKey.rows` is `rowEstimate`. The `integerKeys` unit test covers
+    a key never analyzed, one loaded since, one whose pilot fails, the
+    empty leaf, and the cap (4, and 0 with no statement); the edge test on
+    a copy of `fixture_template` adds `fresh`, 1,000 rows never analyzed,
+    which is piloted and counts: the quantity 9 and 7, the serials 9 and 0,
+    and at `denseKeyShare` 0, 11 and 9, 11 and 1.
+  - R8, not as proposed: with the key's size and the share bound, T2.3's
+    "check measures no condition when the snapshot's settings would show
+    more values than this run's" failed, `no statement carries a value`,
+    since every probe then carried two. That test is committed, and 4.4
+    forbids loosening it. The probe returns the span instead, `max(id)::
+    numeric - min(id) + 1`, how many values the key spans and never an end,
+    and Node compares it with the key's size and the share, as the plan's
+    own density test does, so no setting is in a probe's text or its
+    parameters. The T2.2 tests follow: the probe's text, answers that give
+    spans, and "only counts leave the database when a join is weighed"
+    checks that each probe returns one whole number named `span`.
+  - `verify()` keeps HEAD's one `out` array and weighs `out[i]` in place.
+  - `write()` calls `fitForWriter` itself and returns the files with the
+    note, so the per-table files are rendered from `Verified` whole whatever
+    prompt B is sent; `render()` is folded back into `write()`, as at HEAD,
+    and `cli.ts` makes one call. The two existing `write()` calls in
+    `write.test.ts` pass `config` and read `files`, with no assertion
+    changed; named in NOTES.
+  - Docs: the cap's comment in `config.ts` says it counts the keys probed;
+    README "How it works" and CHANGELOG say "among the first
+    `--weak-evidence-max-candidates` that hold rows" and "would also fit one
+    or more of them ... says how many"; NOTES "Which keys", "Measured" and
+    "Test changes" follow the fixes, the T3.2 bullet says `check` may pilot
+    a key, and the README's fixture output is said to show the note only if
+    the model claims such a join.
+  - The weighing statement: kept. NOTES said the plan's form leaves a query
+    no one can rerun, though the plan names the keys in a comment for that,
+    and set it against a double the plan never uses. A new NOTES item, "Not
+    the plan's statement", gives the trade-off as it is: every key's ends
+    read again in each weighed join and a stored query about twice as long,
+    against one that reruns as it is and binds no value but a branch's, so
+    that the T2.3 test above holds, which the plan's bound ranges would fail.
+  - `acceptance/checks.json`: the renamed tests (`edges`, `verify-left-out`,
+    `integer-keys`) and the cap's comment.
+- Sabotage of the fixes, each file restored from a copy and compared with
+  `cmp`: `worthWeighing` returning false at once failed both A2 tests on a
+  strict deep-equal, the quantity join's `candidates` and `alsoFits`
+  undefined where 5 and 5, and `[1, undefined, undefined]` where `[5, 2,
+  2]`; `integerKeys` sized with a pilot that returns nothing failed the
+  `integerKeys` unit test, `never_analyzed` (40) and `loaded_since` (12)
+  missing, and the edge test; the probe's guard for a key with no span
+  removed failed the edge test with "quantity fits all but serials and
+  serial_refs; the serials fit none", 10 candidates where 9 (the emptied
+  `gone` counted), and "the weighing leaves out the target, ...".
+- The database tests (94, 92 pass, the 2 live tests skipped) pass on
+  Postgres 12 and 18.6 in throwaway containers loaded with every fixture
+  file in compose order, as on 16. No container and no copy of
+  `fixture_template` was left.
+- `npm run verify` exits 0: 249 tests, 247 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.2`
+  prints `T2.2: 80/100`, every check passing but the sabotage item; `npm
+  run acceptance` over every task: every other task built so far still
+  100/100.
+- Lost Tests (-20): `FAIL T2.2 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: the item in
+  `acceptance/manual.json` is still empty; the sabotage check of the task's
+  core is done by a later stage, and the sabotages above are of this
+  iteration's fixes only.
+- Open for the lead:
+  - The weighing statement is not the plan's (NOTES, "Not the plan's
+    statement"): keep it, or take the plan's, which reads each key's ends
+    once per run and stores about half the query, but reruns only with
+    every range looked up and bound by hand, and fails T2.3's test that
+    `check` under wider settings binds no value.
+  - Still open from iteration 1: the snapshot's growth, about 4.6 KB a
+    weighed join at the default cap, and the change to T2.3's "a
+    discriminator value is always a bind parameter, ...".
+  - New: the change to the two `write()` calls in `write.test.ts`.
+- Sabotage check of the task's core (section 4.5), with the task's eight
+  test files (`joins`, `verify`, `write`, `extract`, `config`,
+  `snapshot`, `scale`, `integration`: 111 tests, 109 passing and the 2
+  live tests skipped before) run after each break. `src/verify.ts`,
+  `src/extract.ts`, `src/write.ts` and `src/cli.ts` were copied outside
+  the repository first; after each break the file was restored from its
+  copy, `cmp` identical, and `git diff HEAD -- <file>` printed byte for
+  byte the diff saved before.
+- Sabotage: the density test inverted in `denseKeys`, `rowEstimate <
+  denseKeyShare * span`; "keys are judged in the database: ..." failed
+  with "quantity fits all but serials and serial_refs; the serials fit
+  none", 2 and 2 candidates where 9 and 9, and eleven other tests with
+  it. Restored.
+- Sabotage: the density test dropped, so every key with a span counts;
+  "keys are judged in the database: ..." failed with "quantity fits all
+  but serials and serial_refs; the serials fit none", 11 candidates where
+  9 (`sparse` and `wide` counted), and "a branch is weighed on its own
+  rows, and check measures ..." with "1 to 100 fit comments and invoices,
+  not photos", 4 candidates where 3 (`accounts` counted). Restored.
+- Sabotage: the containment inverted in the weighing, `k.lo >= v.lo AND
+  k.hi <= v.hi`; "the fixture's inferred quantity join is confirmed, and
+  says it would also match its 5 other dense keys" failed with `alsoFits:
+  0` where 5, "keys are judged in the database: ..." with "quantity fits
+  all but serials and serial_refs; the serials fit none", 0 where 7, and
+  "a join confirmed on inference from an integer column is weighed last,
+  ..." with "over the rows the join was measured on, against every dense
+  key but the target". Restored.
+- Sabotage: the claimed target kept among the keys weighed against; "the
+  fixture's inferred quantity join ..." failed with 6 candidates and 6
+  fits where 5 and 5, "a branch is weighed on its own rows, and check
+  measures ..." with "1 to 100 fit comments and invoices, not photos",
+  and "300 weighed joins: ..." with "each ref_id -> t_1.id join weighed
+  against the 49 other keys the cap takes", `0 !== 300`. Restored.
+- Sabotage: the from-column's own key kept among the keys; only "the
+  weighing leaves out the target, the from-column's own key, ..." failed,
+  and with assert's own "Expected values to be strictly deep-equal",
+  `vehicles` among the keys where only `products`. Its two comparisons of
+  the keys a join is weighed against were given messages that say what
+  each leaves out ("orders: not its target customers, nor audit, cars or
+  sparse"; "vehicles.id: not vehicles' own key either"), and the repeated
+  sabotage failed with "vehicles.id: not vehicles' own key either".
+  Restored.
+- Sabotage: the declared foreign key dropped from `worthWeighing`; "a
+  declared foreign key is never weighed, whatever basis the claim gives
+  it" failed with "relationship:order_items.product_id->products.id", 5
+  candidates and 4 fits where none, and "a join stated, declared, ... is
+  not weighed" with "declared, though the claim says inferred", `5 !== 1`
+  statements. Restored.
+- Sabotage: the basis dropped from `worthWeighing`, so stated joins are
+  weighed; "a join stated, declared, ... is not weighed" failed with
+  "stated", `5 !== 1`. Restored.
+- Sabotage: the `join.confirmed` bound dropped from `worthWeighing`; "a
+  join stated, declared, ... is not weighed" failed with "broken", `5 !==
+  1`, and "a discriminator value is always a bind parameter, ..." with a
+  weighing that binds `photo`, the broken photo branch's value. Restored.
+- Sabotage: the confirmed line of `tableFile` given `inferred` in place of
+  `evidence`; "a confirmed join whose values other keys would fit is
+  labelled inferred with the reason, never stated as fact" failed with the
+  line ending "match (inferred)." where "match (inferred; the same values
+  would also match 5 other keys, so the match alone does not prove this
+  join).", and "the fixture's inferred quantity join ..." with
+  "order_items.md". Restored.
+- Sabotage: the summary counting every weighed join as weak evidence,
+  `alsoFits !== undefined` in place of `(alsoFits ?? 0) > 0`; every test
+  stayed green, since no run whose summary a test read weighs a join that
+  fits no other key. "keys are judged in the database: ..." has one,
+  `serial_refs.serial_id`, weighed with `alsoFits` 0 beside the quantity
+  join; its runs now return the summary's `relationships:` line with the
+  numbers, and each of its four settings asserts it: 1, 2 and 1 on weak
+  evidence, and no parenthesis with the cap at 0. The repeated sabotage
+  failed it with "quantity fits all but serials and serial_refs; the
+  serials fit none, so only quantity is on weak evidence", "(2 on weak
+  evidence)" where "(1 on weak evidence)". Restored.
+- Sabotage: the weighing returning the column's ends beside the counts,
+  `min(v.lo) AS lo, max(v.hi) AS hi`; "only counts leave the database when
+  a join is weighed" failed with "two counts, never the ends of a
+  column", `hi` and `lo` among the columns returned. Restored.
+- Sabotage: the probe returning the key's highest value as its span,
+  `max(id) AS span`; "a join confirmed on inference from an integer column
+  is weighed last, ..." failed with "a probe returns how many values the
+  key spans, never an end of it", and "keys are judged in the database:
+  ..." with "quantity fits all but serials and serial_refs; the serials
+  fit none", 7 and 8 candidates where 9 and 9 (the two keys past 2^53 no
+  longer dense). Restored.
+- Sabotage: `integerKeys` taking any key an integer column leads,
+  `primaryKey ?` in place of `primaryKey?.length === 1 ?`; "integerKeys
+  takes, up to the cap and in catalog order, ..." failed with
+  `composite`'s `tenant` among the keys, "the fixture's inferred quantity
+  join ..." with 6 and 6 where 5 and 5 (`events` counted), and "only
+  counts leave the database ..." with "each integer key probed once", `7
+  !== 6`. Restored.
+- Sabotage: the cap ignored in `integerKeys`, `if (false) break`;
+  "integerKeys takes, ..." failed with `loaded_since` and the keys after
+  it past the cap of 4, "keys are judged in the database: ..." with
+  "customers, fresh and gone are probed", 9 candidates where 2, and "300
+  weighed joins: ..." with "each ref_id -> t_1.id join weighed against the
+  49 other keys the cap takes", `0 !== 300`. Restored.
+- Sabotage: a weighing that did not run returning `candidates` and
+  `alsoFits: 0`; only "out of budget, the weighing claims nothing either
+  way" failed, and with assert's own "Expected values to be strictly
+  deep-equal". Its comparison of the join's numbers was given a message,
+  and the repeated sabotage failed with "the join's own numbers: an
+  alsoFits of 0 would say that no other key holds its values", `alsoFits:
+  0` and `candidates: 1` added. Restored.
+- Sabotage: `fitForWriter` returning Verified whole at once; "what is over
+  the model's input limit even without its queries is not sent to prompt
+  B, ..." failed with "prompt A only", `2 !== 1`, "300 weighed joins: ..."
+  with "prompt B was sent 413144 tokens", and "prompt B is sent Verified
+  whole, ..." with `undefined` where "the verdicts' queries dropped to fit
+  the model's input limit". Restored.
+- Sabotage: a branch weighed over every sampled row, `claimRows({ ...r,
+  when: undefined })` in `weigh`; "a branch is weighed on its own rows,
+  and check measures ..." failed with "5 fits every dense key", `alsoFits`
+  3 where 4, and "a branch is weighed on its own rows with its value
+  bound, ..." with the statement it ran, which has no condition. Restored.
+- Sabotage: the keys probed again for every join weighed, `dense =` in
+  place of `dense ??=`; "only counts leave the database when a join is
+  weighed" failed with "each integer key probed once", `15 !== 5` on
+  polymorph, and "the weighing leaves out ..." with "nothing here should
+  be queried". Restored.
+- Sabotage: the keys probed before any join is found worth weighing; "a
+  join stated, declared, ... is not weighed" failed with "stated", `4 !==
+  1` statements. Restored.
+- One sabotage left every test green and two failed a test only with
+  assert's own message; the tests were strengthened as above, in T2.2's
+  own tests in `test/joins.test.ts` and `test/verify.test.ts`, and each
+  repeated sabotage failed them. With them the eight files pass: 111
+  tests, 109 pass, the 2 live tests skipped.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  249 tests, 247 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T2.2` prints `T2.2: 100/100`, every
+  check passing.
+### Iteration 3: the lead's answers
+- Snapshot size: a weighed join adds about 4.6 KB at the default cap, so
+  `check`'s 10 MB limit is reached near two thousand weighed joins (the scale
+  fixture's 300 give 1.86 MB). Accepted as recorded in NOTES: a model that
+  infers two thousand integer joins on its own is not a case to size for.
+- T2.3's test "a discriminator value is always a bind parameter, and SQL in
+  it matches nothing" now also expects the two weighing statements that bind
+  `post` and `5`: approved, as it adds to what the assertion checks.
+- Rescoring every task after T2.2, while the lead ran two read-only design
+  panels whose agents installed packages and ran prototypes on this machine,
+  failed the verify gate of T3.2, T3.1 and T2.1 (and T2.1's A5). The saved
+  outputs show timeouts only: tests cut at 30 s and 60 s, `spawnSync ...
+  ETIMEDOUT`, the 40,000-suspicion parse at 2,279 ms of its 2 s, a full run
+  of 353 s where 150 s is usual. Rerun on the idle machine, all three scored
+  100/100. Lesson for the lead: nothing heavy runs beside a scoring run.

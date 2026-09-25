@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -399,6 +399,18 @@ test("every full run writes context/snapshot.json, and it validates", { timeout:
     assert.equal(other.snapshot.schema.fingerprint, schema.fingerprint);
     assert.deepEqual(listed(other.snapshot.schema), listed(schema));
   }
+});
+
+test("what is over the model's input limit even without its queries is not sent to prompt B, and every other file is written", { timeout: 60_000 }, async () => {
+  // Prompt A is sent a relation or two, and the claims it gets back are the fixture's all the same, which do not fit.
+  const { cwd, err, requests } = await offline(cannedClaims, { flags: { modelMaxInputTokens: 500 } });
+  assert.equal(requests.length, 1, "prompt A only");
+  const written = err.map((l) => /^write: (\d+) files, [\d.]+s; README\.md and ENTITIES\.md not written: over the model's input limit even without the verdicts' queries$/.exec(l)?.[1]).find(Boolean);
+  assert.ok(written, err.join("\n"));
+  assert.deepEqual([existsSync(join(cwd, "context", "README.md")), existsSync(join(cwd, "context", "ENTITIES.md"))], [false, false]);
+  assert.equal(readdirSync(join(cwd, "context", "tables")).length, Number(written), "a file for each relation examined");
+  assert.ok(existsSync(join(cwd, SNAPSHOT)));
+  assert.ok(err.includes(`files written: ${Number(written) + 1} under ./context/`), "and the snapshot");
 });
 
 test("two runs whose claims come in different orders write byte-identical snapshots", { timeout: 60_000 }, async () => {

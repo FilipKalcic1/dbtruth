@@ -5,10 +5,10 @@
 // The queries the snapshot stores are never run and never printed. Claims are measured with the settings the snapshot
 // was measured with, so that a default changed since cannot pass for a change in the data; the budget, the timeout and
 // the tolerance are this run's. Only the relations the claims name are profiled; the whole catalog is read, for the
-// relations added or dropped since.
+// relations added or dropped since, and for the integer keys a join confirmed on inference is weighed against.
 
 import type { Config } from "./config.js";
-import { extract, readCatalog } from "./extract.js";
+import { extract, integerKeys, readCatalog } from "./extract.js";
 import type { Db } from "./safety.js";
 import { CHECK_CLASSES, findTable, relationshipId, SnapshotSchema, suspicionId, type CheckClass, type CheckReport, type Claims, type ClaimCheck, type Snapshot, type Verdict } from "./schemas.js";
 import { schemaOf, settingsOf } from "./snapshot.js";
@@ -44,7 +44,7 @@ export async function remeasure(db: Db, cfg: Config, snapshot: Snapshot): Promis
   // a condition count a guess at a hidden value (R3). With such settings no column counts as categorical.
   const wider = measuring.sampleRows < cfg.sampleRows || measuring.categoricalMaxDistinct > cfg.categoricalMaxDistinct || measuring.categoricalMaxValueLength > cfg.categoricalMaxValueLength;
   const tables = wider ? extracted.tables.map((t) => ({ ...t, columns: t.columns.map((c) => ({ ...c, visible: false })) })) : extracted.tables;
-  const measured = verdicts(await verify(db, measuring, { ...extracted, tables }, snapshot.claims), measuring);
+  const measured = verdicts(await verify(db, measuring, { ...extracted, tables }, snapshot.claims, () => integerKeys(db, measuring, catalog)), measuring);
   return diff(snapshot, { database: db.database, schema: schemaOf(catalog), verdicts: measured }, cfg);
 }
 

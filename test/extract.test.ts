@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { config } from "../src/config.js";
-import { estimateRows, extract, fitToContext, isCategorical, readCatalog, type Size } from "../src/extract.js";
+import { estimateRows, extract, fitToContext, integerKeys, isCategorical, readCatalog, type Catalog, type Size } from "../src/extract.js";
 import type { Db, QueryResult, Row } from "../src/safety.js";
 import type { Extract, Table } from "../src/schemas.js";
 import { deadTableQuery } from "../src/verify.js";
@@ -287,4 +287,67 @@ test("extract profiles only the relations of the catalog it is given", async () 
   assert.deepEqual(extracted.tables.map((t) => t.name), ["b"]);
   assert.deepEqual(extracted.skipped, [], "a relation left out of the catalog is not skipped: it was never asked for");
   assert.ok(asked.length > 0 && asked.every((sql) => sql.includes('"public"."b"')), asked.join("\n"));
+});
+
+test("integerKeys takes, up to the cap and in catalog order, the relations keyed by one integer column that hold rows, sized as extract sizes them", async () => {
+  const keyed = (name: string, type: string, size: Catalog[number]["size"], primaryKey: string[] | null = ["id"]): Catalog[number] => ({
+    name,
+    schema: "public",
+    kind: "table",
+    primaryKey,
+    foreignKeys: [],
+    columns: [{ name: "id", type, nullable: false }, { name: "tenant", type: "integer", nullable: false }],
+    size,
+  });
+  const catalog: Catalog = [
+    keyed("ints", "integer", { estimate: 100, pages: 1 }),
+    keyed("bigs", "bigint", { estimate: 50, pages: 1 }),
+    keyed("smalls", "smallint", { estimate: 5, pages: 1 }),
+    keyed("composite", "integer", { estimate: 100, pages: 1 }, ["tenant", "id"]),
+    keyed("texts", "text", { estimate: 100, pages: 1 }),
+    keyed("numerics", "numeric", { estimate: 100, pages: 1 }),
+    keyed("never_analyzed", "integer", { estimate: -1, pages: 10 }),
+    keyed("loaded_since", "integer", { estimate: 0, pages: 3 }),
+    keyed("unreadable", "integer", { estimate: -1, pages: 2 }),
+    keyed("empty", "integer", { estimate: 0, pages: 0 }),
+    keyed("partitioned", "integer", { estimate: -1, pages: 0, leaves: [{ estimate: 30, pages: 1 }, { estimate: 20, pages: 1 }] }),
+    keyed("half_known", "integer", { estimate: -1, pages: 0, leaves: [{ estimate: 30, pages: 1 }, { estimate: -1, pages: 4 }] }),
+    // On Postgres 14 and later a partition never analyzed reads -1 even when empty; no pages means it holds nothing.
+    keyed("empty_leaf", "integer", { estimate: -1, pages: 0, leaves: [{ estimate: 1000, pages: 5 }, { estimate: -1, pages: 0 }] }),
+    keyed("no_partitions", "integer", { estimate: -1, pages: 0, leaves: [] }),
+    { ...keyed("a_view", "integer", { estimate: -1, pages: 0 }, null), kind: "view" },
+  ];
+  // Each pilot reads every page of so small a table; it counts 40 rows of never_analyzed and 12 of loaded_since, and cannot read unreadable.
+  const piloted: string[] = [];
+  const db: Db = {
+    database: "x",
+    readOnlyProven: true,
+    catalog: async () => ({ ok: true, rows: [] }),
+    async query(sql) {
+      const name = /^SELECT count\(\*\) AS n FROM "public"\."(\w+)" TABLESAMPLE SYSTEM \(100\) REPEATABLE \(1\)$/.exec(sql)?.[1] ?? sql;
+      piloted.push(name);
+      const n = ({ never_analyzed: 40, loaded_since: 12 } as Record<string, number>)[name];
+      return n === undefined ? failed : counted(n);
+    },
+    budget: () => ({ budgetMs: 1000, spentMs: 0, remainingMs: 1000, exhausted: false }),
+    close: async () => {},
+  };
+  const key = (name: string, rowEstimate: number) => ({ schema: "public", name, column: "id", rowEstimate });
+  assert.deepEqual(await integerKeys(db, config, catalog), [
+    key("ints", 100),
+    key("bigs", 50),
+    key("smalls", 5),
+    key("never_analyzed", 40),
+    key("loaded_since", 12),
+    key("partitioned", 50),
+    key("half_known", 150),
+    key("empty_leaf", 1000),
+  ]);
+  assert.deepEqual(piloted, ["never_analyzed", "loaded_since", "unreadable"], "a pilot only where the catalog cannot size the key");
+
+  piloted.length = 0;
+  assert.deepEqual(await integerKeys(db, { ...config, weakEvidenceMaxCandidates: 4 }, catalog), [key("ints", 100), key("bigs", 50), key("smalls", 5), key("never_analyzed", 40)]);
+  assert.deepEqual(piloted, ["never_analyzed"], "nothing past the cap is sized");
+  assert.deepEqual(await integerKeys(db, { ...config, weakEvidenceMaxCandidates: 0 }, catalog), []);
+  assert.deepEqual(piloted, ["never_analyzed"]);
 });

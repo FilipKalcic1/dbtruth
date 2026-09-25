@@ -46,6 +46,9 @@ export type Extract = {
   unmatchedReveal: string[]; // --reveal entries that named no column
 };
 
+/** A relation keyed by one integer column, with its row estimate: what verify weighs a join confirmed on inference against. */
+export type IntegerKey = { schema: string; name: string; column: string; rowEstimate: number };
+
 /** A relation as the catalog alone describes it, before it is sized or sampled. */
 export type CatalogRelation = Omit<Table, "rowEstimate" | "estimateSource" | "columns" | "samples"> & {
   columns: Pick<Column, "name" | "type" | "nullable" | "comment">[];
@@ -254,6 +257,9 @@ export const SnapshotSchema = z.object({
     duplicateOverlap: z.number(),
     categoricalMaxDistinct: z.number(),
     categoricalMaxValueLength: z.number(),
+    // A snapshot written before these two existed has neither, and check then weighs joins with this run's.
+    denseKeyShare: z.number().optional(),
+    weakEvidenceMaxCandidates: z.number().optional(),
   }),
   schema: z.object({
     fingerprint: z.string(),
