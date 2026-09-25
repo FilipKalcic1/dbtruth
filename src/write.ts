@@ -1,5 +1,6 @@
 // write.ts: Verified -> Files, and Files -> disk. README and ENTITIES from one call, prompt B,
-// validated; one file per relation rendered from the measurements, no call at all.
+// validated, and sent no more than the model's input ceiling; one file per relation rendered
+// from the measurements, no call at all.
 //
 // This module owns the output directory. Paths are confined to context/ and made
 // safe for every filesystem, files from a previous run that this one does not write
@@ -15,8 +16,14 @@ export const OUTPUT_DIR = "context";
 /** cli.ts adds the snapshot to the files it hands persist, so this module need not know what it holds. */
 export const SNAPSHOT_FILE = "snapshot.json";
 
-export async function write(model: Model, verified: Verified, options?: AskOptions): Promise<Files> {
-  const written = await model.ask("write", verified, FilesSchema, options);
+/**
+ * The files of a run: README and ENTITIES from prompt B, sent Verified as fitForWriter holds it, and one file per
+ * relation rendered from Verified whole, which wins over a file of the same name. The note says what prompt B was not
+ * sent.
+ */
+export async function write(model: Model, verified: Verified, limits: { modelMaxInputTokens: number; charsPerToken: number }, options?: AskOptions): Promise<{ files: Files; reduced?: string }> {
+  const { verified: sent, reduced } = fitForWriter(verified, limits);
+  const written: Files = sent ? await model.ask("write", sent, FilesSchema, options) : {};
   // One flat file per relation, so a name with a path separator in it still lands under tables/.
   const rendered = Object.fromEntries(verified.tables.map((t) => [`${OUTPUT_DIR}/tables/${t.name.replace(/[\\/]/g, "_")}.md`, tableFile(verified, t)]));
   const out: Files = {};
@@ -30,7 +37,21 @@ export async function write(model: Model, verified: Verified, options?: AskOptio
     taken.add(unique.toLowerCase());
     out[unique] = markdown;
   }
-  return out;
+  return { files: out, reduced };
+}
+
+/**
+ * What prompt B is sent: Verified, held to the model's input ceiling as fitToContext holds prompt A's input. Over it,
+ * every verdict's query is left out, which --json and the snapshot keep and no per-table file shows; if that is still
+ * over it, nothing is sent. The note says which.
+ */
+export function fitForWriter(verified: Verified, cfg: { modelMaxInputTokens: number; charsPerToken: number }): { verified?: Verified; reduced?: string } {
+  const tokens = (v: Verified) => Math.ceil(JSON.stringify(v).length / cfg.charsPerToken);
+  if (tokens(verified) <= cfg.modelMaxInputTokens) return { verified };
+  const verdicts = Object.fromEntries(Object.entries(verified.verdicts).map(([id, v]) => [id, { ...v, measurement: { ...v.measurement, query: "" } }]));
+  const shorter = { ...verified, verdicts };
+  if (tokens(shorter) <= cfg.modelMaxInputTokens) return { verified: shorter, reduced: "the verdicts' queries dropped to fit the model's input limit" };
+  return { reduced: "README.md and ENTITIES.md not written: over the model's input limit even without the verdicts' queries" };
 }
 
 /**
@@ -50,8 +71,10 @@ export function tableFile(v: Verified, t: TableFacts): string {
     // A branch's condition as a SQL literal, which an agent can paste into a WHERE.
     const edge = `${r.from.table}.${r.from.column} -> ${r.to.table}.${r.to.column}${r.when ? ` when ${r.when.column} = ${sqlString(r.when.equals)}` : ""}`;
     const inferred = r.basis === "stated" ? "" : " (inferred)";
+    // A join confirmed on inference whose values other keys would hold too is not stated as a fact.
+    const evidence = n.alsoFits ? ` (inferred; the same values would also match ${n.alsoFits} other key${n.alsoFits === 1 ? "" : "s"}, so the match alone does not prove this join)` : inferred;
     const nulls = n.nulls ? ` ${n.nulls} sampled rows (${pct(n.nulls / (n.total! + n.nulls))}) have no ${r.from.column}; an inner join drops them too.` : "";
-    if (verdict.status === "confirmed") return [`- ${edge}: confirmed, ${pct(n.hit!)} of ${n.total} sampled rows match${inferred}.${nulls}`];
+    if (verdict.status === "confirmed") return [`- ${edge}: confirmed, ${pct(n.hit!)} of ${n.total} sampled rows match${evidence}.${nulls}`];
     if (verdict.status === "broken") return [`- **BROKEN** ${edge}: ${pct(n.hit!)} match (${n.hits} of ${n.total} sampled), ${n.orphans} orphans${orphanShape(n, `${r.to.table}.${r.to.column}`)}${inferred}. An inner join drops the orphans: use LEFT JOIN, or filter them on purpose.${nulls}`];
     return [`- ${edge} (inferred, ${verdict.skipped ? `not measured: ${verdict.skipped}` : verdict.status})`];
   });

@@ -27,8 +27,8 @@
 // claims keeps the rest.
 
 import type { Config } from "./config.js";
-import { bareName, DESCRIBED_RELATIONS, q, qualified, querySampled, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
-import { schemaOnly, type CatalogRelation, type Column, type Extract, type RelationKind, type Table } from "./schemas.js";
+import { bareName, DESCRIBED_RELATIONS, isIntegerType, q, qualified, querySampled, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
+import { schemaOnly, type CatalogRelation, type Column, type Extract, type IntegerKey, type RelationKind, type Table } from "./schemas.js";
 
 
 export type ExtractOptions = {
@@ -82,11 +82,7 @@ export async function extract(db: Db, cfg: Config, catalog: Catalog, opts: Extra
       skipped.push(relation.name);
       continue;
     }
-    // The pilot, when the rules need one, is a measurement like any other: inside the budget, and any failure leaves the size unknown.
-    const estimate = await estimateRows(size, cfg.pilotPages, async (percent) => {
-      const counted = await db.query(`SELECT count(*) AS n FROM ${qualified(relation)} TABLESAMPLE SYSTEM (${percent}) REPEATABLE (${cfg.sampleSeed})`);
-      return counted.ok ? Number(counted.rows[0]!.n) : undefined;
-    });
+    const estimate = await estimateRows(size, cfg.pilotPages, pilot(db, cfg, relation));
     const base: Table = {
       ...relation,
       ...estimate,
@@ -240,6 +236,31 @@ export async function estimateRows(
  */
 function isUnknown(s: Size): boolean {
   return s.estimate < 0 || (s.estimate === 0 && s.pages > 0);
+}
+
+/** estimateRows' pilot: a measurement like any other, inside the budget, and any failure leaves the size unknown. */
+function pilot(db: Db, cfg: Config, relation: { schema: string; name: string }): (percent: number) => Promise<number | undefined> {
+  return async (percent) => {
+    const counted = await db.query(`SELECT count(*) AS n FROM ${qualified(relation)} TABLESAMPLE SYSTEM (${percent}) REPEATABLE (${cfg.sampleSeed})`);
+    return counted.ok ? Number(counted.rows[0]!.n) : undefined;
+  };
+}
+
+/**
+ * The first weakEvidenceMaxCandidates relations, in catalog order, that are keyed by one integer column and hold rows,
+ * sized as extract sizes them. From the catalog, not the extract, since check profiles only the relations its claims
+ * name; a key the catalog cannot size is piloted here, with the same seed, so a run and check size it alike.
+ */
+export async function integerKeys(db: Db, cfg: Config, catalog: Catalog): Promise<IntegerKey[]> {
+  const keys: IntegerKey[] = [];
+  for (const { schema, name, primaryKey, columns, size } of catalog) {
+    if (keys.length === cfg.weakEvidenceMaxCandidates) break;
+    const key = primaryKey?.length === 1 ? columns.find((c) => c.name === primaryKey[0]) : undefined;
+    if (!key || !isIntegerType(key.type)) continue;
+    const { rowEstimate } = await estimateRows(size, cfg.pilotPages, pilot(db, cfg, { schema, name }));
+    if (rowEstimate > 0) keys.push({ schema, name, column: key.name, rowEstimate });
+  }
+  return keys;
 }
 
 type ColumnBase = Pick<Column, "name" | "type" | "nullable" | "comment"> & { attnum: number };

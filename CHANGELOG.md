@@ -26,6 +26,11 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   drift. It measures with the settings the snapshot was measured with and never
   runs a query stored in the file. `doctor`'s line for a missing key now says
   that `check` needs none either.
+- `check --json` prints the report on stdout (its `report` field is the
+  format, 1), and `check --markdown <path>` writes it as a pull request
+  comment: the counts, what fails the default build in a table, the rest
+  folded, at most 50 rows, names as code, no query or reason. A comment file
+  that cannot be written exits 1.
 - A file of the last run under `context/` is replaced by the new one, and
   only a file this run does not write again, such as a renamed table's, is
   removed. One that cannot be removed, held open by another program on
@@ -81,6 +86,18 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   the place with the count, as in "60 orphans, all above the highest
   customers.id"; the model, which writes `README.md`, is told what each place
   usually means, and to give it as a hint, not a cause.
+- A join inferred from an integer column that the data confirms is compared
+  with the other integer keys that fill most of their range
+  (`--dense-key-share`), among the first `--weak-evidence-max-candidates`
+  that hold rows. When its values would also fit one or more of them, as a
+  quantity from 1 to 5 fits every table's id, it stays confirmed: the
+  per-table files and the model say how many, and that the match alone does
+  not prove it, and the summary line counts it (`3 confirmed (1 on weak
+  evidence)`).
+- What the model is sent to write `README.md` and `ENTITIES.md` is held to
+  `--model-max-input-tokens`, as the schema is: over it, the verdicts'
+  queries are left out, and when even that is too large, those two files are
+  not written. The line that starts `write:` says so.
 - README: a quick start that runs `doctor` before the first run, a
   troubleshooting table with a row for every message dbtruth prints when
   something is wrong, and the commands, with those not built yet marked as

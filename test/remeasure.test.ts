@@ -2,18 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { remeasure, type FailOn } from "../src/check.js";
+import { COMMENT_MARKER, remeasure, type FailOn } from "../src/check.js";
 import { run, runCheck, type RunOptions } from "../src/cli.js";
 import { config, type Overrides } from "../src/config.js";
 import { connect, type Db } from "../src/safety.js";
-import { relationshipId, suspicionId, type CheckReport, type Snapshot } from "../src/schemas.js";
+import { CheckReportSchema, relationshipId, suspicionId, type CheckReport, type Snapshot } from "../src/schemas.js";
 import { readSnapshot, serialize } from "../src/snapshot.js";
 import { cannedClaims, fakeModel } from "./canned.js";
 import { copyOfFixture } from "./copies.js";
@@ -41,7 +41,7 @@ async function fullRun(url: string, claims: object = cannedClaims, opts: Partial
 async function checkIn(cwd: string, url: string, flags: Overrides = {}, failOn: FailOn = "regression"): Promise<{ code: number; err: string[]; ms: number }> {
   const err: string[] = [];
   const started = performance.now();
-  const code = await runCheck({ url, snapshot: SNAPSHOT, failOn, flags, cwd, env: {}, err: (line) => err.push(line) });
+  const code = await runCheck({ url, snapshot: SNAPSHOT, failOn, json: false, flags, cwd, env: {}, out: () => {}, err: (line) => err.push(line) });
   const ms = performance.now() - started;
   for (const line of err) assert.doesNotMatch(line, CANARY);
   return { code, err, ms };
@@ -374,4 +374,51 @@ test("check runs as the reader role without a warning", LIMIT, async (t) => {
   const { code, err } = await checkIn(cwd, reader);
   assert.equal(code, 0);
   assert.deepEqual(err, [`check ${copy.name}: 12 unchanged`]);
+});
+
+/** What "a broken foreign key is a regression" does to the copy, in one statement: every fifth line item points past the last order. */
+const REGRESSION = "ALTER TABLE order_items DROP CONSTRAINT order_items_order_id_fkey; UPDATE order_items SET order_id = order_id + 1000 WHERE id % 5 = 0";
+
+test("check --json prints the report alone on stdout, and --markdown writes the comment the README shows", LIMIT, async (t) => {
+  const copy = await copyOfFixture(t);
+  const cwd = await fullRun(copy.url);
+  await copy.sql(REGRESSION);
+  const { status, stdout, stderr } = await command(["check", "--url", copy.url, "--json", "--markdown", "comment.md"], cwd);
+  assert.equal(status, 2, stderr);
+  // The whole of stdout is one JSON value, which JSON.parse refuses otherwise, and the schema describes all of it, the
+  // format 1 included.
+  const report = JSON.parse(stdout) as CheckReport;
+  assert.deepEqual(CheckReportSchema.parse(report), report);
+  assert.deepEqual([report.claims.map((c) => c.class).sort(), report.relations], [["regression", ...Array<string>(11).fill("unchanged")], []]);
+  assert.equal(stderr, [SCHEMA_CHANGED, "regression relationship:order_items.order_id->orders.id: confirmed 100.0% -> broken 80.0%", `check ${copy.name}: 1 regression, 11 unchanged`, FIX, ""].join("\n"));
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const section = /^## Keeping context true: dbtruth check$([\s\S]*?)^## /m.exec(readme)?.[1] ?? "";
+  assert.equal(readFileSync(join(cwd, "comment.md"), "utf8"), /^```markdown\n([\s\S]*?)^```$/m.exec(section)?.[1], "the README's example comment");
+
+  // A check that cannot run writes no comment, and prints nothing on stdout.
+  const failed = await command(["check", "--url", copy.url, "--snapshot", "missing.json", "--json", "--markdown", "other.md"], cwd);
+  assert.deepEqual([failed.status, failed.stdout, existsSync(join(cwd, "other.md"))], [1, "", false], failed.stderr);
+});
+
+test("no hidden value reaches --json or --markdown", LIMIT, async (t) => {
+  const copy = await copyOfFixture(t);
+  const cwd = await fullRun(copy.url, cannedClaims, { reveal: ["customers.email"] });
+  await copy.sql(missingCustomers(60));
+  await copy.sql(REGRESSION);
+  const { status, stdout, stderr } = await command(["check", "--url", copy.url, "--json", "--markdown", "comment.md"], cwd);
+  assert.equal(status, 2, stderr);
+  const comment = readFileSync(join(cwd, "comment.md"), "utf8");
+  assert.deepEqual(comment.split("\n").slice(0, 2), [COMMENT_MARKER, "dbtruth: 1 regression, 1 improved, 10 unchanged"]);
+  for (const output of [stdout, stderr, comment]) assert.doesNotMatch(output, CANARY);
+});
+
+test("a comment that cannot be written stops check with exit 1 and no JSON", LIMIT, async () => {
+  const cwd = await fullRun(FIXTURE_URL);
+  const out: string[] = [];
+  const err: string[] = [];
+  // context/ is a directory, which no file can be written over.
+  const code = await runCheck({ url: FIXTURE_URL, snapshot: SNAPSHOT, failOn: "regression", json: true, markdown: "context", flags: {}, cwd, env: {}, out: (line) => out.push(line), err: (line) => err.push(line) });
+  assert.equal(code, 1, err.join("\n"));
+  assert.deepEqual(out, [], "no JSON");
+  assert.match(err.at(-1)!, /^could not write context: EISDIR/);
 });

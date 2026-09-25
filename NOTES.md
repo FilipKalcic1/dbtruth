@@ -1043,6 +1043,162 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     (T7.1).
   - Not done: where the orphans fall against a key of text, uuid or dates,
     or of more than one column.
+- **A join confirmed on inference says when its values would fit other keys
+  too.** A column of small integers matches any key that holds those
+  numbers, so its hit rate alone cannot tell a join from a coincidence. On
+  the fixture, `order_items.quantity -> products.id`, a quantity from 1 to 5
+  against 80 products, matches all 1,200 sampled rows and was reported
+  confirmed, and the fixture's five other single-column integer keys hold 1
+  to 5 as well (section 1 of the plan, defect 3). The join keeps its verdict
+  and now says so: `candidates` 5 and `alsoFits` 5, the per-table line
+  `confirmed, 100.0% of 1200 sampled rows match (inferred; the same values
+  would also match 5 other keys, so the match alone does not prove this
+  join).`, prompt B's rule that such a join is not stated as fact, and the
+  summary `relationships: 3 confirmed (1 on weak evidence), ...`. Verdicts
+  and exit codes do not move.
+  - **Neither a second sample nor a sweep.** A second sample repeats the
+    coincidence, which is in the data, and trying every compatible target
+    per claim multiplies the statements by the tables and reports joins
+    nobody claimed ("One sample, one target", under Known limits). This asks
+    one question of each join the model claimed: how many keys that exist
+    would hold every value it holds.
+  - **Which joins.** Basis `inferred`, measured at `join.confirmed` or above,
+    from a `smallint`, `integer` or `bigint` column (`isIntegerType`), and not
+    a declared foreign key, which Postgres enforces whatever basis the claim
+    gives it: the model can call a declared key inferred, and
+    `order_items.product_id -> products.id` would otherwise read 4 of 5,
+    since `products_legacy` stops at 70. So `verify.ts`, which read no
+    threshold, reads `join.confirmed`, to pick the joins worth weighing and
+    for nothing else; its header says so, and `decide` is unchanged.
+  - **Which keys.** The first `weakEvidenceMaxCandidates` relations, in
+    catalog order, keyed by one integer column and holding rows, sized as
+    `extract` sizes them (`integerKeys` in `extract.ts`, `estimateRows` with
+    the same pilot): a key the catalog cannot size, never analyzed or loaded
+    since, is piloted, and a partition never analyzed that has no pages holds
+    nothing. Sized by the catalog alone, a database loaded since its last
+    `ANALYZE` would weigh a join against no key, or against the few analyzed,
+    and an `alsoFits` of 0 would read as strong evidence. From the catalog,
+    not the extract: `check` profiles only the relations its claims name,
+    and a full run's extract depends on the budget and on fitting, so the
+    two would weigh against different keys; the pilot takes the seed and
+    `pilotPages` the snapshot was measured with, so both size a key alike.
+    `verify` is handed a function that returns the keys, so that they are
+    sized, as they are probed, only when a join is weighed. The cap is
+    applied before the target is left out, so every join of a run is
+    weighed against the same probed keys. A key counts when its rows fill
+    `denseKeyShare` of the values from its lowest to its highest: one probe
+    per key, once per run, that returns the span, how many values that is,
+    and never an end, as in `SELECT max("id")::numeric - min("id") + 1 AS
+    span FROM "public"."customers"`. The share and the key's size are
+    compared in Node, as in the plan, so no setting becomes SQL text (R8).
+    The span is taken in numeric: the plan's `(max - min + 1)::float8`
+    overflows a bigint key before the cast. A key that is empty, that the
+    role cannot read (42501), that times out or is past the budget drops out
+    alone, where one statement over every key would fail whole on one table
+    the role cannot read. A join is compared with neither its target nor its
+    from-column's own key.
+  - **Two counts, compared in the database.** One statement per weighed
+    join, over the rows its join statement read: the same sample and, for a
+    branch (T2.3), the same condition with the same `$1`. It pairs the
+    column's `min` and `max` on those rows with each key's, one `SELECT
+    min(key), max(key)` per key joined by `UNION ALL`, and returns
+    `candidates`, the keys compared, and `also_fits`, those whose range holds
+    both. No end of any column leaves the database, a key's included, and a
+    bigint key's ends are compared as bigints. Out of budget, or refused, the
+    measurement stays as it was, and nothing is claimed either way.
+  - **Not the plan's statement.** The plan reads each key's `lo` and `hi`
+    once per run, which R3 allows for a key, and binds the dense ranges back
+    as numeric parameters in a `VALUES` list, the stored query naming the
+    keys in a comment. This statement reads every key's ends again in each
+    weighed join, two index lookups per key, and its stored query is longer:
+    4,540 characters at 49 keys, where a pair of parameters and a name per
+    key would take about half. In exchange it reruns as it is (R7), where
+    the plan's needs each named key's range looked up and bound by hand, and
+    it binds no value but a branch's, so T2.3's test that `check` under
+    wider settings binds none holds unchanged; the plan's ranges would fail
+    it. Put to the lead (PROGRESS, T2.2, iteration 2).
+  - **Last.** The weighing runs after every claim is measured, so a note on
+    one join never costs another claim its measurement.
+  - **The query kept** is the join's statement, `;`, then the weighing. A
+    branch's note stays last, as T2.3 has it, and gives the value both
+    statements bind: `-- $1 = 'post'`. A test splits the post branch's
+    query at the `;`, reruns each statement with `post` bound, and gets the
+    verdict's numbers. The rows and the note of a branch come from one
+    helper again, `claimRows`, which T2.3 folded into its one caller.
+  - **`check` weighs alike.** `remeasure` hands `verify` the keys of the
+    whole catalog: on the fixture with the quantity claim, `check fixture:
+    14 unchanged`, each verdict the snapshot's, queries included. Both
+    settings go into `measuredWith`, optional, since a snapshot written
+    before them has neither and is weighed with this run's; `parseSnapshot`
+    holds them to their flags' ranges. `diff` reads status and hit rate
+    only, so `alsoFits` moves no class.
+  - **Tunables (R5).** `denseKeyShare`: 0.9, from 0 to 1,
+    `DBTRUTH_DENSE_KEY_SHARE`, `--dense-key-share`. `weakEvidenceMaxCandidates`:
+    50, a whole number of at least 0, 0 turning the weighing off,
+    `DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES`, `--weak-evidence-max-candidates`.
+  - **Measured.** On the edge cases, in a copy of `fixture_template`: a key
+    never analyzed is piloted to its 1,000 rows and counts; an emptied key,
+    one filling 100 of 991 values and a bigint key from its lowest to its
+    highest value are left out by default, and the last two count at
+    `denseKeyShare` 0; ids from 2^53 do not fit a key starting at 2^53 + 1;
+    a cap of 3 probes the first three keys that hold rows, in catalog order,
+    and compares the two that are not empty. On
+    `polymorph`, `accounts`, with 40 of its 50 ids, is left out, and the
+    photo branch is broken, so not weighed; the whole join, the post branch
+    and `invoices.account_id = '5'` are, 2 of 3, 2 of 3 and 4 of 4.
+  - **Test changes.** Two the lead approved. `verify()` takes the keys as a
+    fifth, required argument, a signature change flowing to its callers as
+    T3.1's catalog argument did, here a function that returns them: the 21
+    calls in `verify.test.ts` gain `, noKeys`, a function that returns none,
+    with no assertion changed, and with no key nothing is weighed. The
+    deep-equal of `measuredWith` in `snapshot.test.ts` gains the two
+    settings. And two the weighing brings. A weighed branch binds its value
+    to a second statement, so "a discriminator value is always a bind
+    parameter, ..." (`joins.test.ts`, T2.3), which lists every statement
+    that binds one, expects two more, the weighing of the `post` and `5`
+    branches, each with its own value; `offline()` there takes the tunables
+    to set. And `write()` holds what prompt B is sent itself (below), so it
+    takes the model's limits and returns the files with the note: the two
+    calls in `write.test.ts` ("the model writes README and ENTITIES; ..."
+    and "a reply without both files ...") pass `config` and read `files`,
+    with no assertion changed.
+  - Not done: a note on a broken join; keys of uuid, text or more than one
+    column; a hit rate per key compared. Almost every inferred integer join
+    will carry the note, since a larger table's ids usually cover a smaller
+    one's: the plan's own five include `order_items.id`, the quantity's own
+    table's key. Accepted by the lead, and to be judged on Pagila at release
+    (section 5.5 of the plan).
+    The README's fixture output, written by the model, shows the note only
+    if the model claims such a join when it is regenerated at release
+    (T7.1); until then A4 of T2.2 is judged on the per-table file, prompt
+    B's rule and what prompt B is sent.
+- **What prompt B is sent is held to the model's input ceiling.** `write()`
+  sent `Verified` whole, and nothing held it to `modelMaxInputTokens`; the
+  weighing makes it much larger. A weighed join's query is about 4.6 KB at
+  the default cap. On `scale`, whose 300 claimed joins are each weighed
+  against 49 keys, `Verified` is 1,652,576 characters, 413,144 tokens at four
+  characters a token, against 271,484 characters with the weighing off: a
+  database that size would fail at the API after contextualize was paid
+  for. `fitForWriter` in `write.ts` measures it as `fitToContext` measures
+  prompt A's extract. Over the ceiling, the copy prompt B is sent has every
+  verdict's query empty, 141,496 characters, 35,374 tokens on `scale`; every
+  number is sent, every query stays in `--json` and the snapshot, and the
+  per-table files show none. If that is still over the ceiling, prompt B is
+  not called: the per-table files and the snapshot are written, README.md and
+  ENTITIES.md are not, and the last run's are removed. Not sent, rather than
+  the run stopped: the measurements are paid for by then, and `check` needs
+  only the snapshot. The line that starts `write:` ends with the note, as
+  the disclosure line does for prompt A, and both notes share a
+  troubleshooting row. Prompt B is told a query may be empty. `write()`
+  fits what it sends itself, and renders the per-table files from
+  `Verified` whole, whatever prompt B was sent.
+  - The snapshot keeps the queries: 1,859,232 bytes on `scale`, against
+    470,939 with the weighing off. At about 4.6 KB a weighed join, `check`'s
+    10 MB limit is reached near two thousand weighed joins at the default
+    cap. The default stays 50, as the lead decided; a lower
+    `--weak-evidence-max-candidates` shortens every weighed query.
+  - Not done: trimming the claims or the tables' values as well, which would
+    change what prompt B writes about; a ceiling of prompt B's own.
 
 ## 0.3.0 (unreleased)
 
@@ -1055,8 +1211,8 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   its version, the database's name, `server_version_num`, the settings a
   measurement depends on (`measuredWith`: the sample size, oversampling and
   seed, `pilotPages`, the join bands, `staleAfterDays`, `duplicateOverlap` and
-  the two categorical limits; the plan's example has `denseKeyShare` too,
-  which comes with T2.2; the schema's `measuredWith` lists them once, and
+  the two categorical limits; since T2.2 also `denseKeyShare` and
+  `weakEvidenceMaxCandidates`, optional (0.2.0); the schema's `measuredWith` lists them once, and
   parsing the config with it keeps just those), the schema, and `Verified`'s
   claims and verdicts as they are. Nothing from `Verified.tables` goes in, so
   neither the value lists nor the sizes; a test runs with `--reveal
@@ -1209,7 +1365,8 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     wrote. The fixture's snapshot is 6 KB, and the `scale` database's 145 KB
     for 300 tables of five columns: about half a kilobyte a relation, so the
     limit is reached at some twenty thousand relations, whose snapshot `check`
-    refuses with its own sentence.
+    refuses with its own sentence. Each weighed join adds about 4.6 KB more
+    (T2.2, 0.2.0).
   - **`fixture_template` lands in T3.1, not T3.2,** since the fingerprint test
     needs a copy to change. `test/fixtures/template.sql`, mounted last as
     `90-template.sql`, connects to `postgres` and runs `CREATE DATABASE
@@ -1251,7 +1408,10 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   first step moved as it was and now shared by both), then the snapshot,
   before anything connects, then connects with the read-only proof;
   `remeasure` in `check.ts` reads the whole catalog, profiles only the
-  relations the claims name, with `samples: false`, verifies the snapshot's
+  relations the claims name, with `samples: false` (since T2.2 it also sizes
+  and probes the integer keys of the whole catalog when a join needs
+  weighing, with a pilot only for a key the catalog cannot size, 0.2.0),
+  verifies the snapshot's
   claims, decides their verdicts with `verdicts()` (the plan's flow says
   `assemble`, which adds only what the writer needs) and compares them with
   `diff`. The report goes to stderr; stdout stays empty. On
@@ -1375,6 +1535,108 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     review like code, and a claim the snapshot never measured fails a build
     only once a name it uses is gone, so any other break on it waits for the
     next full run.
+- **`check --json` prints the report, and `--markdown` writes it as a pull
+  request comment.** `diff()` returns one `CheckReport`, and it is shown three
+  ways from one ordering: `rows`, `notes` and `tally` in `check.ts` give the
+  items that are not unchanged, most serious first, the notes and the counts;
+  `reportLines` prints them on stderr, byte for byte as before, and
+  `reportMarkdown` writes them as the comment; `--json` prints the object
+  itself. The comment is written first, then the JSON printed, then check
+  exits 0 or 2 as before.
+  - **The report has a schema and a format.** `CheckReportSchema` in
+    `schemas.ts` replaces the TypeScript types, which are now inferred from it,
+    as the T3.2 entry said, and its `report` field is `CHECK_REPORT_FORMAT`,
+    1, raised as `SNAPSHOT_FORMAT` is, whenever a reader of an older format
+    would misread the report. Nothing parses the report at run time: the
+    schema is the contract for the Action (T4.1), `mcp` (T5.1) and the tests.
+    One checks that the reports `diff` returns for a regression and for a
+    stale claim, and the fixed report the rendering tests use, each equal
+    their own parse, so none holds a key the schema lacks; the integration
+    test parses a real `--json` report the same way.
+  - **`--json` is the report whole,** each verdict with its query, its
+    numbers and the reason it was not measured, as a full run's `--json`
+    prints them (R7; R3 lets query text out). Here T3.3's first bullet, the
+    `CheckReport` on stdout, and R7 conflict with its third, that both
+    formats hold only names, statuses, counts and rates: `--json` follows the
+    first two, the comment the third. Put to the lead (PROGRESS, T3.3,
+    iteration 2). stdout holds JSON exactly when check exits 0 or 2: nothing
+    when it cannot run, and nothing when the comment cannot be written
+    (below).
+  - **The comment, and why it is laid out so.** The first line is the marker,
+    `<!-- dbtruth-check -->`, by which the Action will find its comment; then
+    one line of counts. The table holds what fails the default build,
+    regressions and stale items; a `<details>` block holds the rest: drift
+    and improvements, as T3.3 says, and changed and not measured, the other
+    classes of T3.2's table that fail no default build, which T3.3 does not
+    place. The columns are Class, Claim, Before and After, with the hit rate
+    inside each side. A stale claim's Before is its status in the snapshot,
+    which T3.2's line on stderr leaves out; a relation added or dropped has
+    none. At most 50 rows, counted over the whole comment in class order,
+    then `and <n> more`. The notes, which the plan does not place, come after
+    the rows, so that the parts it names keep its order, and are never
+    folded, so that the note on other settings, the only sign that a pull
+    request edited `measuredWith`, stays in view. Then the fix line when
+    there is one. A report whose claims are all unchanged, or that has none,
+    with nothing to note gives the marker and the counts alone, the all-clear
+    an older comment is updated to; a note or a claim not measured still
+    shows.
+  - **No query and no reason.** A reason can be the server's words, and a
+    comment is mailed to everyone who watches the pull request. The log and
+    `--json` keep both.
+  - **Names are code spans.** A claim's id carries free text since T2.3, a
+    condition's value from the model or from a snapshot a pull request edited,
+    and a relation or a database can have any name Postgres takes quoted. In
+    code GitHub makes no mention, issue reference, emoji or link, and reads no
+    HTML. The fence is one backtick longer than the longest run in the name,
+    with a space inside each end, which CommonMark strips; a line break becomes
+    a space. The longest run is found in one pass over the runs, not by
+    spreading them into `Math.max`, which overflows the stack at about
+    150,000 runs, a name of 300 KB in a snapshot that can hold 10 MB. A pipe inside a table cell is escaped with a backslash, because
+    cmark-gfm, GitHub's renderer, ends a cell at any other pipe, inside code
+    too: in `ext_scanners.re` a cell is `(escaped_char|[^|\r\n])+` and re2c
+    takes the longest match, so a pipe right after a backslash never ends a
+    cell, even after a second backslash, and `unescape_pipes` in `table.c`
+    then drops one backslash before each pipe. Checked with cmark-gfm
+    compiled to wasm: a name with a line break and pipes, one with a
+    backslash before a pipe and two backticks in a row, and `</details><img
+    src=x>@octocat` each stay text in one cell of one row. The escape is made
+    in the table's cells, not in the code span: in a note, outside a table, a
+    pipe ends nothing, and the backslash would be shown (`shop\|ci` for
+    `shop|ci`, also checked). This closes, for the comment, the raw names
+    T2.3 and T3.2 left; stderr still prints them raw, as the lead decided.
+  - **50 rows is a constant,** part of the comment's format, an exception to
+    R5 like the snapshot's 10 MB: GitHub refuses a body over 65,536
+    characters, and stderr and `--json` keep every item. At the lengths
+    Postgres allows, 63 bytes to an identifier, `schema.table.column` on both
+    sides of a join and a condition's value of 30 characters, the longest a
+    categorical column holds by default, an id is 493 characters. A hundred
+    such claims, stale, each naming the column it lost, give a comment of
+    38,021 bytes, and 75,508 without the cap; a hundred regressions, 27,976.
+    A condition with a longer value, a suspicion over many tables, or a
+    snapshot edited by hand can pass the limit; the Action is to cut such a
+    body (T4.1).
+  - **A comment that cannot be written exits 1.** A check that cannot write
+    it has not done what it was asked, so it prints no JSON: a job that reads
+    stdout finds nothing, not a pass without its comment. The line is `could
+    not write <path>: <error>`, whose row the README extends. Only the write
+    is caught: the comment is rendered before it, so a fault in rendering
+    reaches `main` as itself, not as a file that could not be written. A
+    connection error still reaches `main`, which prints it after `dbtruth: `.
+  - `CheckOptions` gains `json`, `markdown` and `out`, as `RunOptions` has
+    `json` and `out`. A program-level `--json` given before `check` is merged
+    in, as `--url` is.
+  - Test changes, none to an assertion, approved by the lead: the four
+    in-process `runCheck` calls (`checked` in `check.test.ts`, `checkIn` in
+    `remeasure.test.ts` and two in `joins.test.ts`) pass `json: false` and an
+    `out`; the fixed report of "reportLines: notes, ..." and its `claim`
+    helper move to module scope as `MOVED`, and `MOVED` and `quiet` gain
+    `report: 1`. After review, `quiet` is built by `reportOf`, the helper of
+    the new tests, to the same value; put to the lead (PROGRESS, T3.3,
+    iteration 2).
+  - Not done: shortening long names; `--fail-on` in the comment's first
+    lines; queries or reasons in the comment; escaping names on stderr; a
+    Markdown renderer in the tests, which compare the text; `--markdown -`,
+    since stdout holds JSON only (R6).
 - **The README says what a team will pay for, with the price and the waitlist
   left to a person.** The paid tier of the plan's section 2 is the GitHub
   Action on private repositories. A section, "Team tier", says so before the
@@ -1444,7 +1706,8 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   identifiers, and parses one line of `.env`.
 - `verify.ts` recognises timestamp types for the dead-table measurement, and
   `isIntegerType` in `safety.ts` the integer types, by declared type, for
-  where a join's orphans fall.
+  where a join's orphans fall. It also picks the joins that are weighed
+  against other keys, and those keys.
 - `write.ts` normalises output paths into `context/`.
 - Verdict ids are prefixed `relationship:` / `suspicion:` so the exit code and
   the summary can tell them apart. A branch's id ends in `[column=value]`,
@@ -1464,7 +1727,8 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   discriminator that is not categorical cannot be branched on, and is still
   sent to a suspicion of kind `other`, labelled inferred. And a claim with
   no condition is measured whole, so a coincidental match still reads
-  confirmed: on `polymorph`, `comments.commentable_id -> posts.id` does.
+  confirmed: on `polymorph`, `comments.commentable_id -> posts.id` does,
+  though since T2.2 it says that its values would also match 2 other keys.
 - `WITH` is accepted by the statement guard because verify uses CTEs. A
   data-modifying CTE would be refused by the read-only session anyway.
 - Structured outputs (`output_config.format`) could replace JSON extraction
@@ -1482,6 +1746,10 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   would multiply statements by the table count and report joins nobody
   claimed. The defence is the claim: prompt A proposes joins from names, types
   and constraints, and claims a polymorphic reference one branch at a time.
+  What the hit rate cannot tell apart is said beside it: since 0.2.0 a join
+  confirmed on inference from an integer column says how many other keys its
+  values would fit ("A join confirmed on inference says when its values
+  would fit other keys too").
 - **The value-length gate is a length, not a shape.** A text column is
   categorical only if it has few distinct values and none longer than
   `categoricalMaxValueLength`. That hides MD5 (32), SHA-1 (40), bcrypt (60)

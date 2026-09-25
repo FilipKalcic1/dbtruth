@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { config } from "../src/config.js";
+import { decide } from "../src/verdict.js";
 import { verify } from "../src/verify.js";
 import type { Db, QueryResult, Row } from "../src/safety.js";
-import type { Claims, Extract, Table } from "../src/schemas.js";
+import type { Claims, Extract, IntegerKey, Table } from "../src/schemas.js";
 
 const table = (name: string, rowEstimate: number, extra: Partial<Table> = {}): Table => ({
   name,
@@ -31,6 +32,8 @@ const claims = (c: Partial<Claims>): Claims => ({ entities: [], tables: [], rela
 
 const answer = (row: Row): QueryResult => ({ ok: true, rows: [row] });
 const mismatch: QueryResult = { ok: false, reason: "error", message: "operator does not exist: integer = text", sqlState: "42883" };
+/** No integer key to weigh a join against, for the tests of what comes before the weighing. */
+const noKeys = async (): Promise<IntegerKey[]> => [];
 
 /** A database that answers statements from a script, one each, and refuses any statement beyond it. */
 function fakeDb(...replies: QueryResult[]): Db & { queries: string[]; params: unknown[][] } {
@@ -56,7 +59,7 @@ function fakeDb(...replies: QueryResult[]): Db & { queries: string[]; params: un
 
 test("a relationship from an empty table is empty without a query, with the evidence", async () => {
   const db = fakeDb();
-  const [m] = await verify(db, config, extractOf(table("orders", 0), table("customers", 10)), claims({ relationships: [relationship("orders", "customers")] }));
+  const [m] = await verify(db, config, extractOf(table("orders", 0), table("customers", 10)), claims({ relationships: [relationship("orders", "customers")] }), noKeys);
   assert.deepEqual(db.queries, []);
   assert.equal(m?.empty, true);
   assert.equal(m?.skipped, "no non-null rows to test");
@@ -66,7 +69,7 @@ test("a relationship from an empty table is empty without a query, with the evid
 
 test("a relationship into an empty table is empty too, not rejected: an empty target disproves nothing", async () => {
   const db = fakeDb();
-  const [m] = await verify(db, config, extractOf(table("orders", 500), table("customers", 0)), claims({ relationships: [relationship("orders", "customers")] }));
+  const [m] = await verify(db, config, extractOf(table("orders", 500), table("customers", 0)), claims({ relationships: [relationship("orders", "customers")] }), noKeys);
   assert.deepEqual(db.queries, []);
   assert.equal(m?.empty, true);
   assert.equal(m?.skipped, "no rows to match against", "a reason that is true of the target, not one about the source's nulls");
@@ -77,7 +80,7 @@ test("a materialized view that was never refreshed cannot be read from either si
   const db = fakeDb();
   const never = table("order_totals", 0, { kind: "materialized view", populated: false });
   const relationships = [relationship("orders", "order_totals"), relationship("order_totals", "orders")];
-  const measurements = await verify(db, config, extractOf(table("orders", 500), never), claims({ relationships }));
+  const measurements = await verify(db, config, extractOf(table("orders", 500), never), claims({ relationships }), noKeys);
   assert.deepEqual(db.queries, []);
   for (const m of measurements) {
     assert.equal(m.empty, true);
@@ -92,20 +95,20 @@ test("inconsistent_values and duplicate_entity over an empty relation never quer
     { kind: "inconsistent_values", tables: ["cars"], column: "make", detail: "check" },
     { kind: "duplicate_entity", tables: ["vehicles", "cars"], detail: "same columns" },
   ];
-  const measurements = await verify(db, config, extractOf(table("vehicles", 120), table("cars", 0)), claims({ suspicions }));
+  const measurements = await verify(db, config, extractOf(table("vehicles", 120), table("cars", 0)), claims({ suspicions }), noKeys);
   assert.deepEqual(db.queries, []);
   assert.deepEqual(measurements.map((m) => [m.empty, m.skipped]), [[true, "no non-null rows to test"], [true, "no rows to match against"]]);
 });
 
 test("a claim that names a column the table does not have is wrong whatever the row count", async () => {
-  const [m] = await verify(fakeDb(), config, extractOf(table("orders", 0), table("customers", 10)), claims({ relationships: [relationship("orders", "customers", "nope")] }));
+  const [m] = await verify(fakeDb(), config, extractOf(table("orders", 0), table("customers", 10)), claims({ relationships: [relationship("orders", "customers", "nope")] }), noKeys);
   assert.equal(m?.empty, undefined);
   assert.match(m?.skipped ?? "", /unknown column orders\.nope/);
 });
 
 test("one statement measures the hit rate over non-null references and counts the null ones", async () => {
   const db = fakeDb(answer({ total: "400", nulls: "100", hits: "352" }));
-  const [m] = await verify(db, config, extractOf(table("orders", 500), table("customers", 250)), claims({ relationships: [relationship("orders", "customers")] }));
+  const [m] = await verify(db, config, extractOf(table("orders", 500), table("customers", 250)), claims({ relationships: [relationship("orders", "customers")] }), noKeys);
   assert.equal(db.queries.length, 1);
   assert.deepEqual(m?.numbers, { total: 400, hits: 352, orphans: 48, hit: 0.88, nulls: 100 });
   assert.match(m?.query ?? "", /count\(\*\) - count\(f\."customer_id"\) AS nulls/);
@@ -115,7 +118,7 @@ test("one statement measures the hit rate over non-null references and counts th
 test("a target column that does not lead the primary key is read once, deduplicated and joined", async () => {
   const db = fakeDb(answer({ total: "400", nulls: "100", hits: "352" }));
   const composite = table("customers", 250, { primaryKey: ["tenant_id", "id"] });
-  const [m] = await verify(db, config, extractOf(table("orders", 500), composite), claims({ relationships: [relationship("orders", "customers")] }));
+  const [m] = await verify(db, config, extractOf(table("orders", 500), composite), claims({ relationships: [relationship("orders", "customers")] }), noKeys);
   assert.deepEqual(m?.numbers, { total: 400, hits: 352, orphans: 48, hit: 0.88, nulls: 100 });
   assert.match(m?.query ?? "", /LEFT JOIN \(SELECT DISTINCT "id" AS v FROM "public"\."customers"\) t ON t\.v = f\."customer_id"/);
   assert.doesNotMatch(m?.query ?? "", /EXISTS/, "an index on (tenant_id, id) cannot be probed by id alone");
@@ -123,7 +126,7 @@ test("a target column that does not lead the primary key is read once, deduplica
 
 test("a datatype mismatch is compared as text once, and text has no index, so even a key is then read once", async () => {
   const db = fakeDb(mismatch, answer({ total: "400", nulls: "0", hits: "400" }));
-  const [m] = await verify(db, config, extractOf(table("orders", 500), table("customers", 250)), claims({ relationships: [relationship("orders", "customers")] }));
+  const [m] = await verify(db, config, extractOf(table("orders", 500), table("customers", 250)), claims({ relationships: [relationship("orders", "customers")] }), noKeys);
   assert.equal(db.queries.length, 2);
   assert.match(db.queries[0]!, /EXISTS \(SELECT 1 FROM "public"\."customers" t WHERE t\."id" = f\."customer_id"\)/, "the key is probed natively first");
   assert.match(m?.query ?? "", /LEFT JOIN \(SELECT DISTINCT "id"::text AS v FROM "public"\."customers"\) t ON t\.v = f\."customer_id"::text/);
@@ -133,19 +136,19 @@ test("a datatype mismatch is compared as text once, and text has no index, so ev
 test("duplicate rows are counted as distinct tuples on the shared columns, intersected with the other table", async () => {
   const suspicion: Claims["suspicions"][number] = { kind: "duplicate_entity", tables: ["products", "products_legacy"], detail: "same rows" };
   const pair = extractOf(table("products", 80), table("products_legacy", 70));
-  const [m] = await verify(fakeDb(answer({ total: "80", matched: "70" })), config, pair, claims({ suspicions: [suspicion] }));
+  const [m] = await verify(fakeDb(answer({ total: "80", matched: "70" })), config, pair, claims({ suspicions: [suspicion] }), noKeys);
   assert.deepEqual(m?.numbers, { total: 80, matched: 70, sharedColumns: 3, overlap: 0.875 });
   assert.match(m?.query ?? "", /SELECT DISTINCT a\."id", a\."customer_id", a\."make" FROM/);
   assert.match(m?.query ?? "", /INTERSECT SELECT b\."id", b\."customer_id", b\."make" FROM "public"\."products_legacy" b/);
 
-  const [asText] = await verify(fakeDb(mismatch, answer({ total: "80", matched: "70" })), config, pair, claims({ suspicions: [suspicion] }));
+  const [asText] = await verify(fakeDb(mismatch, answer({ total: "80", matched: "70" })), config, pair, claims({ suspicions: [suspicion] }), noKeys);
   assert.match(asText?.query ?? "", /SELECT DISTINCT a\."id"::text, a\."customer_id"::text, a\."make"::text FROM/, "a datatype mismatch casts every shared column, on both sides");
   assert.match(asText?.query ?? "", /INTERSECT SELECT b\."id"::text, b\."customer_id"::text, b\."make"::text FROM/);
 });
 
 test("a reference that is null on every sampled row is empty, and says how many rows it looked at", async () => {
   const db = fakeDb(answer({ total: "0", nulls: "50", hits: "0" }));
-  const [m] = await verify(db, config, extractOf(table("orders", 50), table("customers", 250)), claims({ relationships: [relationship("orders", "customers")] }));
+  const [m] = await verify(db, config, extractOf(table("orders", 50), table("customers", 250)), claims({ relationships: [relationship("orders", "customers")] }), noKeys);
   assert.equal(m?.empty, true);
   assert.equal(m?.skipped, "no non-null rows to test");
   assert.deepEqual(m?.numbers, { total: 0, nulls: 50 });
@@ -165,7 +168,7 @@ const photoBranch = (on = "commentable_type"): Claims => claims({ relationships:
 
 test("a condition filters the sampled rows by a bound value, shown only in a note after the statement", async () => {
   const db = fakeDb(answer({ total: "180", nulls: "0", hits: "120" }));
-  const [m] = await verify(db, config, extractOf(comments(480), table("photos", 40)), photoBranch());
+  const [m] = await verify(db, config, extractOf(comments(480), table("photos", 40)), photoBranch(), noKeys);
   assert.equal(db.queries.length, 1);
   assert.ok(db.queries[0]!.includes(`FROM (SELECT * FROM (SELECT * FROM "public"."comments" LIMIT 50000) w WHERE w."commentable_type"::text = $1) f`), db.queries[0]!);
   assert.deepEqual(db.params[0], ["photo"], "the value travels as a parameter");
@@ -177,7 +180,7 @@ test("a condition filters the sampled rows by a bound value, shown only in a not
 test("the plain-form retry and the text fallback send the condition's value too", async () => {
   const refused: QueryResult = { ok: false, reason: "error", message: "TABLESAMPLE is not supported here", sqlState: "0A000" };
   const db = fakeDb(refused, mismatch, refused, answer({ total: "18000", nulls: "0", hits: "12000" }));
-  const [m] = await verify(db, config, extractOf(comments(500_000), table("photos", 40)), photoBranch());
+  const [m] = await verify(db, config, extractOf(comments(500_000), table("photos", 40)), photoBranch(), noKeys);
   assert.equal(db.queries.length, 4, "sampled, plain, then both again as text");
   assert.match(db.queries[0]!, /TABLESAMPLE SYSTEM/);
   assert.match(db.queries[3]!, /LEFT JOIN .* ON t\.v = f\."commentable_id"::text/);
@@ -188,21 +191,21 @@ test("the plain-form retry and the text fallback send the condition's value too"
 test("a condition on a column the table lacks, or on one that is not categorical, is unverifiable and nothing runs", async () => {
   const db = fakeDb();
   const tables = extractOf(comments(480), table("photos", 40));
-  const [unknown] = await verify(db, config, tables, photoBranch("kind"));
-  const [hidden] = await verify(db, config, tables, photoBranch("note"));
-  const [key] = await verify(db, config, tables, photoBranch("id"));
+  const [unknown] = await verify(db, config, tables, photoBranch("kind"), noKeys);
+  const [hidden] = await verify(db, config, tables, photoBranch("note"), noKeys);
+  const [key] = await verify(db, config, tables, photoBranch("id"), noKeys);
   assert.deepEqual([unknown?.skipped, unknown?.empty], ["unknown column comments.kind", undefined]);
   assert.deepEqual([hidden?.skipped, hidden?.empty], ["comments.note is not categorical, so no condition on it is measured", undefined]);
   assert.deepEqual([key?.skipped, key?.empty], ["comments.id is not categorical, so no condition on it is measured", undefined], "a key is visible, and has a value per row");
   // An empty table shows no column's values, so it is empty before its condition is judged.
-  const [empty] = await verify(db, config, extractOf(comments(0), table("photos", 40)), photoBranch("note"));
+  const [empty] = await verify(db, config, extractOf(comments(0), table("photos", 40)), photoBranch("note"), noKeys);
   assert.deepEqual([empty?.skipped, empty?.empty], ["no non-null rows to test", true]);
   assert.deepEqual(db.queries, []);
 });
 
 test("against an integer key it leads, the join also counts the orphans past either end of it", async () => {
   const db = fakeDb(answer({ total: "500", nulls: "0", hits: "440", orphans_above: "60", orphans_below: "0" }));
-  const [m] = await verify(db, config, extractOf(table("orders", 500), table("customers", 250)), claims({ relationships: [relationship("orders", "customers")] }));
+  const [m] = await verify(db, config, extractOf(table("orders", 500), table("customers", 250)), claims({ relationships: [relationship("orders", "customers")] }), noKeys);
   const ends =
     ', count(*) FILTER (WHERE f."customer_id" > (SELECT max(t."id") FROM "public"."customers" t)) AS orphans_above' +
     ', count(*) FILTER (WHERE f."customer_id" < (SELECT min(t."id") FROM "public"."customers" t)) AS orphans_below';
@@ -221,10 +224,130 @@ test("no orphan ends where a column is not an integer or the column does not lea
   ];
   for (const [label, extract] of cases) {
     const db = fakeDb(answer(counted));
-    const [m] = await verify(db, config, extract, join);
+    const [m] = await verify(db, config, extract, join, noKeys);
     assert.doesNotMatch(db.queries[0]!, /orphans_/, label);
     assert.deepEqual(m?.numbers, numbers, label);
   }
+});
+
+const key = (name: string, rowEstimate: number): IntegerKey => ({ schema: "public", name, column: "id", rowEstimate });
+/** A probe's answer: how many values a key spans, as node-postgres returns a numeric, or none for an empty key. */
+const span = (n: number | null) => answer({ span: n === null ? null : String(n) });
+const weighed = (candidates: number, alsoFits: number) => answer({ candidates: String(candidates), also_fits: String(alsoFits) });
+const allMatch = (n: number) => answer({ total: String(n), nulls: "0", hits: String(n) });
+/** The relations a weighing compared a join with, in the order its statement names them. */
+const arms = (sql: string) => [...sql.matchAll(/max\("id"\) AS hi FROM "public"\."(\w+)"/g)].map((m) => m[1]);
+
+test("a join confirmed on inference from an integer column is weighed last, against the other dense keys, in one statement over its own sampled rows that returns two counts", async () => {
+  const keys = async () => [key("customers", 250), key("orders", 500), key("products", 80)];
+  const suspicion: Claims["suspicions"][number] = { kind: "inconsistent_values", tables: ["orders"], column: "make", detail: "Ford / ford" };
+  const run = async (orders: number) => {
+    const db = fakeDb(allMatch(500), answer({ distinct_values: "3", canonical_forms: "3" }), span(250), span(500), span(80), weighed(2, 2));
+    const tables = extractOf(table("orders", orders), table("customers", 250), table("products", 80));
+    const measurements = await verify(db, config, tables, claims({ relationships: [relationship("orders", "customers")], suspicions: [suspicion] }), keys);
+    return { db, measurements };
+  };
+  const { db, measurements } = await run(500);
+  const [m, s] = measurements;
+  assert.equal(s?.claimId, "suspicion:inconsistent_values:orders.make", "the measurements keep the order of the claims");
+  assert.match(db.queries[1]!, /distinct_values/, "every claim is measured before a join is weighed");
+  assert.equal(db.queries[2], 'SELECT max("id")::numeric - min("id") + 1 AS span FROM "public"."customers"', "a probe returns how many values the key spans, never an end of it");
+  assert.equal(
+    db.queries[5],
+    `SELECT count(*) AS candidates, count(*) FILTER (WHERE k.lo <= v.lo AND k.hi >= v.hi) AS also_fits
+  FROM (SELECT min(f."customer_id") AS lo, max(f."customer_id") AS hi FROM (SELECT * FROM "public"."orders" LIMIT 50000) f) v,
+       (SELECT min("id") AS lo, max("id") AS hi FROM "public"."orders"
+        UNION ALL SELECT min("id") AS lo, max("id") AS hi FROM "public"."products") k`,
+    "over the rows the join was measured on, against every dense key but the target",
+  );
+  assert.equal(m?.query, `${db.queries[0]};\n${db.queries[5]}`, "the query kept is the join's statement, then this one");
+  assert.deepEqual(m?.numbers, { total: 500, hits: 500, orphans: 0, hit: 1, nulls: 0, candidates: 2, alsoFits: 2 });
+
+  const sampled = await run(500_000);
+  const source = "(SELECT * FROM \"public\".\"orders\" TABLESAMPLE SYSTEM (10) REPEATABLE (1) LIMIT 150000) f";
+  assert.ok(sampled.db.queries[0]!.includes(source) && sampled.db.queries[5]!.includes(source), "both statements read the same pages");
+});
+
+test("a branch is weighed on its own rows with its value bound, and its query ends with the one note that gives $1 for both statements", async () => {
+  const branch = claims({ relationships: [{ ...relationship("comments", "posts", "commentable_id"), when: { column: "commentable_type", equals: "post" } }] });
+  const db = fakeDb(allMatch(300), span(480), span(40), span(100), weighed(2, 1));
+  const tables = extractOf(comments(480), table("photos", 40), table("posts", 100));
+  const [m] = await verify(db, config, tables, branch, async () => [key("comments", 480), key("photos", 40), key("posts", 100)]);
+  const rows = '(SELECT * FROM (SELECT * FROM "public"."comments" LIMIT 50000) w WHERE w."commentable_type"::text = $1) f';
+  assert.ok(db.queries[4]!.includes(`FROM (SELECT min(f."commentable_id") AS lo, max(f."commentable_id") AS hi FROM ${rows}) v`), db.queries[4]!);
+  assert.deepEqual(arms(db.queries[4]!), ["comments", "photos"]);
+  assert.deepEqual(db.params, [["post"], [], [], [], ["post"]], "the value is bound to both statements, and to no probe");
+  assert.equal(m?.query, `${db.queries[0]};\n${db.queries[4]}\n-- $1 = 'post'`);
+  assert.deepEqual([m?.numbers.candidates, m?.numbers.alsoFits], [2, 1]);
+});
+
+test("a join stated, declared, broken, empty or unmeasured, or from a column that is not an integer, is not weighed", async () => {
+  const keys = async () => [key("customers", 250), key("orders", 500), key("products", 80)];
+  const join = claims({ relationships: [relationship("orders", "customers")] });
+  const tables = extractOf(table("orders", 500), table("customers", 250));
+  const declared = table("orders", 500, { foreignKeys: [{ column: "customer_id", refTable: "customers", refColumn: "id" }] });
+  const numeric = table("orders", 500, { columns: [column("customer_id", "numeric", 250, false)] });
+  const cases: [string, Claims, Extract, QueryResult][] = [
+    ["stated", claims({ relationships: [{ ...relationship("orders", "customers"), basis: "stated" }] }), tables, allMatch(500)],
+    ["declared, though the claim says inferred", join, extractOf(declared, table("customers", 250)), allMatch(500)],
+    ["broken", join, tables, answer({ total: "500", nulls: "0", hits: "440" })],
+    ["empty", join, tables, answer({ total: "0", nulls: "500", hits: "0" })],
+    ["unmeasured", join, tables, { ok: false, reason: "timeout", message: "canceling statement due to statement timeout" }],
+    ["from a numeric column", join, extractOf(numeric, table("customers", 250)), allMatch(500)],
+  ];
+  for (const [label, c, extract, reply] of cases) {
+    // Answers for the probes and the weighing too, so that a join weighed by mistake is counted, not refused.
+    const db = fakeDb(reply, span(250), span(500), span(80), weighed(2, 2));
+    const [m] = await verify(db, config, extract, c, keys);
+    assert.equal(db.queries.length, 1, label);
+    assert.equal(m?.numbers.alsoFits, undefined, label);
+  }
+  // With the same answers, the join inferred from an integer column and confirmed is weighed.
+  const db = fakeDb(allMatch(500), span(250), span(500), span(80), weighed(2, 2));
+  const [m] = await verify(db, config, tables, join, keys);
+  assert.deepEqual([db.queries.length, m?.numbers.candidates, m?.numbers.alsoFits], [5, 2, 2]);
+});
+
+test("the weighing leaves out the target, the from-column's own key, and a key that is empty, sparse or unreadable, and probes the keys once for every join", async () => {
+  const keys = [key("customers", 250), key("vehicles", 120), key("audit", 300), key("cars", 10), key("sparse", 100), key("products", 80)];
+  // vehicles.id is vehicles' own key, so the key that holds exactly its values is no evidence against it.
+  const joins = claims({ relationships: [relationship("orders", "customers"), relationship("vehicles", "customers", "id")] });
+  const tables = extractOf(table("orders", 500), table("vehicles", 120), table("customers", 250));
+  const unreadable: QueryResult = { ok: false, reason: "error", message: "permission denied for table audit", sqlState: "42501" };
+
+  const db = fakeDb(allMatch(500), allMatch(120), span(250), span(120), unreadable, span(null), span(991), span(80), weighed(2, 2), weighed(1, 1));
+  const [orders, vehicles] = await verify(db, config, tables, joins, async () => keys);
+  const probed = db.queries.slice(2, 8).map((sql) => /FROM "public"\."(\w+)"$/.exec(sql)?.[1]);
+  assert.deepEqual(probed, ["customers", "vehicles", "audit", "cars", "sparse", "products"], "in the order given, once for both joins");
+  assert.deepEqual(arms(db.queries[8]!), ["vehicles", "products"], "orders: not its target customers, nor audit, cars or sparse");
+  assert.deepEqual(arms(db.queries[9]!), ["products"], "vehicles.id: not vehicles' own key either");
+  assert.deepEqual([orders?.numbers.candidates, orders?.numbers.alsoFits, vehicles?.numbers.candidates, vehicles?.numbers.alsoFits], [2, 2, 1, 1]);
+
+  const two = fakeDb(allMatch(500), allMatch(120), span(250), span(120), weighed(1, 1));
+  const [twoOrders, twoVehicles] = await verify(two, config, tables, joins, async () => keys.slice(0, 2));
+  assert.equal(two.queries.length, 5, "two probes, and one weighing: vehicles has no key left to be weighed against");
+  assert.deepEqual(arms(two.queries[4]!), ["vehicles"]);
+  assert.deepEqual([twoOrders?.numbers.alsoFits, twoVehicles?.numbers.alsoFits], [1, undefined]);
+});
+
+test("out of budget, the weighing claims nothing either way", async () => {
+  const spent: QueryResult = { ok: false, reason: "budget", message: "time budget exhausted" };
+  const keys = async () => [key("customers", 250), key("orders", 500)];
+  const join = claims({ relationships: [relationship("orders", "customers")] });
+  const tables = extractOf(table("orders", 500), table("customers", 250));
+
+  const db = fakeDb(allMatch(500), span(250), span(500), spent);
+  const [m] = await verify(db, config, tables, join, keys);
+  assert.equal(db.queries.length, 4, "the weighing was tried");
+  assert.deepEqual(m?.numbers, { total: 500, hits: 500, orphans: 0, hit: 1, nulls: 0 }, "the join's own numbers: an alsoFits of 0 would say that no other key holds its values");
+  assert.equal(m?.query, db.queries[0]);
+  assert.equal(m?.skipped, undefined, "the join itself was measured");
+  assert.equal(decide(m!, config).status, "confirmed");
+
+  const probes = fakeDb(allMatch(500), spent, spent);
+  const [n] = await verify(probes, config, tables, join, keys);
+  assert.equal(probes.queries.length, 3, "no key was found dense, so there is nothing to weigh against");
+  assert.equal(n?.numbers.alsoFits, undefined);
 });
 
 /** vehicles, dated by one timestamp column, and the suspicion that it is dead. */
@@ -235,7 +358,7 @@ const deadVehicles = claims({ suspicions: [{ kind: "dead_table", tables: ["vehic
 
 test("the dead-table age is counted in whole days by the statement, so the number kept is the number it reruns to", async () => {
   const db = fakeDb(answer({ count: 120, age_days: "3" }));
-  const [m] = await verify(db, config, extractOf(vehicles), deadVehicles);
+  const [m] = await verify(db, config, extractOf(vehicles), deadVehicles, noKeys);
   // Rounded up: a whole number over staleAfterDays exactly when the age is, so a table 90 days and an hour old is dead at 90.
   assert.equal(m?.query, 'SELECT count(*)::float8 AS count, ceil(EXTRACT(EPOCH FROM (now() - greatest(max("registered_at")))) / 86400) AS age_days FROM "public"."vehicles"');
   assert.deepEqual(m?.numbers, { exact: 1, count: 120, ageDays: 3 });
@@ -244,6 +367,6 @@ test("the dead-table age is counted in whole days by the statement, so the numbe
 test("a dead-table age that is not a finite number is left out", async () => {
   // On Postgres 17 and later, now() less an infinite timestamp is an infinite interval, and its age -Infinity, which
   // JSON writes as null.
-  const [m] = await verify(fakeDb(answer({ count: 120, age_days: "-Infinity" })), config, extractOf(vehicles), deadVehicles);
+  const [m] = await verify(fakeDb(answer({ count: 120, age_days: "-Infinity" })), config, extractOf(vehicles), deadVehicles, noKeys);
   assert.deepEqual(m?.numbers, { exact: 1, count: 120 });
 });

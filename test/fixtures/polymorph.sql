@@ -13,6 +13,9 @@
 --   3. refunds.account_id holds -1 to -5, below the lowest accounts.id, and 21 to 35, which all
 --      exist: 15 of 20 match (75%). refunds has no key.
 --   4. No foreign key is declared. The text columns hold canary-pii and are hidden.
+--   5. A join confirmed on inference is weighed against every single-column integer key here:
+--      accounts, 40 of the 50 ids from its lowest to its highest, fills too little of its range to
+--      count, and the other four fill all of theirs. A table added here changes those numbers.
 --
 -- Autovacuum is off on every table here, so nothing changes the catalog's row estimates behind a
 -- test's back.

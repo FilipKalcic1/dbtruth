@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { config } from "../src/config.js";
 import { createModel } from "../src/model.js";
 import { relationshipId, type Relationship, type TableFacts, type Verdict, type Verified } from "../src/schemas.js";
-import { confine, persist, tableFile, write } from "../src/write.js";
+import { confine, fitForWriter, persist, tableFile, write } from "../src/write.js";
 
 const facts = (name: string, extra: Partial<TableFacts> = {}): TableFacts => ({ name, kind: "table", rowEstimate: 500, primaryKey: ["id"], categorical: {}, ...extra });
 const verdict = (status: Verdict["status"], numbers: Record<string, number> = {}, skipped?: string): Verdict => ({ status, measurement: { query: "SELECT 1", numbers }, ...(skipped ? { skipped } : {}) });
@@ -106,6 +107,35 @@ test("a broken join's orphan count says where they fall, and nothing without the
   for (const [ends, shape] of shapes) assert.equal(broken(ends), head + shape + tail, JSON.stringify(ends));
 });
 
+test("a confirmed join whose values other keys would fit is labelled inferred with the reason, never stated as fact", () => {
+  const confirmed = (weighed: Record<string, number>) => {
+    const numbers = { total: 1200, hits: 1200, orphans: 0, hit: 1, nulls: 0, ...weighed };
+    const v = { ...shop, verdicts: { ...shop.verdicts, "relationship:orders.customer_id->customers.id": verdict("confirmed", numbers) } };
+    return tableFile(v, shop.tables[0]!).split("\n").find((line) => line.startsWith("- orders.customer_id"));
+  };
+  const head = "- orders.customer_id -> customers.id: confirmed, 100.0% of 1200 sampled rows match";
+  assert.equal(confirmed({ candidates: 5, alsoFits: 5 }), `${head} (inferred; the same values would also match 5 other keys, so the match alone does not prove this join).`);
+  assert.equal(confirmed({ candidates: 3, alsoFits: 1 }), `${head} (inferred; the same values would also match 1 other key, so the match alone does not prove this join).`);
+  assert.equal(confirmed({ candidates: 3, alsoFits: 0 }), `${head} (inferred).`, "weighed, and no other key holds its values");
+  assert.equal(confirmed({}), `${head} (inferred).`, "not weighed");
+});
+
+test("prompt B is sent Verified whole, without the verdicts' queries when that is over the model's input limit, and nothing when even that is", () => {
+  const tokens = (v: Verified) => Math.ceil(JSON.stringify(v).length / 4);
+  const fitted = (modelMaxInputTokens: number) => fitForWriter(shop, { modelMaxInputTokens, charsPerToken: 4 });
+  assert.deepEqual(fitted(tokens(shop)), { verified: shop }, "at the limit, whole");
+
+  const { verified: told, reduced } = fitted(tokens(shop) - 1);
+  assert.equal(reduced, "the verdicts' queries dropped to fit the model's input limit");
+  const numbers = (v: Verified) => Object.values(v.verdicts).map((x) => [x.status, x.measurement.numbers, x.skipped]);
+  assert.deepEqual(Object.values(told!.verdicts).map((x) => x.measurement.query), Object.values(shop.verdicts).map(() => ""));
+  assert.deepEqual(numbers(told!), numbers(shop), "the numbers stay");
+  assert.deepEqual({ ...told!, verdicts: {} }, { ...shop, verdicts: {} }, "and everything else");
+  assert.equal(shop.verdicts["relationship:orders.customer_id->customers.id"]!.measurement.query, "SELECT 1", "Verified keeps them, for --json and the snapshot");
+
+  assert.deepEqual(fitted(tokens(told!) - 1), { reduced: "README.md and ENTITIES.md not written: over the model's input limit even without the verdicts' queries" });
+});
+
 test("a view, a partitioned table and a table without a key say so", () => {
   assert.equal(tableFile(nothing, facts("shipped_orders", { kind: "view", rowEstimate: -1, primaryKey: null })), "# shipped_orders\n\nview, size unknown, primary key: none\n");
   assert.match(tableFile(nothing, facts("events", { partitions: { count: 55, withLocalForeignKeys: 3 }, primaryKey: ["id", "happened_on"] })), /\ntable, 55 partitions, ~500 rows, primary key: id, happened_on\n$/);
@@ -118,7 +148,7 @@ test("the model writes README and ENTITIES; every table file is rendered and win
     transport: async () => JSON.stringify({ "context/README.md": "r", "context/ENTITIES.md": "e", "context/tables/Users.md": "model prose", "../escape.md": "no" }),
   });
   const meaning = { name: "users", purpose: "Rows of users.", grain: "row", basis: "stated" as const, confidence: 1, notes: [] };
-  const files = await write(model, { ...nothing, claims: { ...nothing.claims, tables: [meaning] }, tables: [facts("Users"), facts("users"), facts("USERS"), facts("a/b")] });
+  const { files } = await write(model, { ...nothing, claims: { ...nothing.claims, tables: [meaning] }, tables: [facts("Users"), facts("users"), facts("USERS"), facts("a/b")] }, config);
   assert.deepEqual(
     Object.keys(files),
     ["context/README.md", "context/ENTITIES.md", "context/tables/Users.md", "context/tables/users~2.md", "context/tables/USERS~3.md", "context/tables/a_b.md"],
@@ -136,7 +166,7 @@ test("a reply without both files is sent back with what was missing", async () =
     return replies.shift()!;
   };
   const model = createModel({ rawDir: mkdtempSync(join(tmpdir(), "dbtruth-")), maxOutputTokens: 1, transport });
-  const files = await write(model, nothing);
+  const { files } = await write(model, nothing, config);
   assert.deepEqual(files, { "context/README.md": "r", "context/ENTITIES.md": "e" });
   assert.equal(conversations.length, 2);
   assert.match(JSON.stringify(conversations[1]!.at(-1)), /ENTITIES\.md/, "the retry names the missing file");

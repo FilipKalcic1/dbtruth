@@ -48,6 +48,22 @@ test("pilotPages is a whole number of at least 1, from DBTRUTH_PILOT_PAGES or --
   assert.throws(() => resolveConfig({}, { pilotPages: "2.5" }), /--pilot-pages: 2\.5 must be a whole number/);
 });
 
+test("denseKeyShare is 0.9 by default, from 0 to 1, from DBTRUTH_DENSE_KEY_SHARE or --dense-key-share", () => {
+  assert.equal(config.denseKeyShare, 0.9);
+  assert.equal(resolveConfig({ DBTRUTH_DENSE_KEY_SHARE: "0.5" }).denseKeyShare, 0.5);
+  assert.equal(resolveConfig({ DBTRUTH_DENSE_KEY_SHARE: "0.5" }, { denseKeyShare: "0" }).denseKeyShare, 0, "the flag wins, and 0 is allowed");
+  assert.throws(() => resolveConfig({}, { denseKeyShare: "1.5" }), /^Error: DBTRUTH_DENSE_KEY_SHARE \/ --dense-key-share: 1\.5 is above the maximum 1$/);
+  assert.throws(() => resolveConfig({ DBTRUTH_DENSE_KEY_SHARE: "-0.1" }), /is below the minimum 0/);
+});
+
+test("weakEvidenceMaxCandidates is 50 by default, a whole number of at least 0, from DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES or --weak-evidence-max-candidates", () => {
+  assert.equal(config.weakEvidenceMaxCandidates, 50);
+  assert.equal(resolveConfig({ DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES: "10" }).weakEvidenceMaxCandidates, 10);
+  assert.equal(resolveConfig({ DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES: "10" }, { weakEvidenceMaxCandidates: "0" }).weakEvidenceMaxCandidates, 0, "the flag wins, and 0 turns the check off");
+  assert.throws(() => resolveConfig({}, { weakEvidenceMaxCandidates: "2.5" }), /^Error: DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES \/ --weak-evidence-max-candidates: 2\.5 must be a whole number$/);
+  assert.throws(() => resolveConfig({ DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES: "-1" }), /is below the minimum 0/);
+});
+
 test("checkHitRateTolerance is 0.01 by default, from 0 to 1, from DBTRUTH_CHECK_HIT_RATE_TOLERANCE or --check-hit-rate-tolerance", () => {
   assert.equal(config.checkHitRateTolerance, 0.01);
   assert.equal(resolveConfig({ DBTRUTH_CHECK_HIT_RATE_TOLERANCE: "0.05" }).checkHitRateTolerance, 0.05);

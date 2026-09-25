@@ -5,12 +5,15 @@
 // The queries the snapshot stores are never run and never printed. Claims are measured with the settings the snapshot
 // was measured with, so that a default changed since cannot pass for a change in the data; the budget, the timeout and
 // the tolerance are this run's. Only the relations the claims name are profiled; the whole catalog is read, for the
-// relations added or dropped since.
+// relations added or dropped since, and for the integer keys a join confirmed on inference is weighed against.
+//
+// The report is rendered here too: the lines check prints on stderr and a pull request comment; --json prints the object
+// itself.
 
 import type { Config } from "./config.js";
-import { extract, readCatalog } from "./extract.js";
+import { extract, integerKeys, readCatalog } from "./extract.js";
 import type { Db } from "./safety.js";
-import { CHECK_CLASSES, findTable, relationshipId, SnapshotSchema, suspicionId, type CheckClass, type CheckReport, type Claims, type ClaimCheck, type Snapshot, type Verdict } from "./schemas.js";
+import { CHECK_CLASSES, CHECK_REPORT_FORMAT, findTable, relationshipId, SnapshotSchema, suspicionId, type CheckClass, type CheckReport, type Claims, type ClaimCheck, type Snapshot, type Verdict } from "./schemas.js";
 import { schemaOf, settingsOf } from "./snapshot.js";
 import { verdicts } from "./verdict.js";
 import { verify } from "./verify.js";
@@ -30,8 +33,23 @@ const FAILING: Record<FailOn, CheckClass[]> = {
 const REGRESSIONS = { relationship: ["confirmed->broken", "confirmed->rejected", "broken->rejected"], suspicion: ["rejected->confirmed"] };
 const IMPROVEMENTS = { relationship: ["broken->confirmed"], suspicion: ["confirmed->rejected"] };
 
+/** The first line of every comment, by which it can be found again and updated. */
+export const COMMENT_MARKER = "<!-- dbtruth-check -->";
+
+// Part of the comment's format, like the snapshot's 10 MB: GitHub refuses a body over 65,536 characters. stderr and
+// --json keep every item.
+const COMMENT_MAX_ROWS = 50;
+
+const FIX = "run npx dbtruth and commit context/";
+
 /** A claim's table, with the column it names there when it names one. */
 type Name = [table: string, column?: string];
+
+/**
+ * An item that is not unchanged, as a report shows it. A relation added or dropped has no before. Why it could not be
+ * measured is printed on stderr only.
+ */
+type Row = { cls: CheckClass; name: string; before?: string; after: string; reason?: string };
 
 /** The snapshot's claims measured again on db, as the snapshot measured them, and compared with it. */
 export async function remeasure(db: Db, cfg: Config, snapshot: Snapshot): Promise<CheckReport> {
@@ -44,7 +62,7 @@ export async function remeasure(db: Db, cfg: Config, snapshot: Snapshot): Promis
   // a condition count a guess at a hidden value (R3). With such settings no column counts as categorical.
   const wider = measuring.sampleRows < cfg.sampleRows || measuring.categoricalMaxDistinct > cfg.categoricalMaxDistinct || measuring.categoricalMaxValueLength > cfg.categoricalMaxValueLength;
   const tables = wider ? extracted.tables.map((t) => ({ ...t, columns: t.columns.map((c) => ({ ...c, visible: false })) })) : extracted.tables;
-  const measured = verdicts(await verify(db, measuring, { ...extracted, tables }, snapshot.claims), measuring);
+  const measured = verdicts(await verify(db, measuring, { ...extracted, tables }, snapshot.claims, () => integerKeys(db, measuring, catalog)), measuring);
   return diff(snapshot, { database: db.database, schema: schemaOf(catalog), verdicts: measured }, cfg);
 }
 
@@ -74,6 +92,7 @@ export function diff(before: Snapshot, now: Pick<Snapshot, "database" | "schema"
   const current = new Map(Object.entries(settingsOf(SnapshotSchema.shape.measuredWith.parse(cfg))));
   const settings = Object.entries(settingsOf(before.measuredWith)).filter(([name, value]) => current.get(name) !== value).map(([name, value]) => ({ name, snapshot: value, now: current.get(name)! }));
   return {
+    report: CHECK_REPORT_FORMAT,
     database: { snapshot: before.database, now: now.database },
     schemaChanged: before.schema.fingerprint !== now.schema.fingerprint,
     settings,
@@ -87,27 +106,39 @@ export function fails(report: CheckReport, failOn: FailOn): boolean {
   return items(report).some((cls) => FAILING[failOn].includes(cls));
 }
 
-/** The notes, a line for each item that is not unchanged, most serious first, the count of each class, and the fix when there is one. */
+/**
+ * The notes, a line for each item that is not unchanged, most serious first, the count of each class, and the fix when
+ * there is one. Names are printed as they are, and a stale line says only what is gone.
+ */
 export function reportLines(report: CheckReport): string[] {
-  const { database, settings, claims, relations } = report;
-  const lines: string[] = [];
-  if (database.snapshot !== database.now) lines.push(`note the snapshot is of database ${database.snapshot}; this is ${database.now}`);
-  if (settings.length > 0) lines.push(`note measured with the snapshot's settings, which differ from this run's: ${settings.map((s) => `${s.name} ${s.snapshot} (this run ${s.now})`).join(", ")}`);
-  if (report.schemaChanged) lines.push("note the schema changed since the snapshot");
-  for (const cls of CHECK_CLASSES.filter((c) => c !== "unchanged")) {
-    for (const { id, before, hitBefore, after, missing } of claims.filter((c) => c.class === cls)) {
-      lines.push(missing ? `stale ${id}: ${missing} is not in the database` : `${cls} ${id}: ${side(before, hitBefore)} -> ${side(after.status, after.measurement.numbers.hit, after.skipped)}`);
-    }
-    if (cls === "stale") for (const r of relations) lines.push(r.in === "database" ? `stale ${r.name}: in the database, not in the context` : `stale ${r.name}: in the context, not in the database`);
-  }
-  const found = items(report);
-  const counts = CHECK_CLASSES.flatMap((cls) => {
-    const n = found.filter((c) => c === cls).length;
-    return n > 0 ? [`${n} ${cls}`] : [];
-  });
-  lines.push(`check ${database.now}: ${counts.length > 0 ? counts.join(", ") : "no claims"}`);
-  if (fails(report, "change")) lines.push("run npx dbtruth and commit context/");
-  return lines;
+  return [
+    ...notes(report).map((note) => `note ${note}`),
+    ...rows(report).map(({ cls, name, before, after, reason }) => `${cls} ${name}: ${cls === "stale" ? "" : `${before} -> `}${after}${reason ? ` (${reason})` : ""}`),
+    `check ${report.database.now}: ${tally(items(report))}`,
+    ...(fails(report, "change") ? [FIX] : []),
+  ];
+}
+
+/**
+ * The pull request comment: the marker, the counts, a table of what fails the default build, the rest folded, at most
+ * COMMENT_MAX_ROWS rows in all, the notes, and the fix. Names are code. No query and no reason: a reason can be the
+ * server's words, and a comment is mailed to everyone who watches the pull request.
+ */
+export function reportMarkdown(report: CheckReport): string {
+  const all = rows(report, code);
+  const shown = all.slice(0, COMMENT_MAX_ROWS);
+  const open = shown.filter((r) => FAILING.regression.includes(r.cls));
+  const folded = shown.filter((r) => !FAILING.regression.includes(r.cls));
+  // Each part is a Markdown block of its own, so a blank line goes between two.
+  const parts = [
+    [COMMENT_MARKER, `dbtruth: ${tally(items(report))}`],
+    table(open),
+    folded.length > 0 ? ["<details>", `<summary>${tally(folded.map((r) => r.cls))}</summary>`, "", ...table(folded), "", "</details>"] : [],
+    all.length > shown.length ? [`and ${all.length - shown.length} more`] : [],
+    notes(report, code).map((note) => `- note: ${note}`),
+    fails(report, "change") ? [FIX] : [],
+  ];
+  return parts.filter((part) => part.length > 0).map((part) => part.join("\n")).join("\n\n") + "\n";
 }
 
 /**
@@ -160,7 +191,62 @@ function items(report: CheckReport): CheckClass[] {
   return [...report.claims.map((c) => c.class), ...report.relations.map((): CheckClass => "stale")];
 }
 
-/** "broken 88.0%", or "unverifiable (time budget exhausted)": the status, with the hit rate and why it was not measured when there are. */
-function side(status: Verdict["status"], hit: number | undefined, skipped?: string): string {
-  return `${status}${hit === undefined ? "" : ` ${(hit * 100).toFixed(1)}%`}${skipped ? ` (${skipped})` : ""}`;
+/**
+ * Every item that is not unchanged, most serious first: the classes in their order, the claims of each in the report's,
+ * and the relations after the stale claims. show turns each name the report holds into what is printed.
+ */
+function rows({ claims, relations }: CheckReport, show = (text: string) => text): Row[] {
+  return CHECK_CLASSES.filter((c) => c !== "unchanged").flatMap((cls) => [
+    ...claims
+      .filter((c) => c.class === cls)
+      .map(({ id, before, hitBefore, after, missing }): Row => ({
+        cls,
+        name: show(id),
+        before: side(before, hitBefore),
+        ...(missing ? { after: `${show(missing)} is not in the database` } : { after: side(after.status, after.measurement.numbers.hit), ...(after.skipped ? { reason: after.skipped } : {}) }),
+      })),
+    ...(cls === "stale" ? relations.map((r): Row => ({ cls, name: show(r.name), after: r.in === "database" ? "in the database, not in the context" : "in the context, not in the database" })) : []),
+  ]);
+}
+
+/** What the report notes: another database, other settings, a changed schema. The settings' names are the snapshot schema's own. */
+function notes({ database, settings, schemaChanged }: CheckReport, show = (text: string) => text): string[] {
+  return [
+    ...(database.snapshot !== database.now ? [`the snapshot is of database ${show(database.snapshot)}; this is ${show(database.now)}`] : []),
+    ...(settings.length > 0 ? [`measured with the snapshot's settings, which differ from this run's: ${settings.map((s) => `${s.name} ${s.snapshot} (this run ${s.now})`).join(", ")}`] : []),
+    ...(schemaChanged ? ["the schema changed since the snapshot"] : []),
+  ];
+}
+
+/** "1 regression, 3 stale": how many items of each class, in the order of the classes, or "no claims". */
+function tally(classes: CheckClass[]): string {
+  const counts = CHECK_CLASSES.flatMap((cls) => {
+    const n = classes.filter((c) => c === cls).length;
+    return n > 0 ? [`${n} ${cls}`] : [];
+  });
+  return counts.length > 0 ? counts.join(", ") : "no claims";
+}
+
+/** The rows as a Markdown table, or nothing. A pipe inside a cell is escaped: GitHub ends a cell at any other. */
+function table(entries: Row[]): string[] {
+  if (entries.length === 0) return [];
+  return ["| Class | Claim | Before | After |", "|---|---|---|---|", ...entries.map(({ cls, name, before, after }) => `| ${[cls, name, before ?? "", after].map((cell) => cell.replace(/\|/g, "\\|")).join(" | ")} |`)];
+}
+
+/**
+ * A name as a code span on one line, in which GitHub makes no mention, issue, emoji or link, and reads no HTML. The fence
+ * is one backtick longer than the longest run inside, and the spaces inside it, one of which CommonMark strips from
+ * each end, keep a backtick at either end of the name off the fence.
+ */
+function code(text: string): string {
+  const inline = text.replace(/[\r\n]+/g, " ");
+  // Not Math.max(...runs): a name from the snapshot can hold more runs than a call takes arguments.
+  const longest = (inline.match(/`+/g) ?? []).reduce((n, run) => Math.max(n, run.length), 0);
+  const fence = "`".repeat(longest + 1);
+  return `${fence} ${inline} ${fence}`;
+}
+
+/** "broken 88.0%": the status, with the hit rate when there is one. */
+function side(status: Verdict["status"], hit: number | undefined): string {
+  return `${status}${hit === undefined ? "" : ` ${(hit * 100).toFixed(1)}%`}`;
 }

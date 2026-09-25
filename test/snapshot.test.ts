@@ -232,7 +232,21 @@ test("toSnapshot lists every catalog relation, marks those not examined, and car
     duplicateOverlap: config.duplicateOverlap,
     categoricalMaxDistinct: config.categoricalMaxDistinct,
     categoricalMaxValueLength: config.categoricalMaxValueLength,
+    denseKeyShare: config.denseKeyShare,
+    weakEvidenceMaxCandidates: config.weakEvidenceMaxCandidates,
   });
+});
+
+test("the snapshot records denseKeyShare and weakEvidenceMaxCandidates, held to their flags' ranges, and reads one without them", () => {
+  assert.deepEqual([valid.measuredWith.denseKeyShare, valid.measuredWith.weakEvidenceMaxCandidates], [0.9, 50]);
+  const settings = (changed: Partial<Snapshot["measuredWith"]>) => parseSnapshot(JSON.stringify({ ...valid, measuredWith: { ...valid.measuredWith, ...changed } }), FILE);
+  assert.equal(settings({ denseKeyShare: 1.5 }), `${FILE} is not a dbtruth snapshot: measuredWith: DBTRUTH_DENSE_KEY_SHARE / --dense-key-share: 1.5 is above the maximum 1`);
+  assert.equal(settings({ weakEvidenceMaxCandidates: 2.5 }), `${FILE} is not a dbtruth snapshot: measuredWith: DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES / --weak-evidence-max-candidates: 2.5 must be a whole number`);
+  // Written before either existed: check then weighs with this run's.
+  const { denseKeyShare: _share, weakEvidenceMaxCandidates: _cap, ...before } = valid.measuredWith;
+  const older = parseSnapshot(JSON.stringify({ ...valid, measuredWith: before }), FILE);
+  if (typeof older === "string") assert.fail(older);
+  assert.deepEqual(older.measuredWith, before);
 });
 
 test("parseSnapshot refuses what is not a snapshot, each with its own sentence", () => {
