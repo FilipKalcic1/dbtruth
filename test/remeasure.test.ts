@@ -21,6 +21,7 @@ import { copyOfFixture } from "./copies.js";
 const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
 const TSX = import.meta.resolve("tsx");
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+const FIXTURE_SNAPSHOT = fileURLToPath(new URL("../scripts/make-fixture-snapshot.mjs", import.meta.url));
 const SNAPSHOT = "context/snapshot.json";
 const CANARY = /canary-pii/i;
 // Each test makes a copy of fixture_template and runs dbtruth on it at least twice.
@@ -71,10 +72,13 @@ async function recorded(url: string, snapshot: Snapshot): Promise<{ report: Chec
   }
 }
 
-/** `dbtruth <args>` as a user runs it, from cwd, with no database URL and no API key unless env gives them; one that hangs is killed at 30 s. */
-async function command(args: string[], cwd: string, env: Record<string, string> = {}): Promise<{ status: number | null; stdout: string; stderr: string }> {
+/**
+ * `dbtruth <args>` as a user runs it, or another script under tsx, from cwd, with no database URL and no API key unless
+ * env gives them; one that hangs is killed at 30 s.
+ */
+async function command(args: string[], cwd: string, env: Record<string, string> = {}, script = CLI): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const base = { ...process.env, DATABASE_URL: "", ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "" };
-  const child = spawn(process.execPath, ["--import", TSX, CLI, ...args], { cwd, env: { ...base, ...env }, timeout: 30_000 });
+  const child = spawn(process.execPath, ["--import", TSX, script, ...args], { cwd, env: { ...base, ...env }, timeout: 30_000 });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -421,4 +425,24 @@ test("a comment that cannot be written stops check with exit 1 and no JSON", LIM
   assert.equal(code, 1, err.join("\n"));
   assert.deepEqual(out, [], "no JSON");
   assert.match(err.at(-1)!, /^could not write context: EISDIR/);
+});
+
+test("the fixture snapshot script writes a context/ that check passes on", LIMIT, async (t) => {
+  const copy = await copyOfFixture(t);
+  const root = mkdtempSync(join(tmpdir(), "dbtruth-fixture-"));
+  // Into a directory that does not exist yet and with no API key, as the Action's tests run it. The fixture's broken
+  // join makes the full run exit 2, which the script does not pass on.
+  const { status, stderr } = await command(["project"], root, { DATABASE_URL: copy.url }, FIXTURE_SNAPSHOT);
+  assert.equal(status, 0, stderr);
+  const { code, err } = await checkIn(join(root, "project"), copy.url);
+  assert.deepEqual([code, err], [0, [`check ${copy.name}: 12 unchanged`]], "check passes on the snapshot the script wrote in project/");
+});
+
+test("the fixture snapshot script fails when the run does, and says why", async () => {
+  // DATABASE_URL set and empty, as a step whose variable is missing sets it: the run finds no URL and exits 1, and so
+  // must the script, or the Action's tests would go on without a snapshot.
+  const root = mkdtempSync(join(tmpdir(), "dbtruth-fixture-"));
+  const { status, stderr } = await command(["project"], root, { DATABASE_URL: "" }, FIXTURE_SNAPSHOT);
+  const reason = "no database URL: DATABASE_URL is not in the environment or in a .env";
+  assert.deepEqual([status, stderr.split("\n")[0]], [1, reason], "the script exits 1 as the run did, with the run's reason on stderr");
 });

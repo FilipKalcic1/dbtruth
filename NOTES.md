@@ -1637,6 +1637,126 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     lines; queries or reasons in the comment; escaping names on stderr; a
     Markdown renderer in the tests, which compare the text; `--markdown -`,
     since stdout holds JSON only (R6).
+- **The GitHub Action runs `check` on every pull request and keeps one comment
+  on it.** Teams do not run a CLI by hand on every pull request; the Action is
+  what a team installs, sees on each one, and on a private repository pays
+  for. It lives in a public repository of its own,
+  FilipKalcic1/dbtruth-action, since the Marketplace takes one `action.yml`
+  at a repository's root.
+  - **Its shape.** A composite action of two steps. The first is
+    `actions/setup-node`, pinned by commit SHA to v7.0.0 as in `ci.yml`, with
+    Node 22 and `package-manager-cache: false`, which setup-node's README
+    recommends in a job that holds secrets. The second is one bash step,
+    `scripts/check.sh`, which calls `scripts/comment.sh` when it comments;
+    the plan's "every step `shell: bash`" cannot hold for a `uses:` step.
+    Every input reaches the scripts as an environment variable `action.yml`
+    sets, and the step's `run` text holds no `${{ }}`, so no input is pasted
+    into a script as code. Inputs: `database-url`, required, from a secret;
+    `working-directory`, `.`; `fail-on`, `regression`; `comment`,
+    `on-change`, `always` or `never`; `dbtruth-version`. Outputs: `result`,
+    `regressions` and `stale`.
+  - **`dbtruth-version` is anything npm takes after `dbtruth@`,** 0.3.0 by
+    default, run with `npx -y`. The Action's tests pass `file:` and a tarball
+    packed from dbtruth at `DBTRUTH_REF`, the commit they test against, since
+    0.3.0 is not published yet; until it is, the default gets npm's 404. The
+    order is npm 0.3.0, then the `v1` tag, then the Marketplace, all HUMAN,
+    and T7.1 adds a scenario on the published default.
+  - **Results.** Exit 0 is `pass` and 2 is `fail`, with the counts read from
+    `--json`. Any other exit code is `error`, not only the plan's 1, and so is
+    an unknown `comment` value or a report whose `report` field is not 1 or
+    that cannot be parsed. An empty `database-url`, as on a pull request from
+    a fork, is `skipped` with a notice and exit 0. The step exits with
+    check's own code. A step that never starts, as on a `working-directory`
+    that does not exist or after setup-node failed, runs no script of the
+    Action and so sets no `result`; the Action's README and `action.yml` say
+    so.
+  - **One comment per pull request.** On `pull_request` only, the Action's
+    comment is the first whose author is github-actions[bot] and whose body
+    starts with the marker. It always comments with the workflow's token, so
+    its comments are that bot's, and a person's comment that quotes the
+    marker is never edited. That comment is updated in place; with none, one
+    is created when an item is not unchanged or check could not run, and
+    always under `comment: always`, while `never` makes no call. The plan's
+    "skips creating a comment when everything is unchanged" is read
+    literally: a claim not measured creates one, a note alone does not. An
+    existing comment is always updated, so the all-clear replaces an old
+    failure.
+  - **A check that could not run gets a comment too.** dbtruth writes none
+    then, so the Action writes the marker, `dbtruth check could not run
+    (exit N)` with a link to the job log, and check's stderr indented four
+    spaces, an indented code block no line can break out of. Markdown ends a
+    line at a carriage return as well as a line feed, and check's stderr can
+    quote a name from the snapshot, which can hold one, so each carriage
+    return is made a line break before the indent; without that, the text
+    after one leaves the block as a paragraph, with live mentions, images
+    and links.
+    dbtruth's messages never hold the URL.
+  - **A body over 65,536 bytes is cut** to its first two lines, the marker
+    and the counts, and a sentence saying the job log has every line. T3.3's
+    row cap keeps a comment of the names Postgres produces far under it; a
+    snapshot edited by hand can pass it.
+  - **A missing `gh` fails the job; a refused call only warns.** Without the
+    GitHub CLI on the runner, as on some self-hosted ones, the step fails
+    with what to do: install it, or set `comment: never`. A list, update or
+    create GitHub refuses, such as a 403 without `pull-requests: write`,
+    prints a warning naming that permission, and the job's result stays
+    check's.
+  - **dbtruth's lines are printed with workflow commands stopped.** The
+    runner reads a workflow command in any line of stdout or stderr, the
+    older `##[` form anywhere in the line, and check prints names from the
+    snapshot, which the pull request can edit: one could set an output of
+    the step, `result` among them. The Action prints `::stop-commands::`
+    with a random token, then check's stderr, then the token, all on
+    stdout, since stdout and stderr are read through separate pipes and
+    would not keep the three in order. A report the Action cannot parse is
+    read after commands resume, so node's error, which quotes the report, is
+    dropped; the Action's own error says what went wrong.
+  - **The password.** GitHub masks a secret wherever it is printed, and
+    prints any other `with:` or `env:` value in the log, so the plan's "the
+    password is absent from the log" holds for a URL given as a secret, which
+    is what both READMEs require. The Action never prints the URL, and
+    dbtruth's connection errors are its own sentences. The error scenario
+    builds a URL with a wrong password at run time, masks it as GitHub masks
+    a secret, and fails if the password is in any file the Action wrote or in
+    the job's real log, fetched through the API; the literal is in no
+    workflow text.
+  - **The tests take the fixture from dbtruth.** In place of the plan's
+    vendored SQL, committed snapshot and `test/regress.sql`, the scenarios
+    check out dbtruth at `DBTRUTH_REF`, load its `seed.sql`, make the
+    snapshot with `scripts/make-fixture-snapshot.mjs`, and apply the T3.2
+    regression inline, so nothing is copied that could drift. T7.1's
+    "committed fixture snapshot" becomes the one the script makes.
+  - **`scripts/make-fixture-snapshot.mjs <dir>`** runs `run()` on the
+    fixture, or on `DATABASE_URL`, with the canned claims of `test/canned.ts`
+    in place of the model, and writes `<dir>/context/`, snapshot included. It
+    exits 0 when the run exits 0 or 2, as the fixture's broken join makes
+    it, and 1 only for a run that failed. It imports TypeScript from `src/` and
+    `test/`, so it runs under `node --import tsx`; it is not in the package,
+    and typecheck reads it. "the fixture snapshot script writes a context/
+    that check passes on" runs it into a directory that does not exist yet,
+    with no API key, on a copy of the fixture, and check then finds 12
+    unchanged. "the fixture snapshot script fails when the run does, and says
+    why" runs it with `DATABASE_URL` set and empty, as a step whose variable
+    is missing sets it: the run finds no URL and exits 1, and the script
+    exits 1 too, with the run's reason on stderr. Both start the script with
+    `command`, the helper of `remeasure.test.ts` that starts the CLI, which
+    now takes the script to run, `src/cli.ts` by default; no other test
+    changes.
+  - **R9 governs the data sent (the lead's decision).** R9 lets the Action
+    call the GitHub API and, from T6.2, the license endpoint, "nothing
+    else". The Action sends data to the GitHub API alone; setup-node and npx
+    download Node and dbtruth from their servers, installation traffic the
+    plan's own steps need, which R9 is read to allow. The Action's README
+    says so too.
+  - **The Team tier moves after CI,** where the plan puts it. Its sentences
+    on the Action are in the present tense, as `check`'s are, since 0.3.0
+    ships both; the license check stays in the future until T6.2. The
+    CHANGELOG's Team tier bullet no longer calls the Action coming.
+  - Not done: the `license-key` input (T6.2); two databases on one pull
+    request; Windows and macOS runners; GitHub Enterprise Server; a comment
+    on a skipped run or on `pull_request_target`; dbtruth's dependencies
+    locked under `npx`; removing setup-node's problem matchers, which stay
+    for the rest of the job.
 - **The README says what a team will pay for, with the price and the waitlist
   left to a person.** The paid tier of the plan's section 2 is the GitHub
   Action on private repositories. A section, "Team tier", says so before the

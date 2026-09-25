@@ -31,6 +31,10 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   comment: the counts, what fails the default build in a table, the rest
   folded, at most 50 rows, names as code, no query or reason. A comment file
   that cannot be written exits 1.
+- The GitHub Action FilipKalcic1/dbtruth-action runs `check` on every pull
+  request, keeps one comment updated in place, fails the job on a regression
+  or a stale item by default, and skips a pull request from a fork, which gets
+  no secrets. The README has a CI section.
 - A file of the last run under `context/` is replaced by the new one, and
   only a file this run does not write again, such as a renamed table's, is
   removed. One that cannot be removed, held open by another program on
@@ -38,9 +42,9 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   that cannot be written, and the other files are still written. It used to
   stop the run, after the model calls.
 - README: a Team tier section. It says what a team will pay for (the GitHub
-  Action on private repositories, which is coming), what stays free forever,
-  and that no database content passes through a server of ours. The price and
-  the waitlist link are placeholders for now.
+  Action on private repositories), what stays free forever, and that no
+  database content passes through a server of ours. The price and the
+  waitlist link are placeholders for now.
 
 ## 0.2.0 (unreleased)
 

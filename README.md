@@ -255,13 +255,63 @@ file as it reads any input it did not write: no larger than 10 MB, checked
 against its schema before anything else, its names only looked up in the
 database's own catalog, and its stored queries never run.
 
+## CI
+
+The GitHub Action
+[FilipKalcic1/dbtruth-action](https://github.com/FilipKalcic1/dbtruth-action)
+runs `dbtruth check` on every pull request, writes what moved into one comment
+on it, updated in place, and by default fails the job on a regression or a
+stale item. Add a workflow such as `.github/workflows/dbtruth.yml`:
+
+```yaml
+name: dbtruth
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: dbtruth-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: FilipKalcic1/dbtruth-action@v1
+        with:
+          database-url: ${{ secrets.DBTRUTH_DATABASE_URL }}
+```
+
+`pull-requests: write` lets the Action write its comment. `concurrency`
+cancels a run still going when the next push starts one, so two runs never
+race to create two comments. The Action's
+[README](https://github.com/FilipKalcic1/dbtruth-action#readme) lists its
+inputs and outputs and describes the comment.
+
+The secret lets the job into your database, so:
+
+- Connect as a role that can only read, on a replica or a staging copy, never
+  as an owner role on production.
+- Keep the URL in a secret. GitHub masks a secret in the log, and prints any
+  other value a step is given in `with:` or `env:`.
+- Run it on `pull_request`, never on `pull_request_target` with a checkout of
+  the pull request's code, which hands your secrets to the code of whoever
+  opened the pull request.
+- A pull request from a fork gets no secrets, so the Action skips it with a
+  notice and does not fail the job.
+
+The database must hold the data the context describes: the one `npx dbtruth`
+ran on, or a copy of it. On an empty database built from the migrations
+alone, the claims have nothing to measure. Since the pull request decides what
+is checked, review a change to `context/snapshot.json` as you would a change
+to the code (previous section).
+
 ## Team tier
 
-The Team tier is the GitHub Action on private repositories. The Action is
-coming: on a pull request it will run `dbtruth check` against the database
-the workflow gives it, write what moved into one comment on the pull request,
-updated in place, and by default fail the job on a regression or a stale
-item.
+The Team tier is the GitHub Action on private repositories. The Action (see
+CI) runs `dbtruth check` on a pull request against the database the workflow
+gives it, writes what moved into one comment on the pull request, updated in
+place, and by default fails the job on a regression or a stale item.
 
 These stay free forever: the CLI (`dbtruth`, `doctor`, `init`, `check`, and
 the coming `mcp`); the skill, also coming, that tells an agent when to read
@@ -269,10 +319,10 @@ the context and measure a join; and the Action on public repositories.
 
 No database content passes through a server of ours, on either tier. You
 bring your own model access: a full run calls the Anthropic API with your
-key, and `check` needs no model at all. The Action will run `check` in your
-own CI job. On a private repository it will also check a license key,
-sending the key and the repository's id and nothing else, and an outage of
-that check will never fail the job.
+key, and `check` needs no model at all. The Action runs `check` in your own
+CI job. On a private repository it will also check a license key, sending
+the key and the repository's id and nothing else, and an outage of that
+check will never fail the job.
 
 The Team tier will cost PRICE_TBD per team per month.
 [Join the waitlist](WAITLIST_URL) to hear when it opens.
@@ -459,6 +509,7 @@ npm run verify                      # typecheck, every test, build, package smok
 npm run acceptance -- --task T1.1   # score one task of BUILD_PLAN.md
 npm run acceptance                  # score every task, then their mean
 python scripts/render-demo.py       # regenerates docs/demo.gif from real output (needs Pillow)
+node --import tsx scripts/make-fixture-snapshot.mjs <dir>   # context/ for the fixture without a model, for the Action's tests
 ```
 
 The databases are loaded once, when the volume is made. After a file in

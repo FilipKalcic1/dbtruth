@@ -3773,3 +3773,375 @@ of each lost point, in the format of section 4.7 of the plan.
   comment, which carries neither.
 - `quiet` in T3.2's `reportLines` test built with `reportOf(...)` to the same
   value, no assertion changed: approved.
+
+## T4.1 GitHub Action
+### Iteration 1: 30/100
+- The dbtruth part of T4.1, section 3 of the design brief for T3.3 and T4.1.
+  The Action's repository, FilipKalcic1/dbtruth-action, is built beside this
+  one and pushed by the lead, and A1 to A4 are evidenced by runs on GitHub
+  (the lead's decision 3), so they stay empty here.
+- Read first: sections 0 to 5 of the plan, T3.3, T4.1, T6.1, T6.2 and T7.1;
+  the brief's sections 0, 1, 3 to 6 and 8, and its prototypes of
+  `check.sh`, `comment.sh` and `scripts.test.sh`; `src/check.ts`,
+  `src/cli.ts` and `src/schemas.ts` at HEAD d73c48b;
+  `test/remeasure.test.ts`, `test/readme.test.ts`, `test/canned.ts` and
+  `test/copies.ts`; README.md, NOTES.md (0.3.0), CHANGELOG.md, the T3.3 and
+  T6.1 iterations above and `acceptance/`.
+- The code at HEAD differs from the brief in one place this part meets: the
+  comment's notes come after its table (T3.3, iteration 2), not before.
+  Nothing here depends on it, and the fail scenario the brief gives the
+  Action reads only the first line, the marker, and the regression row.
+- Tests first: "the fixture snapshot script writes a context/ that check
+  passes on" (D4, `test/remeasure.test.ts`) failed with
+  `ERR_MODULE_NOT_FOUND` for `scripts/make-fixture-snapshot.mjs` and
+  `1 !== 0`, for the reason the task describes: there was no script. It
+  starts the script as the other tests start the CLI, with `command`, which
+  now takes the script to run, `src/cli.ts` by default; no assertion
+  changed.
+- Built: `scripts/make-fixture-snapshot.mjs <dir>`, as the brief has it. It
+  makes `<dir>`, runs `run()` there on `DATABASE_URL`, else the fixture,
+  with the canned transport of `test/canned.ts`, and exits 0 when the run
+  exits 0 or 2, and 1 when it exits 1. It runs under `node --import tsx`, is
+  not in the package (`files` in package.json holds `dist`, README.md and
+  LICENSE), and typecheck reads it. D4 passes. Run by hand as the reader
+  role into a new directory: 14 files under `context/`, `snapshot.json`
+  among them, exit 0, and `check` on that snapshot printed `check fixture:
+  12 unchanged`.
+- Docs:
+  - README: "## CI" right after "Keeping context true", with the plan's
+    workflow (checkout at the SHA `ci.yml` pins, v7.0.1;
+    `FilipKalcic1/dbtruth-action@v1`; `database-url` from
+    `secrets.DBTRUTH_DATABASE_URL`; `concurrency` per pull request with
+    `cancel-in-progress`), what `pull-requests: write` and `concurrency` are
+    for, a link to the Action's README for its inputs, outputs and comment,
+    and the security guidance: a read-only role on a replica or a staging
+    copy, never an owner role on production; the URL in a secret, since
+    GitHub prints any other `with:` or `env:` value; `pull_request`, never
+    `pull_request_target` with a checkout of the pull request's code; a
+    fork's pull request skipped without failing; a database that holds the
+    data the context describes; `context/snapshot.json` reviewed like code.
+  - README: the Team tier moved after "CI", its first sentence and the
+    free-forever sentence as they were. "The Action is coming: ... it will
+    run" became "The Action (see CI) runs ...", and "The Action will run
+    `check`" became "runs"; the license sentence stays in the future (T6.2).
+    No code span added. The Development block gains the script's line.
+  - CHANGELOG 0.3.0: the Action's bullet, after `check --json`'s; "which is
+    coming" dropped from the Team tier bullet.
+  - NOTES 0.3.0: the entry "The GitHub Action runs `check` on every pull
+    request and keeps one comment on it.", after T3.3's, with the bullets
+    the brief lists: the shape, `dbtruth-version`, the results, the comment
+    rule, the could-not-run body, the size cut, a missing `gh` and a refused
+    call, stop-commands, the password, the tests' fixture, the script and
+    its test, R9 as the lead decided, the Team tier's move, and what is not
+    done.
+- The Team tier's changed sentences, re-checked against the plan and the
+  code, numbered as in T6.1's iteration 1 (the evidence for T6.1 A2, whose
+  manual item now names this record too):
+  2. "The Action (see CI) runs `dbtruth check` on a pull request against the
+     database the workflow gives it, writes what moved into one comment on
+     the pull request, updated in place, and by default fails the job on a
+     regression or a stale item": T4.1 (the `database-url` input, `fail-on`
+     defaulting to `regression`, `comment.sh` updating the comment it finds
+     or creating one, A2), T3.2's table (stale fails under `regression`),
+     T3.3's comment. "(see CI)" is the section T4.1's Docs ask for.
+  6. "The Action runs `check` in your own CI job": T4.1, a composite action
+     whose bash step runs `npx dbtruth check` on the job's own runner.
+  Both are in the present tense, as the check section is, since 0.3.0 ships
+  the Action with `check`, as the brief directs. Sentence 7, the license
+  check, stays in the future: T6.2 (P2) is not built. Sentences 1, 3, 4, 5,
+  8 and 9 are unchanged. Both tests of the section pass: "the Team tier
+  section names every command, and only those not built yet as coming" and
+  "the Team tier section has a price and a waitlist link, ...".
+- `acceptance/checks.json`, T4.1: D4 on T3.2's command, the gate, five docs
+  checks (the CI section with the Action, `pull-requests: write` and
+  `pull_request_target`; the order Keeping context true, CI, Team tier, What
+  it sends; the Development line; NOTES; CHANGELOG) and T3.2's three
+  structure tests. `acceptance/manual.json`: A1 to A4 and the sabotage item
+  as the brief words them, each with its evidence empty.
+- `npm run verify` exits 0: 260 tests, 258 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T4.1`
+  prints `T4.1: 30/100`: every check passes, and the five manual items have
+  no evidence. `npm run acceptance` over every task: every task built so
+  far, T6.1 and T1.4 among them, still 100/100 with the README, CHANGELOG
+  and NOTES changed; T4.1 30/100; overall 76/100 over 20 tasks, with T5.1,
+  T5.2, T6.2 and T7.1 not started.
+- Lost Acceptance (-50): `FAIL T4.1 A1 acceptance: no evidence for: The four
+  automated scenarios pass in the Action repository's CI: ...`, and A2, A3
+  and A4 likewise. Cause: each is a run on GitHub, of the Action's CI or on
+  its test pull request (the lead's decision 3), which needs
+  FilipKalcic1/dbtruth-action pushed; the lead fills them.
+- Lost Tests (-20): `FAIL T4.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; it takes the
+  local sabotages and a red run on a sabotage branch of the Action's
+  repository, which a later stage and the lead do.
+### Iteration 2: 30/100
+- Four reviews (plan, security, quality, bugs) gave fourteen findings, some
+  of them one defect seen by more than one review: the carriage return
+  (security, bugs), the event gate (plan, quality, bugs), a refused list or
+  update (plan, quality, bugs). Each was checked against the code, the plan
+  and the brief before acting; none was rejected. One was taken in the
+  first of the two forms it offered, `result` when the step never starts
+  (below), and one in part, the sabotage record (below).
+- Checked first:
+  - The carriage return, end to end. `scripts/make-fixture-snapshot.mjs`
+    wrote a real snapshot of the fixture; one verdict key became
+    `x\r@octocat **approved**`, with an invalid status. `check --json`
+    exited 1, and `od -c` of its stderr showed `verdicts.x \r @octocat`.
+    The could-not-run body built from such a line, rendered by GitHub
+    (`gh api markdown -f mode=gfm`): a `<pre>` that ended at `verdicts.x`,
+    then a paragraph with a live `user-mention` link to @octocat, an image
+    through camo, and `<strong>approved</strong>`. With the fix, one
+    `<pre>` that holds every word.
+  - setup-node at `820762786026740c76f36085b0efc47a31fe5020`, its
+    `src/main.ts` read through the API: automatic caching reads
+    `package.json` at the root of `GITHUB_WORKSPACE` only. In test.yml's
+    scenarios job that is the Action's repository, which has none; in
+    `action.yml` it is the user's repository, so the input stays there.
+  - `check` with a wrong password prints `dbtruth: could not connect to the
+    database: authentication failed; check the user and password in the
+    URL`, and no step script of the scenarios job holds "could not
+    connect".
+  - The Action's 29 script cases at f5dd543 stayed green under each of the
+    sabotages the reviews named: no resume line after dbtruth's lines,
+    `moved` starting at 0, relations left out of what moved, a comment on
+    every event, a refused list or a refused update failing the step, and
+    the last of two comments taken.
+- Fixed, in the Action's repository:
+  - `scripts/check.sh`: each carriage return in check's stderr is made a
+    line break before the four-space indent (`tr '\r' '\n'`), and its
+    comment says why. node's error on a report it cannot parse is dropped
+    (`2> /dev/null`): it quoted the report after commands resumed, where the
+    runner reads a `##[` in it as a command. The Action's own `::error::`
+    still says what went wrong.
+  - `test/scripts.test.sh`, from 29 cases to 35:
+    - the stop-commands case compares the whole block from the stop line to
+      the resume line, so the resume line must follow dbtruth's;
+    - the case of a check that cannot run starts with no comment, so it
+      tests that one is created;
+    - "a relation added and nothing else is stale: it fails, and creates
+      the comment";
+    - `step` takes the event from `EVENT`, `pull_request` unless set, and
+      "on pull_request_target, as on any event but pull_request, no call to
+      gh either";
+    - a list, a create and an update GitHub refuses each exit 0 with one
+      warning naming the permission, and the refused update leaves the
+      comment as it was (`refused GET`, `POST`, `PATCH`, where only a
+      refused create was tested);
+    - "of two comments of its own, the first is updated";
+    - "a carriage return in what check printed starts a line of its own,
+      inside the code block", through `FAKE_ERR`, what the fake npx prints
+      when check could not run;
+    - "and so is a report it cannot parse" gives the fake npx `not json
+      ##[warning]from stdout`, and "whose text is not printed once commands
+      resume" finds that text in neither stream;
+    - "no gh on the runner fails the step, even with nothing to create",
+      renamed from "... fails when there is a comment to keep", which the
+      code does not test for, and run with `false`;
+    - a `reset` before "no database-url is skipped, and passes", so it
+      counts only its own calls to gh.
+  - `.github/workflows/test.yml`: `pull-requests: write` only in the
+    scenarios job, the one that comments; the workflow's default is
+    `contents: read`. `package-manager-cache: false` is gone from its
+    setup-node step, where it did nothing. The log job looks for dbtruth's
+    own line, `dbtruth: could not connect to the database: authentication
+    failed`, where it looked for "authentication failed": the runner prints
+    each step's script in the log, and the error step's holds those words,
+    so they were found whether dbtruth's line was there or not.
+  - `action.yml`: `comment` says, in the README's words, that a check that
+    cannot run creates the comment too; `result` says `error` covers a
+    wrong input as well, and that it is empty when the step did not start.
+  - README: the `result` row says it is empty when the Action's step did
+    not start, on a `working-directory` that does not exist or when
+    setup-node failed before it. Taken in that form, not by moving the
+    directory into check.sh: when setup-node fails no script runs, so no
+    code could set `result` then either.
+- Fixed in dbtruth, NOTES, the Action's entry: the carriage return, in the
+  could-not-run bullet; an empty `result` for a step that never starts, in
+  the results bullet; node's dropped error, in the stop-commands bullet.
+- Sabotage of the Action's rules. Each was made in a fresh copy of the
+  repository inside a `node:22` container, with `perl`, checked with `cmp`
+  to have changed the file, and run through `bash test/scripts.test.sh`;
+  the repository itself was never edited, so nothing needed restoring.
+  - `echo "::$token::"` removed: "dbtruth's lines are printed with workflow
+    commands stopped, and commands resume after them" failed, the block
+    running to the end of stdout with no resume line.
+  - `moved=0` at the start: "a check that cannot run is an error, and
+    creates a comment that says why" failed with `got [exit 1:
+    regressions= result=error stale= |]`, no comment, and the carriage
+    return case with an empty body.
+  - `+ relations.length` out of what moved: "a relation added and nothing
+    else is stale: ..." failed with `exit 2: regressions=0 result=fail
+    stale=1 |` and no comment.
+  - The `pull_request` test removed from the comment's condition: "on
+    pull_request_target, ..." failed with 2 calls to gh where 0.
+  - The list's `if ! ids=$(gh api ...)` made a plain assignment: "a list
+    GitHub refuses ..." failed with `exit 1, 0 warning|`.
+  - `|| warn` dropped from the update: "nor does an update it refuses,
+    ..." failed with `exit 1, 0 warning`.
+  - The last id taken, `${ids##*$'\n'}`: "of two comments of its own, the
+    first is updated" failed, the second one updated instead.
+  - `sed 's/^/    /' "$report.err"` again, without `tr`: "a carriage return
+    in what check printed ..." failed, `@octocat` on the line of
+    `verdicts.x`.
+  - node's stderr kept: "whose text is not printed once commands resume"
+    failed with `1` where `0`.
+  No sabotage left every case green. The log job's check runs only on
+  GitHub; its fix rests on the runner printing each step's script.
+- Taken in part, the sabotage record (plan review): the sabotages above are
+  recorded here, and `acceptance/manual.json`'s sabotage item keeps its
+  evidence empty. It also asks for a sabotage of
+  `scripts/make-fixture-snapshot.mjs` and a red run on a sabotage branch of
+  the Action's repository, and evidence now would mark as done what is not
+  (4.4).
+- Runs, in `node:22` with jq 1.6 and ShellCheck 0.9.0, on a `git archive` of
+  the Action's commit: `shellcheck scripts/*.sh test/*.sh` clean; `bash
+  test/scripts.test.sh` 35 ok, 0 FAIL; the scripts job's check that every
+  message the scripts print has a row in the README passes. actionlint
+  1.7.12 is clean on test.yml, its shellcheck pass over the `run:` scripts
+  included.
+- U4 rendered by GitHub, which the brief asks for before the Marketplace:
+  the report of "a name from the snapshot or the database is code in the
+  comment: ...", rendered by `reportMarkdown` at HEAD (its three rows equal
+  the test's), sent to `gh api markdown -f mode=gfm -f
+  context=FilipKalcic1/dbtruth-action`. GitHub returned a table of a header
+  and three rows, each name one `<code>` in its cell, `</details><img
+  src=x>@octocat` as text, and no mention, link, image or `<details>`. The
+  context repository does not exist yet; only issue and commit references
+  depend on it, and U4 has none.
+- The Action's repository, `C:\Users\igork\Desktop\rainbow\dbtruth-action`:
+  one local commit, 8921009, amended from f5dd543, with no remote. Its eight
+  files: `action.yml`, `scripts/check.sh`, `scripts/comment.sh`,
+  `test/scripts.test.sh`, `.github/workflows/test.yml`, `README.md`,
+  `LICENSE` (MIT) and `.gitattributes` (`* text=auto eol=lf`). Against the
+  brief's prototypes: `comment.sh` is the same; `check.sh` has comments on
+  unparseable JSON and on the code block (iteration 1), the carriage return
+  and node's dropped error; `scripts.test.sh` has the cases above, and from
+  iteration 1 two renamed cases, "comment never makes no call to gh" and
+  "the password is in nothing the action prints or writes", which also
+  reads `$GITHUB_OUTPUT`.
+- Lead, and HUMAN, not done, and recorded as done nowhere:
+  - The lead: commit and push the dbtruth part of T4.1; set `DBTRUTH_REF`
+    in the Action's test.yml, forty zeros now, to that commit's SHA; create
+    the public repository FilipKalcic1/dbtruth-action and push 8921009, or
+    its successor, to main; get test.yml green there (A1, A3, A4); open a
+    test pull request and push to it twice (A2); push a sabotage branch on
+    which exit 2 reads as pass, see it go red, and delete it; record the
+    links in `acceptance/manual.json` and here.
+  - HUMAN, in this order: `npm publish` 0.3.0 (2FA); tag `v1.0.0` and a
+    moving `v1` in the Action's repository; publish it on the Marketplace.
+    The plan's "Marketplace listing text" is `action.yml`'s `name` and
+    `description` and the first paragraph of the Action's README.
+- `npm run verify` exits 0: 260 tests, 258 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T4.1`
+  prints `T4.1: 30/100`: every check passes, and the five manual items have
+  no evidence.
+- Lost Acceptance (-50): A1 to A4, `no evidence for: ...`, as in iteration
+  1. Cause: each is a run on GitHub, which needs the Action's repository
+  pushed (the lead's list above).
+- Lost Tests (-20): `FAIL T4.1 sabotage tests: no evidence for: ...`.
+  Cause: the item's evidence waits for the snapshot script's sabotage and
+  the sabotage branch's red run (above).
+### Iteration 3: 50/100
+- The sabotage check of section 4.5 for T4.1, locally, in both
+  repositories. First, copies outside both repositories (the session's
+  scratchpad): the files to break, with their SHA-256; the Action's HEAD,
+  8921009, and its `git status`, clean; dbtruth's `git diff HEAD` and
+  `git status`. Each sabotage was made in place with `perl`, shown by
+  `git diff` or `diff`, run, and undone by copying the saved file back;
+  `cmp` against the copy and the working tree against its saved state
+  confirmed each restore.
+- The Action's tests ran as `bash test/scripts.test.sh` in `node:22` with
+  jq 1.6 and ShellCheck 0.9.0, the working copy mounted read-only. Before
+  any sabotage: 35 ok, 0 FAIL, and `shellcheck scripts/*.sh test/*.sh`
+  clean.
+- Sabotage of the Action's scripts. No sabotage left every case green.
+  - `scripts/check.sh`, exit 2 reported as pass: `if [ "$code" = 0 ] ||
+    [ "$code" = 2 ]; then result=pass code=0; fi`. Four cases failed: "a
+    regression and two stale items fail" with `got [exit 0: regressions=1
+    result=pass stale=2 |...], expected [exit 2: regressions=1 result=fail
+    stale=2 |...]`, and "a relation added and nothing else is stale: ...",
+    "comment never makes no call to gh" and "on pull_request_target, ..."
+    likewise.
+  - `scripts/comment.sh`, a second comment created where the first should
+    be updated: `if [ -n "$id" ]` made `if false`. Nine cases failed,
+    among them "the second run updates it", with both bodies where one was
+    expected, "one comment created in all, never two: got [2], expected
+    [1]", "and updated twice: got [0], expected [2]" and "still one
+    comment: got [2], expected [1]".
+  - `scripts/comment.sh`, the author filter dropped: `mine` selecting on
+    the marker alone. "a person's comment that starts with the marker is
+    left alone" failed, the person's comment overwritten with the Action's
+    `dbtruth: 1 stale`, and "and the action's own is created beside it"
+    with `got []`.
+  - `scripts/comment.sh`, the size cut dropped: the `if` that replaces a
+    body over 65,536 bytes removed. "a body over GitHub's limit is cut to
+    its counts and a note" failed, its `got` the whole body, 70,000 `x`
+    after the counts, where the note was expected.
+  - `scripts/check.sh`, the stop-commands dropped: the token, the stop line
+    and the resume line removed, `cat "$report.err"` left. "dbtruth's lines
+    are printed with workflow commands stopped, and commands resume after
+    them" failed with `got []`, where it expected the block from
+    `::stop-commands::` holding dbtruth's `##[set-output ...]` line.
+  - `scripts/check.sh`, the password echoed into the log: `set -euxo
+    pipefail`, whose trace prints `DATABASE_URL` expanded. "the password is
+    in nothing the action prints or writes" failed with `got [1], expected
+    [0]`.
+  - `scripts/check.sh`, the password echoed into the comment: "dbtruth
+    check could not run on $DATABASE_URL (exit $code)". The same case
+    failed with `got [2]`, the comment and `dbtruth.md`.
+  After the last restore the three files' SHA-256 were the saved ones, the
+  Action's `git status` clean at 8921009, and the tests 35 ok, 0 FAIL.
+- Sabotage of `scripts/make-fixture-snapshot.mjs`, its tests run by name
+  (`--test-name-pattern`) on the Docker fixture:
+  - The exit code mapping dropped, `process.exitCode = code`: D4 failed at
+    `assert.equal(status, 0, stderr)` with `2 !== 0`, under the run's
+    stderr, whose `relationships: 1 confirmed, 1 broken` is the fixture's
+    broken join the mapping is there for.
+  - A run that failed reported as success, `process.exitCode = 0`: D4
+    stayed green, and no other test runs the script. D4 runs only a run
+    that succeeds, so nothing held the script's exit 1, which the Action's
+    CI needs: after a snapshot step that exits 0 on a failed run, each
+    scenario would fail later, on a snapshot that is not there. New test,
+    after D4 in `test/remeasure.test.ts`: "the fixture snapshot script fails
+    when the run does, and says why". It runs the script with
+    `DATABASE_URL` set and empty, as a step whose variable is missing sets
+    it; the run finds no URL and returns 1. That is the one way the
+    script's `run()` returns 1: a connection that fails throws, and node
+    then exits 1 whatever the mapping says (checked by hand on a URL where
+    nothing listens: exit 1). The test passes on the script as built.
+    Repeated, the sabotage failed it with "the script exits 1 as the run
+    did, with the run's reason on stderr", `+ 0` against `- 1`.
+  - The run's lines not passed on, `err: () => {}`: D4 stayed green, since
+    it reads stderr only for its message; the new test failed with its
+    message, `+ ''` against `- 'no database URL: DATABASE_URL is not in
+    the environment or in a .env'`.
+  - The run's directory taken from the process, `cwd: process.cwd()`: D4
+    failed at its last comparison, `[1, ['no context/snapshot.json: run
+    npx dbtruth first']]` where `[0, ['check <copy>: 12 unchanged']]`,
+    but only with assert's own message. The comparison was given one,
+    "check passes on the snapshot the script wrote in project/"; no
+    assertion changed. Repeated, the sabotage failed D4 with it. The first
+    sabotage was then repeated on the tests as they now are, and failed D4
+    as before.
+  After each restore the script's SHA-256 was the saved one and `git diff
+  HEAD` byte for byte the one saved before that sabotage; after the last,
+  every file's diff but `test/remeasure.test.ts`'s was the one saved
+  before the first.
+- With the new test, `acceptance/checks.json`, T4.1, gains
+  `fixture-snapshot-fails` on D4's command, as T1.4's test added in its
+  sabotage got a check, and NOTES' bullet on the script names the test.
+- `acceptance/manual.json`: T4.1's sabotage item has its evidence, a
+  pointer to this record, which also names what is still to come from the
+  lead: the red test.yml run on a sabotage branch of
+  FilipKalcic1/dbtruth-action (exit 2 reported as pass), the branch deleted
+  afterwards, its link to be added there. Iteration 2 left that evidence
+  empty for want of the red run; it is written now with the run named as
+  missing. A1 to A4 stay empty.
+- `npm run verify` exits 0: 261 tests, 259 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T4.1`
+  prints `T4.1: 50/100`: every check passes, the new one among them, and
+  the sabotage item has its evidence.
+- Lost Acceptance (-50): A1 to A4, `no evidence for: ...`, as in
+  iterations 1 and 2. Cause: each is a run on GitHub, which needs the
+  Action's repository pushed (the lead's list in iteration 2, the red run
+  on a sabotage branch included).
