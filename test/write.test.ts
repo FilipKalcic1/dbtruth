@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { config } from "../src/config.js";
 import { createModel } from "../src/model.js";
 import { relationshipId, type Relationship, type TableFacts, type Verdict, type Verified } from "../src/schemas.js";
-import { confine, fitForWriter, persist, tableFile, write } from "../src/write.js";
+import { confine, fitForWriter, joinLine, persist, tableFile, tableFileName, write } from "../src/write.js";
 
 const facts = (name: string, extra: Partial<TableFacts> = {}): TableFacts => ({ name, kind: "table", rowEstimate: 500, primaryKey: ["id"], categorical: {}, ...extra });
 const verdict = (status: Verdict["status"], numbers: Record<string, number> = {}, skipped?: string): Verdict => ({ status, measurement: { query: "SELECT 1", numbers }, ...(skipped ? { skipped } : {}) });
@@ -118,6 +118,28 @@ test("a confirmed join whose values other keys would fit is labelled inferred wi
   assert.equal(confirmed({ candidates: 3, alsoFits: 1 }), `${head} (inferred; the same values would also match 1 other key, so the match alone does not prove this join).`);
   assert.equal(confirmed({ candidates: 3, alsoFits: 0 }), `${head} (inferred).`, "weighed, and no other key holds its values");
   assert.equal(confirmed({}), `${head} (inferred).`, "not weighed");
+});
+
+test("joinLine words a rejected join, which the per-table file leaves out", () => {
+  const guess = shop.claims.relationships[2]!;
+  const rejected = shop.verdicts[relationshipId(guess)]!;
+  assert.equal(joinLine(guess, rejected), "vehicles.model_year -> customers.id: rejected, 0.0% of 120 sampled rows match: these columns do not relate; find the right key.");
+  assert.doesNotMatch(tableFile(shop, facts("vehicles")), /model_year/);
+  // Every other line is the one the file shows.
+  const orders = tableFile(shop, shop.tables[0]!).split("\n");
+  for (const r of shop.claims.relationships.slice(0, 2)) assert.ok(orders.includes(`- ${joinLine(r, shop.verdicts[relationshipId(r)]!)}`), relationshipId(r));
+});
+
+test("a table's file is named by the table, flat under tables/", () => {
+  assert.equal(tableFileName("orders"), "context/tables/orders.md");
+  assert.equal(tableFileName("app.orders"), "context/tables/app.orders.md");
+  assert.equal(tableFileName("../a\\b"), "context/tables/.._a_b.md", "no separator survives, so a name cannot leave tables/");
+});
+
+test("a declared join that could not be measured says why, and is not called inferred", () => {
+  const declared = shop.claims.relationships[1]!;
+  assert.equal(joinLine(declared, verdict("empty", {}, "no non-null rows to test")), "order_items.order_id -> orders.id (not measured: no non-null rows to test)");
+  assert.equal(joinLine(declared, verdict("unverifiable", {}, "time budget exhausted")), "order_items.order_id -> orders.id (not measured: time budget exhausted)");
 });
 
 test("prompt B is sent Verified whole, without the verdicts' queries when that is over the model's input limit, and nothing when even that is", () => {

@@ -4145,3 +4145,374 @@ of each lost point, in the format of section 4.7 of the plan.
   iterations 1 and 2. Cause: each is a run on GitHub, which needs the
   Action's repository pushed (the lead's list in iteration 2, the red run
   on a sabotage branch included).
+
+## T5.1 `dbtruth mcp`
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 of the plan, T1.4, T3.1 to T3.3, T5.1, T5.2 and
+  T7.1, Appendices A to E; the design brief for T5.1 and T5.2 in full, the
+  lead's decisions in its section 12 binding; every module of `src/` at HEAD
+  a4de4de and the tests that touch what T5.1 changes (`structure`, `readme`,
+  `init`, `doctor`, `safety`, `config`, `write`, `extract`, `integration`,
+  `remeasure`, `joins`, `copies.ts`, `canned.ts`); README.md, NOTES.md (0.2.0,
+  0.3.0), CHANGELOG.md, the T3.3 and T4.1 iterations above and `acceptance/`;
+  the installed SDK's own types and source (`McpServer.registerTool`,
+  `serveStdio`, the tool call's validation and error handling, the client's
+  `StdioClientTransport`, which spawns through cross-spawn with a default
+  subset of the environment).
+- The code at HEAD differs from the brief where T2.2, T3.3 and T4.1 landed
+  after it, and the code won: `verify` takes `() => integerKeys(db, cfg,
+  catalog)`, as `remeasure` calls it; `check` now has T3.3's `CheckReport` with
+  a schema, so the `check` tool answers with `reportLines` and the report as
+  JSON, where the brief had the lines alone because the JSON did not exist.
+- Checked against the documentation on 2026-09-25: Claude Code's MCP page
+  (code.claude.com/docs/en/mcp) gives `claude mcp add [options] <name> --
+  <command> [args...]`, `.mcp.json` with `mcpServers` and `${VAR}` expansion,
+  and "Claude Code sets `CLAUDE_PROJECT_DIR` in the spawned server's
+  environment to the project root", and says nothing of Windows or `cmd /c`;
+  Cursor's page (cursor.com/docs/context/mcp) gives `.cursor/mcp.json`, a
+  stdio entry with `"type": "stdio"` and `${workspaceFolder}`, and does not
+  document the working directory. npm: `@modelcontextprotocol/server` and
+  `@modelcontextprotocol/client` 2.1.0 are `latest`; installed pinned exactly.
+- Probed in the scratchpad before building: a refined strict object lists as
+  `additionalProperties: false` with its required keys; a key it does not take
+  and the pairing refinement come back as `isError` with `Input validation
+  error: Invalid arguments for tool measure_join: ...`; a server whose client
+  ends stdin before any message exits, the factory never having run.
+- Tests first:
+  - `test/mcp.test.ts`, new, 22 tests (the brief's M1 to M22 with the flat
+    input of decision D2), in `test:db`. On the code as committed it did not
+    load: `Cannot find module 'src/mcp.js'`. Run against a stub `src/mcp.ts`
+    whose tools all refused with `not built`, and a CLI without `mcp`, each
+    test failed for its reason: the spawned ones with `SdkError: Connection
+    closed` (M1, M11, M16, M19) or, speaking JSON-RPC by hand, `the answer to
+    request 1 within 20000 ms` (M12, M18); the in-process ones on `not built`
+    where a refusal, a line or JSON was expected (M3 expected the BROKEN line
+    of the photo branch, M6 `unknown table ordrs; the closest: orders`, M8 and
+    M9 `no <abs>/context/...: run npx dbtruth first`, M14 `database
+    connection lost: lost on purpose`), `"not built" is not valid JSON` (M2,
+    M4, M5, M7, M17, M22), `never two statements at once` with 0 (M13),
+    `Cannot read properties of undefined (reading 'lost')` (M15), and `[]`
+    where `['orders']` (M21).
+  - Elsewhere: `config.test` "mcpCallBudgetSeconds is 20 by default, ..."
+    failed with `undefined` where 20; `extract.test` "a relation whose sample
+    could not be read says why, ..." with `undefined` where the timeout's
+    message; `init.test` "the next steps end with the command that adds dbtruth
+    mcp to Claude Code, ..." with the last next step being the CLAUDE.md line;
+    `readme.test`'s rows test with `refuse` missing from the ways found;
+    `structure.test` "only mcp.ts imports the MCP SDK, ..." with `false ==
+    true` and "mcp.ts never loads model.ts at run time" with `ENOENT` for
+    `src/mcp.ts`; `write.test` did not load (`joinLine`, `tableFileName` not
+    exported). `safety.test` "resetBudget starts a new budget ..." and "a
+    connection the server closes while idle is reported by the next statement,
+    and does not end the process" and `integration.test` "a connection the
+    server closes while the model answers stops the run with database
+    connection lost, ..." were written against `resetBudget` and `lost`, which
+    did not exist (typecheck); the last two exercise what, before the
+    listener, ended the test process.
+- Built, in the brief's order, with the lead's decisions:
+  - `safety.ts`: `Connection`, a `Db` with `resetBudget` and `lost`, which
+    `connect` returns; the pg `'error'` listener, which keeps the first reason;
+    the next statement throws `database connection lost: <reason>`.
+  - `config.ts`: `mcpCallBudgetSeconds`, 20, its comment, variable and flag,
+    minimum 0.001.
+  - `write.ts`: `tableFileName` and `joinLine` moved out of `write()` and
+    `tableFile`, which call them; `joinLine` gains the rejected wording.
+  - `schemas.ts`, `extract.ts`: `Table.unmeasured`, set when the statistics
+    statement fails and for a materialized view never refreshed; prompt A's
+    introduction says what it means.
+  - `mcp.ts`, new: the four handlers over one lazily opened connection, a
+    queue that never rejects, `lookUp` in the catalog of the call, `closest`
+    by edit distance, the `describe_table` projection, and `serve`.
+  - `cli.ts`: `runMcp` (the project, `setup()` reused for the settings) and
+    the `mcp` command with every tunable flag; `init`'s last next step.
+  - `doctor.ts`: the key line names `mcp`.
+  - `package.json`: the server as a dependency and the client as a dev
+    dependency, both exact; `test:db` gains `test/mcp.test.ts`.
+  - `scripts/pack-smoke.mjs`: starts the installed `dbtruth mcp` over the SDK's
+    client with only `DATABASE_URL` added to the SDK's default environment,
+    lists the four tools and measures orders.customer_id -> customers.id as
+    broken. On Windows cross-spawn ran the `.cmd` shim.
+- One fix after the first full run of `test/mcp.test.ts`: two tests that hold
+  a session on a copy of `fixture_template` (M15, M17) timed out in their
+  after-hooks with `database ... is being accessed by other users`, and the
+  file then hung on the open connection. `node --test` runs a test's
+  after-hooks in the order they are added, so the copy's drop, added first,
+  ran before the session's close. Those two tests close the session, and the
+  two that speak to a spawned server (M12, M18) end it, in a `finally` inside
+  the test. One regex of M6 wanted `unknown table` without its space.
+- Docs: README (the next steps; a subsection of "Giving it to your agent",
+  "Measuring while it writes: `dbtruth mcp`", with the four tools, the `claude
+  mcp add` line, `.mcp.json`, `.cursor/mcp.json`, the Windows fallback, where
+  the project and the settings come from, one connection and the budget; the
+  Commands line; five troubleshooting rows new and five changed, and the
+  table's introduction; the Team tier; "Agents (MCP)" under what it sends;
+  Tuning; Development), NOTES `## 0.4.0 (unreleased)` and a bullet under
+  "Where string matching", CHANGELOG `## 0.4.0 (unreleased)`, `--help` and
+  `mcp --help`.
+- Changes to earlier tests and checks, none to what an assertion means, each
+  named in NOTES (decision D6): `readme.test.ts` `WAYS`, `REPORT` and
+  `UNSEEN`; `doctor.test.ts` `NO_KEY`; `structure.test.ts` the map;
+  `acceptance/checks.json` T1.5 `readme-commands` and T1.4 `readme-team`.
+- `acceptance/checks.json`: 56 checks for T5.1, all on one test command (ten
+  files, run once) but the gate, `A4-installed` (the pack smoke line of `npm
+  run verify`), `--help`, `mcp --help` and the file checks. Acceptance A1 (M1,
+  M2, M3, M7, M8, M9), A2 (M5, M10, M11, M20, the runtime-import walk), A3
+  (M1, M4, M6), A4 (M12, and the installed server); a tests check for each new
+  test and doctor's key line; invariants: the structure tests, the canary
+  tests, stdout and the project, the troubleshooting rows; docs: README (six),
+  `--help` (two), `config.ts`, prompt A, NOTES (two), CHANGELOG.
+  `acceptance/manual.json`: the sabotage item, empty.
+- On other servers and systems: the task's ten test files with `remeasure` and
+  `joins` pass on Postgres 12.22 and 18.6, in throwaway containers loaded with
+  every fixture file in compose order (176 of 178, the 2 live tests skipped);
+  with `ci` and `acceptance` under Linux as uid 1000 in `node:20` (20.20.2)
+  and `node:22` (22.23.3), from a copy of the working tree with LF endings,
+  against the 18.6 server (192 of 194); on `node:22` also `npm run build` and
+  the package smoke test, the installed `dbtruth mcp` line included.
+  The first Linux Node 22 run failed one test of T3.1, "the fingerprint
+  changes when a column is added in a copy of fixture_template, ...", at its
+  60 s limit, where it takes about a second. Run three times more against a
+  server logging lock waits and every statement over 5 s: all passed, and one
+  took 97 s in all because T3.2's "a new table is stale" held about 60 s, while
+  the server logged no lock wait and no statement over 5 s. The time goes
+  outside Postgres, in the helper that makes and drops copies, which has no
+  timeout, on the way from the container through Docker Desktop's port
+  forwarding; it is not in T5.1's code, and neither Windows run nor CI's
+  service container goes that way. No container and no copy was left.
+- `npm run verify` exits 0: 293 tests, 291 pass, the 2 live tests skipped,
+  and the package smoke test passes, its `dbtruth mcp` line included. `npm run
+  acceptance -- --task T5.1` prints `T5.1: 80/100`, every check passing but
+  the sabotage item. `npm run acceptance` over every task: each other task
+  scores as before (T4.1 50/100, waiting on the Action's runs; T5.2, T6.2 and
+  T7.1 have no checks yet), and all 92 file checks match the final files.
+- Lost Tests (-20): `FAIL T5.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead:
+  - The `check` tool answers with the report's lines and the `CheckReport` as
+    JSON, not the lines alone as the brief has it (above).
+  - The README gives `cmd /c` as the Windows fallback; nothing here ran Claude
+    Code on native Windows with the server, which T5.2's manual A3 is to do.
+### Iteration 2: 80/100
+- Read first: the four reviews of iteration 1 (16 findings, from the plan,
+  rules, quality and bugs lenses), sections 3 and 4 of the plan and T5.1 again.
+  Each finding was checked against the code, the SDK's source and, where it
+  claimed a behavior, a run, before anything changed.
+- Real, and fixed at the cause:
+  - R3, found by two reviews: `run` in `safety.ts` passed the server's message
+    on, and a data exception quotes the value it failed on. Reproduced on the
+    fixture's server: `SELECT count(*), count(DISTINCT x::text) FROM (SELECT
+    v::int AS x FROM (VALUES ('1'),('canary-secret-123')) t(v)) q` fails with
+    `invalid input syntax for type integer: "canary-secret-123"`. So a view
+    that casts a column sent a row's hidden value to prompt A through
+    `unmeasured`, and through a verdict's `skipped` to the table files, the
+    snapshot, prompt B, `check` and the MCP answers. Fixed once, where the
+    error is caught: class `22`, and class `P0`, all of PL/pgSQL's (`ASSERT`
+    is P0004, not P0001), become `a value could not be read (SQLSTATE
+    <code>)`; every other error keeps the server's words. The wording is
+    neither review's: "a value in the data" is wrong for a condition's own
+    value, which the server refuses the same way (a NUL byte, 22021). So
+    T2.3's assertion in `joins.test.ts` that expected `/0x00/` now expects this
+    sentence with 22021, the same fact in other words, named in NOTES. README:
+    a troubleshooting row and a sentence under "What it sends"; NOTES;
+    CHANGELOG.
+  - The server stopped when the SDK closed its probe instance. Reproduced with
+    a client speaking JSON-RPC by hand: `server/discover` with the 2026-07-28
+    envelope, then `initialize`, then `tools/list` got two answers and `EXIT 0`.
+    `serve` now ends when stdin ends or closes, or when a signal's
+    `handle.close()` settles, not on an instance's `onclose`; the known limit
+    in NOTES is gone.
+  - A4, two findings: `A4-installed` could not fail for A4, since the SDK's
+    client passes over a stdout line that is not JSON (`ReadBuffer`'s
+    `readMessage`: `if (error instanceof SyntaxError) continue`), and the
+    stdout test took no path that logs. Taken as the finding's alternative:
+    the check is `installed`, under the tests, the package smoke test being
+    what the plan's Tests list asks of it. The stdout test now starts the
+    server in a project below its repository's root with no URL, fills the
+    root's `.env`, and sends `{"jsonrpc":"2.0","method":7}`, so that the no-URL
+    lines, `reading settings from ..\.env` and `mcp: <error>` are logged, and
+    checks that stderr has them. `raw()` takes the directory, starts the server
+    with the SDK's default environment as `started` does (the environment's
+    `DATABASE_URL`, which CI sets, would hide the no-URL path), keeps stderr,
+    and counts whole lines only, so a stray newline is a line that fails to
+    parse. Not done: a second exchange by hand in `pack-smoke.mjs`; the
+    installed `dist/` is `tsc`'s output of the same source.
+  - `joinLine` called a declared join that could not be measured inferred:
+    the last line hard-coded the word since 0.1.8, and `measure_join` now
+    answers with that line. A stated join's is `(not measured: <reason>)`, or
+    its status alone. Test in `write.test.ts`; NOTES; CHANGELOG.
+  - Docs: the `--dotenv` row gives the project directory for `mcp`; the
+    `unknown table` row says per tool how a table is found; the README's "runs
+    one call at a time" is now the calls that use the connection; the `<path>
+    is not a file` sentence, and NOTES' "above 0 as a millisecond" and "in
+    catalog order", are reworded; the CHANGELOG's `unmeasured` line says the
+    model still gets the 0s beside it.
+  - Code: `context` reads the directory once, with each entry's type, and
+    `lstat` is gone; `lookUp` passes over an undefined column, so the call
+    hands it `asked.when_column` as it is; `declares` in `schemas.ts` is the
+    one test for a declared key, asked by `verify` and `measure_join`; `admin`
+    in the tests takes a URL; a missing space in `write.test.ts`.
+- Taken in part:
+  - `declares` takes the relation `findTable` found as `to`, not the claim's
+    `r.to.table`: `check` hands the snapshot's claims to `verify` without
+    spelling them again, so after a rename that changes only case the two
+    differ, and the suggested form would change which joins `check` weighs.
+  - `context` still lists the `.md` names on its refusal path when no table
+    was asked: only a refusal builds the list, and skipping it there would
+    take a condition more.
+- Rejected: none.
+- New tests, each run against the code before its fix, put back in place and
+  then restored byte for byte from a copy outside the repository:
+  - mcp, "a value the server quotes in an error reaches no answer, no file and
+    no prompt": `'invalid input syntax for type bigint:
+    "person1@canary-pii.example"'` where the sentence was expected.
+  - safety, "a statement that fails on a value in the data is told by its code
+    alone, and any other error in the server's words": `'invalid input syntax
+    for type integer: "person1@canary-pii.example"'`; with class P0 alone
+    dropped, `'cannot take person1@canary-pii.example'`.
+  - mcp, "a client that probes with server/discover, then opens with
+    initialize, is served on": `the answer to request 3 within 20000 ms`.
+  - mcp, the stdout test, with `mcp`'s log lines written to stdout:
+    `SyntaxError: Unexpected token 'o', "no database"... is not valid JSON`.
+    The no-settings test, over the SDK's client, stayed green under the same
+    change, as the review said.
+  - write, "a declared join that could not be measured says why, and is not
+    called inferred": `'order_items.order_id -> orders.id (inferred, not
+    measured: no non-null rows to test)'`.
+  These show the tests fail for their reason; they are not the task's
+  sabotage record.
+- `acceptance/checks.json`: `A4-installed` is `installed` under the tests; A2
+  and the canary invariant gain the new canary test; four tests checks
+  (`probe`, `error-canary`, `data-error`, `declared-unmeasured`);
+  `readme-rows` gains the new row.
+- `npm run verify` exits 0: 297 tests, 295 pass, the 2 live tests skipped, and
+  the package smoke test passes, its `dbtruth mcp` line included. `npm run
+  acceptance -- --task T5.1` prints `T5.1: 80/100`, every check passing but
+  the sabotage item. `npm run acceptance` over every task: each other task
+  scores as before (T4.1 50/100, waiting on the Action's runs; T5.2, T6.2 and
+  T7.1 have no checks yet), overall 81/100 over 20 tasks, and all 92 file
+  checks match the final files.
+- Lost Tests (-20): `FAIL T5.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- The sabotage check of the task (section 4.5). `src/mcp.ts`,
+  `src/safety.ts`, `src/cli.ts` and `test/mcp.test.ts` were copied outside
+  the repository first. After each break `test/mcp.test.ts` was run (24
+  tests, all passing before), with `test/safety.test.ts` for the two breaks
+  in `src/safety.ts` (44 tests).
+- Sabotage: `lookUp` returned the relation before checking the columns
+  named (`return found;` once the table was found); "an unknown table or
+  column, or a name with quotes and semicolons, is refused with the closest
+  names, and no statement is built from it" failed with "orders.customer ->
+  customers.id (inferred, not measured: unknown column orders.customer)",
+  `isError` `undefined` where `true`: `verify`'s verdict on a column it
+  could not find, in place of the refusal and its closest names. Restored.
+- Sabotage: the queue never advanced (`turn = call` removed), so calls ran
+  at once; "calls made at once run one at a time on one connection, each
+  with a budget of its own, and answer as they would alone" failed with
+  "never two statements at once", `3 !== 1`, and "stdout carries JSON-RPC
+  and nothing else, and when stdin ends the server exits 0 and leaves no
+  session" with "describe_table opened the connection", `2 !== 1`: the
+  three calls sent together opened two. The file then did not exit, held
+  open by the two connections the racing calls opened and nothing closed,
+  and the run was stopped; its two processes, which hold two idle sessions
+  on `fixture` that no test counts, are left to end by hand. The later
+  runs passed `--test-force-exit`, which changes no result. Restored.
+- Sabotage: the call's own budget not set (`held.db.resetBudget(...)`
+  removed); "calls made at once run one at a time ..." failed with
+  "mcpCallBudgetSeconds for each call", `[]` where `[7, 7, 7]`. Restored.
+- Sabotage: a connection lost while idle kept (the `lost()` check
+  removed); "a connection the server closes while idle is replaced before
+  the next call" failed with "database connection lost: terminating
+  connection due to administrator command", `isError` `true` where
+  `undefined`. Restored.
+- Sabotage: every join called inferred, `basis: "inferred"` in place of
+  `declares(...)`; "measure_join gives each join the verdict, query and
+  numbers a full run gives it, and the line of its table's file" failed
+  with "relationship:order_items.order_id->orders.id:
+  "order_items.order_id -> orders.id: confirmed, 100.0% of 1200 sampled
+  rows match (inferred)." is not a line of order_items.md". The verdict
+  itself matched, since the basis changes only the line. Restored.
+- Sabotage: the condition left out of the claim (the `when` line removed),
+  so the whole join was measured; "measure_join measures one branch of a
+  polymorphic reference on its own rows" failed with "**BROKEN**
+  comments.commentable_id -> photos.id: 50.0% match (240 of 480 sampled),
+  240 orphans, ..." where "... when commentable_type = 'photo': 66.7% match
+  (120 of 180 sampled), 60 orphans, ..." was expected, "a when value
+  holding SQL is only ever $1: ..." with `'confirmed'` where `'empty'`, and
+  "a condition on a hidden column is not measured, whatever value is
+  guessed" with "person1@canary-pii.example", `broken` and its numbers
+  where `unverifiable` and none. Restored.
+- Sabotage: `JoinSchema` a plain `z.object`, which drops a key it does not
+  take; "the server lists exactly the four tools, each taking a closed
+  object, ..." failed, but only with assert's own "Expected values to be
+  strictly deep-equal" and a cut diff, `undefined` where `false`, naming
+  neither the tool nor the slot. That comparison was given a message
+  saying what it checks; repeated, the test failed with "per tool, the
+  keys it takes, those it requires, and false for any other key",
+  `measure_join`'s `undefined` where `false`. Restored.
+- Sabotage: the pairing refinement removed from `JoinSchema`, so half a
+  condition was taken; "the server lists exactly the four tools, ..."
+  failed with "{"when_column":"status"}", `isError` `undefined` where
+  `true`: measured, not refused. Restored.
+- Sabotage: `describe_table` answering the whole `Table`, `tables[0]` in
+  place of `described(tables[0])`; "describe_table gives a full run's key,
+  size and allowed values, and no other column's values" failed with the
+  bare key "schema", and "describe_table says why a relation it could not
+  read has no statistics" with "customer_id", `[0, 0]` where no null rate
+  or distinct count. The first test's two key checks were given a message
+  saying what they check; repeated, it failed with "schema: not a field
+  describe_table answers with". Restored.
+- Sabotage: a data exception told in the server's words again, `const
+  message = errorMessage(e)` in `run` in `src/safety.ts`; "a value the
+  server quotes in an error reaches no answer, no file and no prompt"
+  failed with `'invalid input syntax for type bigint:
+  "person1@canary-pii.example"'` where `'a value could not be read
+  (SQLSTATE 22P02)'`, from `describe_table` on the `phones` view, and
+  safety's "a statement that fails on a value in the data is told by its
+  code alone, and any other error in the server's words" with the same
+  for `integer`. Restored.
+- Sabotage: `runMcp` writing the settings lines to stdout,
+  `process.stdout.write` in place of `opts.err` in `open`; "stdout carries
+  JSON-RPC and nothing else, ..." failed with "Unexpected token 'o', "no
+  database"... is not valid JSON". Restored.
+- Sabotage: `context` reading whatever the listing holds under the name
+  (the `isFile()` check removed); "context returns the files the last run
+  wrote, says where to run dbtruth before there are any, and reads nothing
+  outside context/" failed with "EISDIR: illegal operation on a directory,
+  read", thrown by `context` on the directory put where `orders.md` was.
+  Restored.
+- Sabotage: `resetBudget` keeping what was spent (`spentMs = 0` removed in
+  `src/safety.ts`); "resetBudget starts a new budget with nothing spent"
+  failed with `spentMs: 11.91` where `0` and `remainingMs: 4988.09` where
+  `5000`. Restored.
+- `src/mcp.ts` (the first to ninth and the twelfth), `src/safety.ts` (the
+  tenth and thirteenth) and `src/cli.ts` (the eleventh) were restored each
+  time from the copy and matched it byte for byte (`cmp`); `git diff HEAD
+  -- src/safety.ts` and `-- src/cli.ts` printed the same diff as before,
+  and `src/mcp.ts`, untracked, matched its copy. No sabotage left every
+  test green. Two failed their tests only with assert's words or a bare
+  key; those three checks in `test/mcp.test.ts` were given messages, and
+  no assertion changed. With them the two files pass: 44 tests.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  297 tests, 295 pass, the 2 live tests skipped, and the package smoke test
+  passes, its `dbtruth mcp` line included; `npm run acceptance -- --task
+  T5.1` prints `T5.1: 100/100`, every check passing.
+### Iteration 3: 100/100 (the lead)
+- Rescoring every task after T5.1 timed out T1.4's `npm run verify` at 600 s
+  with only `TAP version 13` printed. The cause was a `test/mcp.test.ts`
+  process started at 18:53 by an earlier check that never exited, holding two
+  idle `dbtruth` sessions on `fixture` (a profile and a weighing statement).
+  Killed; the sessions went with it; every other task then scored 100/100.
+- The race: `close()` ended the connection it found, so a call still opening
+  its connection opened it afterwards and nothing closed it. Ten runs of the
+  file did not reproduce the hang; the new test "close waits for a call still
+  opening its connection, and closes the connection that call opened" does,
+  every time: before the fix it failed with `expected: 1, actual: 0`.
+  `close()` now waits in the calls' queue; a failing call still drops its
+  connection at once. All 25 tests of the file pass.
+- Sabotage: `close: drop` (the old immediate close); the new test failed
+  (not ok 1). Restored byte for byte.
+- The lead's answers: the `check` tool returning the lines and the
+  CheckReport JSON is approved; the `cmd /c` line stays in the README, and
+  T5.2's manual A3 run decides whether `init` prints it.

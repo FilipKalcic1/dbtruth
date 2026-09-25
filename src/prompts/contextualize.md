@@ -9,7 +9,9 @@ column "years": the years of its oldest and newest value. Declared primary
 and foreign key columns are always shown. Columns with few short distinct
 values carry a "values" list: every distinct value seen on the sample. A
 "rowEstimate" of -1 means the size is unknown but at least the sample size;
-it is not an empty relation.
+it is not an empty relation. A relation with "unmeasured" could not be
+sampled, for the reason it gives, such as a role that may not read it: its
+null rates and distinct counts are 0 because nothing was measured.
 
 A view carries its SQL in "definition": it has no rows of its own, so never
 call a view dead or a duplicate of the tables it reads. A materialized view

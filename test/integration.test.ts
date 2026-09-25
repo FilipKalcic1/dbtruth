@@ -182,6 +182,22 @@ test("a connection failure surfaces as one error that never contains the passwor
   assert.equal(model.requests.length, 0, "nothing is sent to the model when the database is unreachable");
 });
 
+test("a connection the server closes while the model answers stops the run with database connection lost, and does not end the process", { timeout: 60_000 }, async (t) => {
+  const copy = await copyOfFixture(t);
+  const cwd = mkdtempSync(join(tmpdir(), "dbtruth-it-"));
+  const model = fakeModel();
+  // While the model thinks, the server ends dbtruth's idle session, as a restart or an administrator would.
+  const transport: Transport = async (system, messages) => {
+    await copy.sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'dbtruth'");
+    return model.transport(system, messages);
+  };
+  await assert.rejects(
+    run({ url: copy.url, samples: true, reveal: [], json: false, flags: {}, cwd, env: {}, out: () => {}, err: () => {} }, { transport }),
+    { message: "database connection lost: terminating connection due to administrator command" },
+  );
+  assert.equal(model.requests.length, 1, "stopped at the first statement after the model's answer");
+});
+
 test("the CLI exits 1 with a clear message when no API key can be resolved, before touching the database", () => {
   // Empty ANTHROPIC_API_KEY makes the SDK fail credential resolution client-side, so this needs no network.
   // The bad database URL proves the order: the API is checked first, so "could not connect" never appears.

@@ -1814,6 +1814,254 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   always exhaust, so the claims run out by construction; its assertions are
   unchanged. A change to an earlier task's test, decided by the lead.
 
+## 0.4.0 (unreleased)
+
+Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
+`PROGRESS.md`.
+
+- **`dbtruth mcp` lets an agent measure a join before it writes one.** An
+  agent in Claude Code or Cursor starts `dbtruth mcp` and gets four tools,
+  `context`, `describe_table`, `measure_join` and `check` (T5.1). No model is
+  called on dbtruth's side, so no API key is needed: the agent's own model does
+  the thinking. `mcp [--project <dir>] [--url <url>] [--dotenv <path>]` also
+  takes every tunable after its name, as `check` does; `--dotenv` is the plan's
+  `--env-file`, as since T1.1, read relative to the project.
+  - **The SDK is `@modelcontextprotocol/server` 2.1.0 (the lead's decision).**
+    The plan names `@modelcontextprotocol/sdk`, pinned. On 2026-09-25 npm gave
+    `sdk` 1.30.1 and `server` 2.1.0, each as `latest`, and the server
+    package's README says v2 "is the stable release line" and "replaces the
+    monolithic `@modelcontextprotocol/sdk`". Installed with zod, `sdk` brings
+    94 packages, express, hono, cors and jose among them; `server` brings its
+    core and zod, which dedupes onto the zod dbtruth already has. The server is
+    a dependency and `@modelcontextprotocol/client` 2.1.0, which the tests and
+    the package smoke test drive it with, a dev dependency, both pinned
+    exactly. R2 holds for the package the code imports: only `mcp.ts` imports
+    `@modelcontextprotocol/server`. v2 loads in about 0.2 s once zod is loaded,
+    and `cli.ts` imports `mcp.ts` statically, where the structure test sees
+    it, so every CLI start pays that.
+  - **Served with `serveStdio`,** which the v2 serving guide gives in place of
+    `new StdioServerTransport()` and `connect()`. The server stops when its
+    client closes stdin, or on SIGINT or SIGTERM, which close the handle; then
+    the connection is closed and `mcp` exits 0. `serve` listens for the end of
+    stdin itself, not for a server instance's `onclose`: a client that opens
+    with `server/discover` and then `initialize` makes the SDK answer the first
+    from a probe instance and close it, and the server stopped there, exit 0,
+    with the client's next request unanswered (found in review, reproduced; a
+    test now opens that way). A statement still running then is not cancelled:
+    pg's `end()` drops the socket without a CancelRequest, so the backend runs
+    on until it tries to answer or reaches the statement timeout.
+  - **One connection, one call at a time.** The settings are read and the
+    connection opened by the first call that needs the database, through
+    `setup()`, which the full run and `check` share, and `connect` with its
+    read-only proof; and again after a call that failed, so a `.env` filled in
+    after the server started is read by the next call. Once connected, the
+    settings stay until the server is restarted. The SDK dispatches calls
+    concurrently (measured: A started, B started, B ended, A ended), so the
+    queue is dbtruth's: each call that uses the database waits for the one
+    before; `context` reads files and waits for nothing. Each call has a budget
+    of its own, `mcpCallBudgetSeconds`, 20 by default (R5, with its variable and
+    flag; at least a millisecond, 0.001, like `statementTimeoutSeconds`), given
+    by `resetBudget` on the `Connection` that `connect` now returns: a `Db` with
+    `resetBudget` and `lost`, so the five `Db` fakes of the tests stay as they
+    are. It is not a measurement setting, so the snapshot does not record it.
+    The catalog is read on every call, outside the budget, so a schema changed
+    during a session is seen.
+  - **The project is `--project`, else `CLAUDE_PROJECT_DIR`, else the working
+    directory (the lead's decision).** The plan has `--project`, else the
+    working directory. Claude Code's MCP page (code.claude.com/docs/en/mcp,
+    read on 2026-09-25) says that it "sets `CLAUDE_PROJECT_DIR` in the spawned
+    server's environment to the project root, so your server can resolve
+    project-relative paths without depending on the working directory", so one
+    entry at user scope serves every project. Cursor's page
+    (cursor.com/docs/context/mcp) documents neither the working directory nor
+    such a variable, so the README's `.cursor/mcp.json` passes `--project
+    ${workspaceFolder}`. A `--project` that is not a directory stops the server
+    with exit 1 before it serves.
+  - **`claude mcp add --transport stdio dbtruth -- npx -y dbtruth mcp`** is the
+    form Claude Code's page gives, `claude mcp add [options] <name> --
+    <command> [args...]`. `init` prints it as its last next step, which the
+    plan left to T5.1 ("Not built here", 0.2.0), and the README shows it under
+    "Giving it to your agent", a line a test holds equal. The page says
+    nothing of Windows or `cmd /c`; the README gives `cmd /c` as the fallback
+    for a server shown as failed with "Connection closed" on native Windows,
+    and the manual run of T5.2 is to say whether `init` prints it.
+- **Names from an agent are keys, never SQL (R8).**
+  - The SDK checks every call against a closed schema, `z.strictObject`: a key
+    a tool does not take is refused with its `Input validation error`, never
+    dropped. `measure_join` keeps the plan's flat input, `from_table`,
+    `from_column`, `to_table`, `to_column`, `when_column` and `when_equals`
+    (the lead's decision, over the brief's nested claim), since a flat list of
+    arguments is what an agent's tool call handles best. One refinement holds
+    the pair together, "when_column and when_equals go together: give both, or
+    neither", since half a condition would measure the whole join; its message
+    has a row, and `readme.test.ts` lists it with the words printed inside
+    another line.
+  - Each name is looked up in the catalog that same call reads: a table with
+    `findTable`, by its name or `schema.table`, exact first, then regardless of
+    case, and a column exactly; the claim takes the catalog's spelling. A name
+    not found is refused, with the closest names, before any statement is
+    built: the plan's "no statement was issued" is read as none built from the
+    input, since the three statements of `readCatalog` run first to find the
+    names, and a test holds that nothing else runs and that none holds or binds
+    the name. The refusal is an answer, not an error, so the connection stays.
+  - The closest names are those the fewest single-character edits away,
+    ignoring case, every tie, in the order the catalog or `context/tables/`
+    lists them, with no bound on how many or on a name's length, which would be
+    numbers of their own. Names are schema, not data (R3).
+  - A condition's value is only ever `$1`, and a condition is measured only on
+    a categorical column, as since T2.3: on a hidden column it is refused,
+    with the same answer for a value that exists and one that does not.
+  - `basis` is `stated` when the from-table declares exactly this foreign key,
+    as prompt A is told to claim it, so the answer reads as a table's file
+    does; otherwise `inferred`. The test is `declares` in `schemas.ts`, which
+    `verify` asks too before it weighs a join against other keys, so that the
+    two cannot come to disagree.
+- **What each tool answers.**
+  - `measure_join` builds a claims object of one join and runs `extract` on its
+    two relations only, `verify`, with `integerKeys` over the whole catalog as
+    `remeasure` has it, and `decide`, with the settings of a full run. It
+    answers with two blocks: the line a table's file shows for the join, and
+    the verdict as JSON with its claim id, its query and its numbers, which a
+    test holds equal to a full run's for every canned join. The line is
+    `joinLine`, moved out of `tableFile` in `write.ts`, which now calls it, with
+    a wording for a rejected join ("these columns do not relate; find the right
+    key"), which only `measure_join` reaches: a table's file leaves a rejected
+    join out. A relation the budget skipped is refused as not examined, where
+    `verify` would call it unknown.
+  - `describe_table` runs `extract` on the one relation with
+    `sampleRowsShown` 0, so no sample row is read, and answers with a
+    projection written field by field, never a `Table` spread: the name, kind,
+    populated, partitions, row estimate and its source, `unmeasured`, the keys,
+    and per column the name, type, nullable, null rate, distinct count and the
+    values of a categorical column. Comments, view definitions, year ranges and
+    longest values are left out; R3 lists none of them.
+  - `context` answers with `context/README.md` or `context/tables/<table>.md`,
+    the name made a path by `tableFileName`, also moved out of `write()`, and
+    `confine`. The file must be listed under that name exactly, so that on a
+    filesystem that ignores case `Orders` does not open `orders.md`, nor
+    `users` another table's `Users.md`; a name not listed is refused with the
+    closest listed, and with no file the answer says to run `npx dbtruth`. The
+    directory is read once, with each entry's type: an entry listed as a link
+    or a directory is not read. Paths in its messages are absolute, so they say
+    where the server looked.
+  - `check` reads the snapshot first, as `dbtruth check` does, and without one
+    refuses before connecting. It answers with the lines `check` prints, then
+    the `CheckReport` as JSON. The brief answered with the lines alone, since
+    T3.3's JSON did not exist when it was written; T3.3 has since landed, and
+    "returns the report" is read as T3.2's `CheckReport`, which T3.3 gave a
+    schema. A regression is an answer, not an error.
+- **`Table.unmeasured` says why a relation has no statistics (the lead's
+  decision).** A relation the role cannot read, or a materialized view never
+  refreshed, reached prompt A, and would have reached `describe_table`, with
+  null rates and distinct counts of 0, as if measured. `profile` in
+  `extract.ts` now sets `unmeasured` to the reason: the server's message when
+  the statement of statistics failed ("permission denied for table vehicles",
+  a timeout, the budget), or that a materialized view never refreshed cannot
+  be read. `describe_table` then shows no null rate or distinct count. Prompt
+  A's input carries the key for those relations, and the prompt says what it
+  means; `TableFacts`, `schemaOnly` and the snapshot do not take it.
+- **A statement that fails on a value in the data is told by its code alone
+  (R3).** `run` in `safety.ts` passed the server's message on as the
+  statement's, and Postgres quotes the value a data exception (class `22`:
+  `invalid input syntax for type integer: "<value>"`, a value out of range, a
+  date it cannot read) failed on, as a function's `RAISE` or `ASSERT` (class
+  `P0`) can. A view such as `SELECT email::bigint AS phone FROM customers`,
+  with one row that does not cast, sent that row's hidden value to prompt A
+  through `unmeasured`, and through a verdict's `skipped` to the table files,
+  the snapshot, prompt B, `check`'s report and the MCP answers: the second
+  way since verify first reported a statement's message, the first and the
+  answers since T5.1 (found in review, reproduced on the fixture's server).
+  Such a message is now `a value could not be read (SQLSTATE <code>)`, set
+  once where the error is caught, as a failed connection is told in a sentence
+  of dbtruth's own; every other error keeps the server's words, which name
+  objects, such as `permission denied for table vehicles`, and a timeout keeps
+  its own. The sentence says "a value", not "a value in the data": a
+  condition's own value that the server refuses, a NUL byte in `when_equals`
+  (22021), is told the same way, and T2.3's test of it in `joins.test.ts` now
+  expects this sentence with 22021 where it expected the server's `0x00`, the
+  same fact, that the server refused the bound value, in other words. Tested
+  where the error is caught, on a copy of the fixture with a cast and with a
+  function that raises with its argument, and from end to end on a view that
+  casts `customers.email`: its `describe_table`, `measure_join`, `context` and
+  `check` answers, the snapshot, `--json` and both prompts hold no
+  `canary-pii`. Not done: a function that raises under a code of its choosing
+  (`USING ERRCODE`), or an extension that words its own errors, is passed on
+  as the server gives it; class `22` is where Postgres puts an error over a
+  value, and `P0` is PL/pgSQL's own.
+- **A declared join that could not be measured is not called inferred.** The
+  line of a join that is empty or unverifiable read `(inferred, <reason>)`
+  whatever the claim's basis, since 0.1.8, where a confirmed or broken join's
+  line leaves `inferred` out for a stated one. `measure_join` answers with
+  that line and calls a join the database declares `stated`, so an agent
+  would have read a declared key it could not measure as a guess. A stated
+  join's line is now `(not measured: <reason>)`, or its status alone; an
+  inferred one's is as before (found in review).
+- **A connection closed while idle no longer ends the process (the lead's
+  decision).** pg reports a connection the server or the network closed as an
+  `'error'` event on its client, and with no listener Node ends the process;
+  `connect()` attached none. Reproduced with pg 8.23: `pg_terminate_backend` on
+  an idle session ended the test process. A restart, `idle_session_timeout` or
+  a serverless database that suspends would have ended an idle MCP server, and
+  a full run whose session was closed while the model answered died with
+  Node's stack trace. `connect()` now listens and keeps the first reason, and
+  the next statement throws `database connection lost: <reason>`, the message
+  whose row the README has. The MCP session asks `lost()` before a call and
+  replaces such a connection without a word, and closes the connection after
+  any call that failed. Tested for a full run, for `connect` alone, and for the
+  session.
+- **`doctor`'s key line names `mcp`**: "doctor, check and mcp do not". The
+  troubleshooting row of `no API key found` keeps its words, which still hold
+  and which T3.2's `readme-rows` pins.
+- **Test and check changes, none to what an assertion means (the lead's
+  decision):**
+  - `readme.test.ts`: `WAYS` gains `refuse`, the way an MCP tool answers that
+    it could not; `REPORT` gains a join's line, which starts with `${edge}` or
+    `**BROKEN** ${edge}` and is a `return` literal now that `joinLine` holds it,
+    an answer and not an error; `UNSEEN` gains the words of the pairing
+    refinement.
+  - `doctor.test.ts`: `NO_KEY` is the new line.
+  - `structure.test.ts`: the map gains `mcp.ts` and `cli.ts`' import of it, and
+    two tests: only `mcp.ts` imports the MCP SDK, at exact versions, and
+    `mcp.ts` never loads `model.ts` at run time. The existing walk from
+    `check.ts` and `snapshot.ts` counts type imports too, and `mcp.ts` imports
+    `write.ts`, which imports `model.ts` for its types only, so the new walk
+    follows the imports that load a module.
+  - `acceptance/checks.json`: T1.5's `readme-commands` takes any comment on the
+    `mcp` line of the Commands list, where it took `coming in 0.4.0`, and
+    T1.4's `readme-team` finds `mcp` in the free list without "the coming".
+    T1.4's `help` changes with T5.2, when `init` takes options. T5.1's own
+    `A4-installed` is `installed`, under the tests: the package smoke test
+    drives the installed server through the SDK's client, which passes over a
+    line on stdout that is not JSON, so it could not fail for A4. A4 rests on
+    the stdout test, which now makes the server log each way it can (no URL
+    yet, the `.env` then read from the repository's root, a message the SDK
+    cannot read) and counts whole lines, a stray newline among them.
+  - Tests that close a session or a server on a copy of `fixture_template`
+    close it in the test, not after it: `node --test` runs after-hooks in the
+    order they are added, and the copy's drop, added first, fails while a
+    session is open.
+- **Not done:** cancelling a statement on stop; reading the settings again once
+  connected; tool annotations such as `readOnlyHint`, output schemas,
+  resources, prompts and server instructions; answers over Claude Code's
+  25,000 tokens, which it saves to a file for the agent to read; reaching by
+  name the files a case collision names `~2`; a bound on a name's length for
+  `closest`; the skill and `init --skill` (T5.2).
+- **Known limit:** `measure_join` makes the count behind T2.3's categorical
+  rule interactive. An agent can ask for any value of a categorical column,
+  and a value that one row alone holds narrows a join to that row. The README
+  says to give the server a role that reads only what an agent may learn.
+- **`close()` waits for the call in flight.** The handlers' `close()` ended
+  the connection it found at once, so a call still opening its connection
+  opened it after `close()` had found none, and the open socket kept the
+  process alive. Found by the lead after T5.1: a rescoring run left a test
+  process of `test/mcp.test.ts` holding two idle sessions for two and a half
+  hours, which blocked the next `npm run verify` until its 600 s timeout.
+  `close()` now waits in the same queue as the calls; a call that fails still
+  ends its connection at once, inside its own turn. A test opens a connection
+  slowly, closes while a call waits for it, and counts one close; with the old
+  `close()` it counted none. The same race could keep `dbtruth mcp` running
+  after its client closed stdin mid-call.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values
@@ -1829,6 +2077,9 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   where a join's orphans fall. It also picks the joins that are weighed
   against other keys, and those keys.
 - `write.ts` normalises output paths into `context/`.
+- `closest` in `mcp.ts` suggests the spellings nearest to a name the catalog,
+  or `context/tables/`, does not have. It decides nothing: the name is refused
+  whatever the suggestion.
 - Verdict ids are prefixed `relationship:` / `suspicion:` so the exit code and
   the summary can tell them apart. A branch's id ends in `[column=value]`,
   its condition as the claim gives it, so that each branch is a claim of its

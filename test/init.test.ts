@@ -198,6 +198,13 @@ test("the next steps init prints are exactly the quick start's, and its line for
   assert.deepEqual(init(root).lines, ["wrote .env", ...NEXT]);
 });
 
+test("the next steps end with the command that adds dbtruth mcp to Claude Code, the one under Giving it to your agent", () => {
+  const command = /^  add the MCP server to Claude Code: (claude mcp add .+)$/.exec(NEXT.at(-1) ?? "")?.[1];
+  assert.ok(command, `the last next step is "${NEXT.at(-1)}"`);
+  const agent = /^## Giving it to your agent$([\s\S]*?)^## /m.exec(README)?.[1] ?? "";
+  assert.ok(agent.split(/\r?\n/).includes(command), `"${command}" is not a line under Giving it to your agent`);
+});
+
 test("as a command, init writes .env and nothing else, prints nothing on stdout, and exits 0, or 1 when it could not write", () => {
   const command = (cwd: string) => spawnSync(process.execPath, ["--import", TSX, CLI, "init"], { cwd, encoding: "utf8", timeout: 20_000 });
   const root = repository();

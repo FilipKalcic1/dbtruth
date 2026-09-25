@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { connect, findDotEnv, isIntegerType, readDotEnv, resolveDatabaseUrl, sampleSource } from "../src/safety.js";
 import { config } from "../src/config.js";
+import { copyOfFixture } from "./copies.js";
 import { writeUnreadable } from "./unreadable.js";
 
 export const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
@@ -104,6 +105,26 @@ test("a SQL error is a skipped measurement, not a crash", async () => {
   }
 });
 
+test("a statement that fails on a value in the data is told by its code alone, and any other error in the server's words", { timeout: 60_000 }, async (t) => {
+  const copy = await copyOfFixture(t);
+  // As a function a view calls may: it raises an error that quotes the value it was given.
+  await copy.sql("CREATE FUNCTION shout(v text) RETURNS text LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'cannot take %', v; END $$");
+  const db = await connect(copy.url, config);
+  try {
+    const failed = async (sql: string) => {
+      const r = await db.query(sql);
+      if (r.ok) return assert.fail(`${sql} ran`);
+      return [r.reason, r.sqlState, r.message];
+    };
+    // Postgres's own words for the first two name an address: invalid input syntax for type integer: "person1@...".
+    assert.deepEqual(await failed("SELECT email::int FROM customers"), ["error", "22P02", "a value could not be read (SQLSTATE 22P02)"]);
+    assert.deepEqual(await failed("SELECT shout(email) FROM customers"), ["error", "P0001", "a value could not be read (SQLSTATE P0001)"]);
+    assert.deepEqual(await failed("SELECT no_such_column FROM customers"), ["error", "42703", 'column "no_such_column" does not exist'], "a name, not a value");
+  } finally {
+    await db.close();
+  }
+});
+
 test("an exhausted budget skips instead of querying, but catalog reads still run", async () => {
   const db = await connect(FIXTURE_URL, { ...config, budgetSeconds: 0 });
   try {
@@ -116,6 +137,41 @@ test("an exhausted budget skips instead of querying, but catalog reads still run
     assert.equal(!refused.ok && refused.reason, "refused", "catalog reads are still read-only");
   } finally {
     await db.close();
+  }
+});
+
+test("resetBudget starts a new budget with nothing spent", async () => {
+  const db = await connect(FIXTURE_URL, { ...config, budgetSeconds: 0.001 });
+  try {
+    await db.query("SELECT pg_sleep(0.01)");
+    const spent = await db.query("SELECT 1");
+    assert.equal(!spent.ok && spent.reason, "budget");
+    db.resetBudget(5);
+    assert.deepEqual(db.budget(), { budgetMs: 5000, spentMs: 0, remainingMs: 5000, exhausted: false });
+    const ran = await db.query("SELECT 1 AS one");
+    assert.equal(ran.ok && Number(ran.rows[0]?.one), 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a connection the server closes while idle is reported by the next statement, and does not end the process", async () => {
+  const db = await connect(FIXTURE_URL, config);
+  const other = await connect(FIXTURE_URL, config);
+  try {
+    const own = await db.query("SELECT pg_backend_pid() AS pid");
+    assert.equal(db.lost(), undefined);
+    await other.query("SELECT pg_terminate_backend($1)", [own.ok && own.rows[0]!.pid]);
+    // Unheard, the error pg reports for it would have ended this process by now.
+    for (let waited = 0; db.lost() === undefined; waited += 50) {
+      assert.ok(waited < 5_000, "the loss is seen within 5 s");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(db.lost(), "terminating connection due to administrator command");
+    await assert.rejects(db.query("SELECT 1"), { message: "database connection lost: terminating connection due to administrator command" });
+  } finally {
+    await db.close();
+    await other.close();
   }
 });
 

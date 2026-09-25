@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// cli.ts: orchestrates one run, or one check, in order, writes the .env `init` starts a project with, and hands `doctor`
-// to doctor.ts. Nothing else.
+// cli.ts: orchestrates one run, or one check, in order, writes the .env `init` starts a project with, hands `doctor`
+// to doctor.ts, and `mcp` to mcp.ts with the settings it opens a connection with. Nothing else.
 
 import { Command, Option, type OptionValues } from "commander";
 import { spawnSync } from "node:child_process";
@@ -14,6 +14,7 @@ import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Co
 import { contextualize } from "./contextualize.js";
 import { doctor } from "./doctor.js";
 import { extract, fitToContext, integerKeys, readCatalog } from "./extract.js";
+import { serve } from "./mcp.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
 import { connect, readSettings, repositoryRoot, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
@@ -168,6 +169,41 @@ export async function runCheck(opts: CheckOptions): Promise<number> {
   }
 }
 
+export type McpOptions = Pick<RunOptions, "url" | "dotenv" | "flags" | "cwd" | "env" | "err"> & {
+  /** The directory whose context/ the tools read and whose .env is looked for first, relative to cwd. */
+  project?: string;
+};
+
+/**
+ * Serves the MCP tools on stdin and stdout until the client closes stdin or the process is stopped: 0, or 1 when
+ * --project names no directory. The project is --project, else CLAUDE_PROJECT_DIR, which Claude Code sets for the
+ * servers it starts, else cwd. The settings are read, and the connection opened, when a tool first needs the database,
+ * and again after a call that failed.
+ */
+export async function runMcp(opts: McpOptions): Promise<number> {
+  const project = resolve(opts.cwd, opts.project ?? opts.env.CLAUDE_PROJECT_DIR ?? ".");
+  if (opts.project !== undefined && !statSync(project, { throwIfNoEntry: false })?.isDirectory()) {
+    opts.err(`--project ${opts.project}: no such directory`);
+    return EXIT_FAILURE;
+  }
+  const open = async () => {
+    // Printed as for any command, and when no settings are found, the failed call's answer too.
+    const lines: string[] = [];
+    const found = setup({
+      ...opts,
+      cwd: project,
+      err: (line) => {
+        lines.push(line);
+        opts.err(line);
+      },
+    });
+    if (!found) throw new Error(lines.join("\n"));
+    return { db: await connect(found.url, { ...found.cfg, warn: (message) => opts.err(`WARNING: ${message}`) }), cfg: found.cfg };
+  };
+  await serve({ project, version: VERSION, open, err: opts.err });
+  return EXIT_OK;
+}
+
 /**
  * The .env init writes: the quick start's two settings and the model, each commented out, so that nothing in it is read
  * until a line is filled in. Every comment is a line of its own, since a value runs to the end of its line.
@@ -188,6 +224,7 @@ const NEXT_STEPS = [
   "  run npx dbtruth doctor",
   "  run npx dbtruth",
   "  add this line to CLAUDE.md: Before writing SQL against this database, read `context/README.md` and the file in `context/tables/` for every table you touch.",
+  "  add the MCP server to Claude Code: claude mcp add --transport stdio dbtruth -- npx -y dbtruth mcp",
 ];
 
 export type InitOptions = {
@@ -375,6 +412,18 @@ export async function main(argv: string[]): Promise<number> {
       out,
       err,
     });
+  });
+  const mcp = program
+    .command("mcp")
+    .description("serve context/ and measurements to an agent over MCP on stdin and stdout, without a model or an API key")
+    .option("--project <dir>", "the directory whose context/ the tools read and whose .env is looked for first (default: CLAUDE_PROJECT_DIR, else the current directory)")
+    .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
+    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root, relative to the project directory");
+  for (const o of overridable) mcp.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
+  mcp.action(async (own) => {
+    // As for check: the program's options before `mcp`, and its own after the name, which win. stdout is the protocol's.
+    const o = { ...program.opts(), ...own };
+    code = await runMcp({ url: o.url, dotenv: o.dotenv, project: o.project, flags: overrides(o), cwd: process.cwd(), env: process.env, err });
   });
   try {
     await program.parseAsync(argv);

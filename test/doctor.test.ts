@@ -15,7 +15,7 @@ const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@loca
 const TSX = import.meta.resolve("tsx");
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const CANARY = /canary-pii/;
-const NO_KEY = "note no API key: a full run needs ANTHROPIC_API_KEY; doctor and check do not";
+const NO_KEY = "note no API key: a full run needs ANTHROPIC_API_KEY; doctor, check and mcp do not";
 
 /** The fixture URL as another user, percent-encoded as a URL must be. */
 function fixtureAs(user: string, password: string): string {

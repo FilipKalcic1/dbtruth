@@ -33,6 +33,7 @@ export type Table = {
   partitions?: { count: number; withLocalForeignKeys: number }; // a partitioned table stands for its partitions
   rowEstimate: number; // -1 when unknown: a view, or a table nothing could size, holding at least the sample size of rows
   estimateSource?: "catalog" | "partitions" | "pilot"; // where rowEstimate came from; none when it is a count, or unknown
+  unmeasured?: string; // why the sample could not be read; null rates and distinct counts are then 0, since nothing was measured
   primaryKey: string[] | null;
   foreignKeys: { column: string; refTable: string; refColumn: string }[];
   columns: Column[];
@@ -51,7 +52,7 @@ export type Extract = {
 export type IntegerKey = { schema: string; name: string; column: string; rowEstimate: number };
 
 /** A relation as the catalog alone describes it, before it is sized or sampled. */
-export type CatalogRelation = Omit<Table, "rowEstimate" | "estimateSource" | "columns" | "samples"> & {
+export type CatalogRelation = Omit<Table, "rowEstimate" | "estimateSource" | "unmeasured" | "columns" | "samples"> & {
   columns: Pick<Column, "name" | "type" | "nullable" | "comment">[];
 };
 
@@ -148,6 +149,11 @@ export function findTable<T extends { name: string; schema: string }>(tables: T[
   const wanted = name.trim();
   const spellings = (t: T) => [t.name, t.name.startsWith(`${t.schema}.`) ? t.name : `${t.schema}.${t.name}`];
   return tables.find((t) => spellings(t).includes(wanted)) ?? tables.find((t) => spellings(t).some((s) => s.toLowerCase() === wanted.toLowerCase()));
+}
+
+/** Whether the relation from declares a foreign key from its column to toColumn of the relation to. */
+export function declares(from: Pick<Table, "foreignKeys">, column: string, to: Pick<Table, "name">, toColumn: string): boolean {
+  return from.foreignKeys.some((k) => k.column === column && k.refTable === to.name && k.refColumn === toColumn);
 }
 
 /**

@@ -10,7 +10,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { AskOptions, Model } from "./model.js";
-import { FilesSchema, relationshipId, sqlString, suspicionId, type Files, type TableFacts, type Verified } from "./schemas.js";
+import { FilesSchema, relationshipId, sqlString, suspicionId, type Files, type Relationship, type TableFacts, type Verdict, type Verified } from "./schemas.js";
 
 export const OUTPUT_DIR = "context";
 /** cli.ts adds the snapshot to the files it hands persist, so this module need not know what it holds. */
@@ -24,8 +24,7 @@ export const SNAPSHOT_FILE = "snapshot.json";
 export async function write(model: Model, verified: Verified, limits: { modelMaxInputTokens: number; charsPerToken: number }, options?: AskOptions): Promise<{ files: Files; reduced?: string }> {
   const { verified: sent, reduced } = fitForWriter(verified, limits);
   const written: Files = sent ? await model.ask("write", sent, FilesSchema, options) : {};
-  // One flat file per relation, so a name with a path separator in it still lands under tables/.
-  const rendered = Object.fromEntries(verified.tables.map((t) => [`${OUTPUT_DIR}/tables/${t.name.replace(/[\\/]/g, "_")}.md`, tableFile(verified, t)]));
+  const rendered = Object.fromEntries(verified.tables.map((t) => [tableFileName(t.name), tableFile(verified, t)]));
   const out: Files = {};
   const taken = new Set<string>();
   for (const [path, markdown] of Object.entries({ ...written, ...rendered })) {
@@ -54,6 +53,11 @@ export function fitForWriter(verified: Verified, cfg: { modelMaxInputTokens: num
   return { reduced: "README.md and ENTITIES.md not written: over the model's input limit even without the verdicts' queries" };
 }
 
+/** A relation's file under context/tables/, before confine: one flat file, so a name with a path separator in it still lands under tables/. */
+export function tableFileName(name: string): string {
+  return `${OUTPUT_DIR}/tables/${name.replace(/[\\/]/g, "_")}.md`;
+}
+
 /**
  * context/tables/<table>.md from Verified rather than from the model: the purpose and grain the model
  * gave in contextualize, and the key, size, joins, problems and values the database gave in extract
@@ -61,22 +65,11 @@ export function fitForWriter(verified: Verified, cfg: { modelMaxInputTokens: num
  */
 export function tableFile(v: Verified, t: TableFacts): string {
   const mine = (name: string) => name === t.name;
-  const pct = (share: number) => `${(share * 100).toFixed(1)}%`;
   const meaning = v.claims.tables.find((m) => mine(m.name));
 
   const joins = v.claims.relationships.filter((r) => mine(r.from.table) || mine(r.to.table)).flatMap((r) => {
     const verdict = v.verdicts[relationshipId(r)];
-    if (!verdict || verdict.status === "rejected") return [];
-    const n = verdict.measurement.numbers;
-    // A branch's condition as a SQL literal, which an agent can paste into a WHERE.
-    const edge = `${r.from.table}.${r.from.column} -> ${r.to.table}.${r.to.column}${r.when ? ` when ${r.when.column} = ${sqlString(r.when.equals)}` : ""}`;
-    const inferred = r.basis === "stated" ? "" : " (inferred)";
-    // A join confirmed on inference whose values other keys would hold too is not stated as a fact.
-    const evidence = n.alsoFits ? ` (inferred; the same values would also match ${n.alsoFits} other key${n.alsoFits === 1 ? "" : "s"}, so the match alone does not prove this join)` : inferred;
-    const nulls = n.nulls ? ` ${n.nulls} sampled rows (${pct(n.nulls / (n.total! + n.nulls))}) have no ${r.from.column}; an inner join drops them too.` : "";
-    if (verdict.status === "confirmed") return [`- ${edge}: confirmed, ${pct(n.hit!)} of ${n.total} sampled rows match${evidence}.${nulls}`];
-    if (verdict.status === "broken") return [`- **BROKEN** ${edge}: ${pct(n.hit!)} match (${n.hits} of ${n.total} sampled), ${n.orphans} orphans${orphanShape(n, `${r.to.table}.${r.to.column}`)}${inferred}. An inner join drops the orphans: use LEFT JOIN, or filter them on purpose.${nulls}`];
-    return [`- ${edge} (inferred, ${verdict.skipped ? `not measured: ${verdict.skipped}` : verdict.status})`];
+    return verdict && verdict.status !== "rejected" ? [`- ${joinLine(r, verdict)}`] : [];
   });
 
   const problems = v.claims.suspicions.filter((s) => s.tables.some(mine)).flatMap((s) => {
@@ -104,6 +97,26 @@ export function tableFile(v: Verified, t: TableFacts): string {
     ...section("Known problems", problems),
     ...section("Values", values),
   ].join("\n") + "\n";
+}
+
+/**
+ * One join and its verdict in a sentence: a table's file shows it as a line, and measure_join answers with it. Only
+ * measure_join reaches a rejected join, which a table's file leaves out.
+ */
+export function joinLine(r: Relationship, verdict: Verdict): string {
+  const n = verdict.measurement.numbers;
+  const pct = (share: number) => `${(share * 100).toFixed(1)}%`;
+  // A branch's condition as a SQL literal, which an agent can paste into a WHERE.
+  const edge = `${r.from.table}.${r.from.column} -> ${r.to.table}.${r.to.column}${r.when ? ` when ${r.when.column} = ${sqlString(r.when.equals)}` : ""}`;
+  const inferred = r.basis === "stated" ? "" : " (inferred)";
+  // A join confirmed on inference whose values other keys would hold too is not stated as a fact.
+  const evidence = n.alsoFits ? ` (inferred; the same values would also match ${n.alsoFits} other key${n.alsoFits === 1 ? "" : "s"}, so the match alone does not prove this join)` : inferred;
+  const nulls = n.nulls ? ` ${n.nulls} sampled rows (${pct(n.nulls / (n.total! + n.nulls))}) have no ${r.from.column}; an inner join drops them too.` : "";
+  if (verdict.status === "confirmed") return `${edge}: confirmed, ${pct(n.hit!)} of ${n.total} sampled rows match${evidence}.${nulls}`;
+  if (verdict.status === "broken") return `**BROKEN** ${edge}: ${pct(n.hit!)} match (${n.hits} of ${n.total} sampled), ${n.orphans} orphans${orphanShape(n, `${r.to.table}.${r.to.column}`)}${inferred}. An inner join drops the orphans: use LEFT JOIN, or filter them on purpose.${nulls}`;
+  if (verdict.status === "rejected") return `${edge}: rejected, ${pct(n.hit!)} of ${n.total} sampled rows match: these columns do not relate; find the right key.`;
+  const status = verdict.skipped ? `not measured: ${verdict.skipped}` : verdict.status;
+  return `${edge} (${r.basis === "stated" ? status : `inferred, ${status}`})`;
 }
 
 /** Where a join's orphans fall against the key it points at, when verify counted them: the place, never a cause. */

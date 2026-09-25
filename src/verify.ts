@@ -17,7 +17,7 @@
 
 import type { Config } from "./config.js";
 import { DATATYPE_MISMATCH_STATES, isIntegerType, q, qualified, querySampled, typeFamily, type Db, type QueryResult } from "./safety.js";
-import { findTable, relationshipId, sqlString, suspicionId, type Claims, type Extract, type IntegerKey, type Measurement, type Relationship, type Suspicion, type Table } from "./schemas.js";
+import { declares, findTable, relationshipId, sqlString, suspicionId, type Claims, type Extract, type IntegerKey, type Measurement, type Relationship, type Suspicion, type Table } from "./schemas.js";
 
 const SECONDS_PER_DAY = 86_400;
 
@@ -103,7 +103,7 @@ function worthWeighing(cfg: Config, extract: Extract, r: Relationship, m: Measur
   if (m.skipped !== undefined || m.numbers.hit! < cfg.join.confirmed || r.basis !== "inferred") return false;
   const from = findTable(extract.tables, r.from.table)!;
   const to = findTable(extract.tables, r.to.table)!;
-  return isIntegerColumn(from, r.from.column) && !from.foreignKeys.some((k) => k.column === r.from.column && k.refTable === to.name && k.refColumn === r.to.column);
+  return isIntegerColumn(from, r.from.column) && !declares(from, r.from.column, to, r.to.column);
 }
 
 /**
