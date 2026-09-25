@@ -26,6 +26,11 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   drift. It measures with the settings the snapshot was measured with and never
   runs a query stored in the file. `doctor`'s line for a missing key now says
   that `check` needs none either.
+- `check --json` prints the report on stdout (its `report` field is the
+  format, 1), and `check --markdown <path>` writes it as a pull request
+  comment: the counts, what fails the default build in a table, the rest
+  folded, at most 50 rows, names as code, no query or reason. A comment file
+  that cannot be written exits 1.
 - A file of the last run under `context/` is replaced by the new one, and
   only a file this run does not write again, such as a renamed table's, is
   removed. One that cannot be removed, held open by another program on

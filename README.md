@@ -127,7 +127,7 @@ comes from the system or from a library dbtruth uses, in its own words.
 | `(<n> skipped)`<br>`relations: <kinds>, <n> not examined` | The first is part of the line that starts `Sending to`, the second of the summary. Some relations were not read: sampling used up its share of the time budget (`--extract-budget-share` of `--budget-seconds`) before it reached them, or they were dropped to fit the model's input (next row). Nothing is measured on them, and a measurement the budget cut off is marked `not measured: time budget exhausted` in `context/tables/`. Raise `--budget-seconds`. |
 | `sample rows dropped to fit the model's input limit`<br>`sample rows and value lists dropped to fit the model's input limit`<br>`sample rows, value lists and <n> tables dropped to fit the model's input limit` | Printed as part of the line that starts `Sending to`. The schema with its samples is larger than the model's input ceiling, `DBTRUTH_MODEL_MAX_INPUT_TOKENS`, so detail was dropped until it fit: sample rows first, then value lists, then whole tables. The model sees less and proposes less; what it proposes is still measured on the database. Raise `--model-max-input-tokens` only for a model that takes more. |
 | `the verdicts' queries dropped to fit the model's input limit`<br>`README.md and ENTITIES.md not written: over the model's input limit even without the verdicts' queries` | Printed as part of the line that starts `write:`. What the model is sent to write `README.md` and `ENTITIES.md`, every claim with its verdict, query and numbers, is larger than the model's input ceiling, `DBTRUTH_MODEL_MAX_INPUT_TOKENS`; a database with many joins compared with other keys (see How it works) reaches it first. So the queries were left out of it: the numbers were all sent, and every query is still in `context/snapshot.json` and in `--json`. When even that is too large, the model is not called: the per-table files and the snapshot are written, `README.md` and `ENTITIES.md` are not, and the last run's are removed. Raise `--model-max-input-tokens` only for a model that takes more; a lower `--weak-evidence-max-candidates` shortens the query of every join compared. |
-| `could not write <path>: <error>` | A file under `context/` could not be written, or, when the error names `unlink` or `rm`, a file the last run wrote there for a table since renamed or dropped could not be removed. The cause is a directory this user cannot write (`EACCES`), a full disk, or on Windows another program that holds the file open (`EBUSY`). The other files were written, and a file that could not be removed stays as the last run left it. Close the program, or fix the cause, and run again. From `init`, the path is the `.env` it would have written, and `EEXIST` means a directory of that name is there, such as a Python virtualenv: dbtruth reads no directory as settings, so rename it, or keep the settings in a file of another name and pass `--dotenv <path>`. |
+| `could not write <path>: <error>` | A file under `context/` could not be written, or, when the error names `unlink` or `rm`, a file the last run wrote there for a table since renamed or dropped could not be removed. The cause is a directory this user cannot write (`EACCES`), a full disk, or on Windows another program that holds the file open (`EBUSY`). The other files were written, and a file that could not be removed stays as the last run left it. Close the program, or fix the cause, and run again. From `init`, the path is the `.env` it would have written, and `EEXIST` means a directory of that name is there, such as a Python virtualenv: dbtruth reads no directory as settings, so rename it, or keep the settings in a file of another name and pass `--dotenv <path>`. From `check`, the path is the file `--markdown` names; check then exits 1 without printing its JSON. Give it a path to a file, in a directory that exists and this user can write. |
 | `<path> already exists; left as it is` | `init` found a `.env` where it would write one. It never changes a file that is there, so the file is as it was: check that it holds the settings the quick start shows, and follow the next steps printed after this line. |
 | `WARNING: <path> does not ignore <path>; add this line to it: .env` | Printed by `init`: no rule in the `.gitignore` at the repository root covers the `.env` there, so git would commit the password and the key in it on any machine without a rule of its own. Add the line `.env` to that `.gitignore`, and create the file if there is none; `init` never edits it. A rule in your own ignore file, `core.excludesFile`, does not count: it covers your machine alone. A rule for `.env/` covers only a directory, and a later `!.env` takes an earlier rule back. |
 | `WARNING: git could not say whether <path> ignores <path>; if it does not, add this line to it: .env` | Printed by `init` when git gives no answer: outside a repository, before `git init`; when git is not installed or not on the `PATH`; or in a repository git refuses, as it does one owned by another user. Make sure the `.gitignore` at the repository root holds the line `.env`, once there is a repository; `git check-ignore -v .env`, run there, shows git's own words. |
@@ -186,6 +186,8 @@ data in it.
 ```bash
 npx dbtruth check                        # ./context/snapshot.json against DATABASE_URL
 npx dbtruth check --fail-on change       # fail on any change, not only on a regression or a stale item
+npx dbtruth check --json > report.json   # the report as JSON on stdout
+npx dbtruth check --markdown comment.md  # the report as a pull request comment, in a file
 npx dbtruth check --snapshot <path> --url <url>
 ```
 
@@ -195,7 +197,8 @@ snapshot was measured with, so that a default changed in a later dbtruth cannot
 pass for a change in the data; the time budget and the statement timeout are
 this run's. Only the tables the claims name are sampled. stderr gets a line
 for each claim that is not unchanged and for each relation added or dropped,
-then the count of each class; stdout stays empty.
+then the count of each class; stdout stays empty unless `--json` asks for the
+report there.
 
 | Class | When | Fails with `regression`, the default | Fails with `change` |
 |---|---|---|---|
@@ -214,6 +217,35 @@ snapshot of a database with another name, measured with settings that differ
 from this run's, or of a schema that has changed since, gets a `note` line;
 notes never fail. When anything other than unchanged or not measured is found,
 the last line is `run npx dbtruth and commit context/`.
+
+`--json` prints the whole report on stdout: each claim's class, its status in
+the snapshot, and the verdict measured now with its query and numbers; the
+relations added or dropped; and the database names, the settings and whether
+the schema changed, which the notes are made from. Its `report` field is the
+format, 1.
+
+`--markdown <path>` writes the report as a pull request comment: the marker
+`<!-- dbtruth-check -->` on the first line, the counts, a table of what fails
+the default build, the rest folded, at most 50 rows in all, the notes, then the
+fix line. Names are written as code, so that nothing in a name becomes a
+mention, a link or markup, and the comment holds no query and no reason. A
+comment file that cannot be written makes check exit `1`, with nothing on
+stdout. After the foreign key from `order_items` to `orders` was dropped and
+every fifth line item was pointed at an order that does not exist, the comment
+reads:
+
+```markdown
+<!-- dbtruth-check -->
+dbtruth: 1 regression, 11 unchanged
+
+| Class | Claim | Before | After |
+|---|---|---|---|
+| regression | ` relationship:order_items.order_id->orders.id ` | confirmed 100.0% | broken 80.0% |
+
+- note: the schema changed since the snapshot
+
+run npx dbtruth and commit context/
+```
 
 The snapshot is part of the pull request, so the pull request decides what is
 checked: it can mark a broken join confirmed, drop a claim, or change the

@@ -1,6 +1,7 @@
 // schemas.ts: the four objects that flow through the loop, the zod schemas for
 // the two the model produces (Claims, Files), the one for the snapshot, which
-// dbtruth reads back, and what check reports.
+// dbtruth reads back, and the one for what check reports, which --json
+// prints.
 
 import { z } from "zod";
 
@@ -286,25 +287,32 @@ export type Snapshot = z.output<typeof SnapshotSchema>;
 export const CHECK_CLASSES = ["regression", "stale", "drift", "improved", "changed", "not measured", "unchanged"] as const;
 export type CheckClass = (typeof CHECK_CLASSES)[number];
 
-export type ClaimCheck = {
-  id: string;
-  class: CheckClass;
-  /** the snapshot's status: unverifiable when it holds no verdict for the claim */
-  before: Verdict["status"];
-  hitBefore?: number;
-  /** measured now, with the statement verify builds, never the one the snapshot stores */
-  after: Verdict;
-  /** stale only: the "table" or "table.column" the database no longer has */
-  missing?: string;
-};
+/** Raised whenever a reader of an older format would misread the report --json prints. */
+export const CHECK_REPORT_FORMAT = 1;
 
-export type CheckReport = {
-  database: { snapshot: string; now: string };
+export const CheckReportSchema = z.object({
+  report: z.literal(CHECK_REPORT_FORMAT),
+  database: z.object({ snapshot: z.string(), now: z.string() }),
   /** the fingerprints differ */
-  schemaChanged: boolean;
+  schemaChanged: z.boolean(),
   /** the settings the snapshot was measured with, and measured with again, that differ from this run's */
-  settings: { name: string; snapshot: number; now: number }[];
-  claims: ClaimCheck[];
+  settings: z.array(z.object({ name: z.string(), snapshot: z.number(), now: z.number() })),
+  claims: z.array(
+    z.object({
+      id: z.string(),
+      class: z.enum(CHECK_CLASSES),
+      /** the snapshot's status: unverifiable when it holds no verdict for the claim */
+      before: VerdictSchema.shape.status,
+      hitBefore: z.number().optional(),
+      /** measured now, with the statement verify builds, never the one the snapshot stores */
+      after: VerdictSchema,
+      /** stale only: the "table" or "table.column" the database no longer has */
+      missing: z.string().optional(),
+    }),
+  ),
   /** relations in the database and not in the snapshot, or the other way round: stale */
-  relations: { name: string; in: "database" | "context" }[];
-};
+  relations: z.array(z.object({ name: z.string(), in: z.enum(["database", "context"]) })),
+});
+
+export type CheckReport = z.infer<typeof CheckReportSchema>;
+export type ClaimCheck = CheckReport["claims"][number];

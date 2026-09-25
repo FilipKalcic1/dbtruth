@@ -177,7 +177,7 @@ test("a condition on a column the table lacks or that is not categorical is unve
 test("check measures every branch again, with the numbers of the full run", LIMIT, async () => {
   const { cwd, snapshot } = await offline();
   const err: string[] = [];
-  const code = await runCheck({ url: POLYMORPH_URL, snapshot: SNAPSHOT, failOn: "regression", flags: {}, cwd, env: {}, err: (line) => err.push(line) });
+  const code = await runCheck({ url: POLYMORPH_URL, snapshot: SNAPSHOT, failOn: "regression", json: false, flags: {}, cwd, env: {}, out: () => {}, err: (line) => err.push(line) });
   assert.equal(code, 0);
   assert.deepEqual(err, ["check polymorph: 10 unchanged"]);
   const { report } = await recorded(POLYMORPH_URL, blank(snapshot));
@@ -372,7 +372,7 @@ test("a branch is weighed on its own rows, and check measures a weighed join aga
 
   const fixture = await offline(FIXTURE_URL, WEIGHED);
   const checked: string[] = [];
-  const code = await runCheck({ url: FIXTURE_URL, snapshot: SNAPSHOT, failOn: "regression", flags: {}, cwd: fixture.cwd, env: {}, err: (line) => checked.push(line) });
+  const code = await runCheck({ url: FIXTURE_URL, snapshot: SNAPSHOT, failOn: "regression", json: false, flags: {}, cwd: fixture.cwd, env: {}, out: () => {}, err: (line) => checked.push(line) });
   assert.equal(code, 0);
   assert.deepEqual(checked, ["check fixture: 14 unchanged"]);
   const { report } = await recorded(FIXTURE_URL, blank(fixture.snapshot));

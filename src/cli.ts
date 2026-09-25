@@ -6,10 +6,10 @@ import { Command, Option, type OptionValues } from "commander";
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { FAIL_ON, fails, remeasure, reportLines, type FailOn } from "./check.js";
+import { FAIL_ON, fails, remeasure, reportLines, reportMarkdown, type FailOn } from "./check.js";
 import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Config, type Overrides } from "./config.js";
 import { contextualize } from "./contextualize.js";
 import { doctor } from "./doctor.js";
@@ -123,13 +123,21 @@ export type CheckOptions = {
   /** The snapshot to check, relative to cwd. */
   snapshot: string;
   failOn: FailOn;
+  /** The report as JSON on out, and nothing else there. */
+  json: boolean;
+  /** The comment file, relative to cwd. */
+  markdown?: string;
   flags: Overrides;
   cwd: string;
   env: Record<string, string | undefined>;
+  out: (line: string) => void;
   err: (line: string) => void;
 };
 
-/** Measures again what the snapshot claims, with no model: 0 when it passes under failOn, 2 when it fails, 1 when it cannot run. */
+/**
+ * Measures again what the snapshot claims, with no model: 0 when it passes under failOn, 2 when it fails, 1 when it
+ * cannot run or cannot write the comment it was asked for.
+ */
 export async function runCheck(opts: CheckOptions): Promise<number> {
   const found = setup(opts);
   if (!found) return EXIT_FAILURE;
@@ -143,6 +151,17 @@ export async function runCheck(opts: CheckOptions): Promise<number> {
   try {
     const report = await remeasure(db, found.cfg, snapshot);
     for (const line of reportLines(report)) opts.err(line);
+    // The comment first: a check that cannot write it has not done what it was asked, and prints no JSON.
+    if (opts.markdown !== undefined) {
+      const comment = reportMarkdown(report);
+      try {
+        writeFileSync(resolve(opts.cwd, opts.markdown), comment);
+      } catch (e) {
+        opts.err(`could not write ${opts.markdown}: ${e instanceof Error ? e.message : String(e)}`);
+        return EXIT_FAILURE;
+      }
+    }
+    if (opts.json) opts.out(JSON.stringify(report, null, 2));
     return fails(report, opts.failOn) ? EXIT_FINDINGS : EXIT_OK;
   } finally {
     await db.close();
@@ -282,6 +301,7 @@ function emptyClaims(v: Verified): string[] {
 }
 
 export async function main(argv: string[]): Promise<number> {
+  const out = (line: string) => process.stdout.write(line + "\n");
   const err = (line: string) => process.stderr.write(line + "\n");
   // Set by the action commander runs; --help and --version exit before any does.
   let code = EXIT_FAILURE;
@@ -308,7 +328,7 @@ export async function main(argv: string[]): Promise<number> {
       flags: overrides(o),
       cwd: process.cwd(),
       env: process.env,
-      out: (line) => process.stdout.write(line + "\n"),
+      out,
       err,
     });
   });
@@ -334,13 +354,27 @@ export async function main(argv: string[]): Promise<number> {
     .description("measure again what context/snapshot.json claims, without a model or an API key")
     .option("--snapshot <path>", "the snapshot to check, relative to the current directory", SNAPSHOT)
     .addOption(new Option("--fail-on <when>", "exit 2 on a regression or a stale item, on any change, or never").choices(FAIL_ON).default("regression"))
+    .option("--json", "print the report as JSON to stdout")
+    .option("--markdown <path>", "write the report as a pull request comment to this file, relative to the current directory")
     .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
     .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root");
   for (const o of overridable) check.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
   check.action(async (own) => {
     // As for doctor: the program's options before `check`, and its own after the name, which win.
     const o = { ...program.opts(), ...own };
-    code = await runCheck({ url: o.url, dotenv: o.dotenv, snapshot: o.snapshot, failOn: o.failOn, flags: overrides(o), cwd: process.cwd(), env: process.env, err });
+    code = await runCheck({
+      url: o.url,
+      dotenv: o.dotenv,
+      snapshot: o.snapshot,
+      failOn: o.failOn,
+      json: Boolean(o.json),
+      markdown: o.markdown,
+      flags: overrides(o),
+      cwd: process.cwd(),
+      env: process.env,
+      out,
+      err,
+    });
   });
   try {
     await program.parseAsync(argv);

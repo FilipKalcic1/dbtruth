@@ -5,10 +5,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { diff, fails, FAIL_ON, reportLines } from "../src/check.js";
+import { COMMENT_MARKER, diff, fails, FAIL_ON, reportLines, reportMarkdown } from "../src/check.js";
 import { runCheck } from "../src/cli.js";
 import { config, type Config } from "../src/config.js";
-import { relationshipId, suspicionId, type CatalogRelation, type CheckClass, type CheckReport, type Claims, type Snapshot, type Verdict } from "../src/schemas.js";
+import { CheckReportSchema, relationshipId, suspicionId, type CatalogRelation, type CheckClass, type CheckReport, type ClaimCheck, type Claims, type Snapshot, type Verdict } from "../src/schemas.js";
 import { parseSnapshot, schemaOf, serialize, toSnapshot } from "../src/snapshot.js";
 
 const TSX = import.meta.resolve("tsx");
@@ -56,6 +56,38 @@ function one(kind: "relationship" | "suspicion", before: Verdict | undefined, af
 
 /** Every item of a report by its class: each claim's, and stale for each relation. */
 const items = (report: CheckReport): CheckClass[] => [...report.claims.map((c) => c.class), ...report.relations.map(() => "stale" as const)];
+
+/** A claim as check reports it, with its hit rate in the snapshot and the name it lost when there are. */
+const claim = (id: string, cls: CheckClass, before: Status, hitBefore: number | undefined, after: Verdict, missing?: string): ClaimCheck => ({
+  id,
+  class: cls,
+  before,
+  ...(hitBefore === undefined ? {} : { hitBefore }),
+  after,
+  ...(missing ? { missing } : {}),
+});
+
+/** A report with an item of every class, a relation each way and every note. */
+const MOVED: CheckReport = {
+  report: 1,
+  database: { snapshot: "shop", now: "shop_ci" },
+  schemaChanged: true,
+  settings: [{ name: "join.confirmed", snapshot: 0.85, now: 0.95 }, { name: "sampleRows", snapshot: 1000, now: 50000 }],
+  // In the snapshot's order, which is not the order of the classes.
+  claims: [
+    claim("relationship:cars.customer_id->customers.id", "changed", "empty", undefined, verdict("confirmed", 1)),
+    claim("relationship:customers.address->customers.full_name", "unchanged", "rejected", 0, verdict("rejected", 0)),
+    claim("relationship:order_items.order_id->orders.id", "regression", "confirmed", 1, verdict("broken", 0.8)),
+    claim("relationship:orders.customer_id->customers.id", "drift", "broken", 0.88, verdict("broken", 0.9)),
+    claim("relationship:vehicles.model_year->customers.id", "not measured", "rejected", 0, verdict("unverifiable", undefined, "time budget exhausted")),
+    claim("suspicion:dead_table:cars", "improved", "confirmed", undefined, verdict("rejected")),
+    claim("suspicion:inconsistent_values:orders.status", "stale", "confirmed", undefined, verdict("unverifiable", undefined, "unknown column orders.status"), "orders.status"),
+  ],
+  relations: [{ name: "added", in: "database" }, { name: "cars", in: "context" }],
+};
+
+/** A report of the claims and relations given, with nothing to note. */
+const reportOf = (claims: ClaimCheck[], relations: CheckReport["relations"] = []): CheckReport => ({ report: 1, database: { snapshot: "shop", now: "shop" }, schemaChanged: false, settings: [], claims, relations });
 
 /** `dbtruth <args>` as a user runs it, from cwd, with the environment given and no API key; one that hangs is killed at 30 s. */
 function command(cwd: string, env: NodeJS.ProcessEnv, ...args: string[]) {
@@ -214,31 +246,7 @@ test("another database, other settings and a changed fingerprint are notes, neve
 });
 
 test("reportLines: notes, one line per item that is not unchanged, counts, and the fix line only when something differs", () => {
-  const claim = (id: string, cls: CheckClass, before: Status, hitBefore: number | undefined, after: Verdict, missing?: string) => ({
-    id,
-    class: cls,
-    before,
-    ...(hitBefore === undefined ? {} : { hitBefore }),
-    after,
-    ...(missing ? { missing } : {}),
-  });
-  const report: CheckReport = {
-    database: { snapshot: "shop", now: "shop_ci" },
-    schemaChanged: true,
-    settings: [{ name: "join.confirmed", snapshot: 0.85, now: 0.95 }, { name: "sampleRows", snapshot: 1000, now: 50000 }],
-    // In the snapshot's order, which is not the order of the classes.
-    claims: [
-      claim("relationship:cars.customer_id->customers.id", "changed", "empty", undefined, verdict("confirmed", 1)),
-      claim("relationship:customers.address->customers.full_name", "unchanged", "rejected", 0, verdict("rejected", 0)),
-      claim("relationship:order_items.order_id->orders.id", "regression", "confirmed", 1, verdict("broken", 0.8)),
-      claim("relationship:orders.customer_id->customers.id", "drift", "broken", 0.88, verdict("broken", 0.9)),
-      claim("relationship:vehicles.model_year->customers.id", "not measured", "rejected", 0, verdict("unverifiable", undefined, "time budget exhausted")),
-      claim("suspicion:dead_table:cars", "improved", "confirmed", undefined, verdict("rejected")),
-      claim("suspicion:inconsistent_values:orders.status", "stale", "confirmed", undefined, verdict("unverifiable", undefined, "unknown column orders.status"), "orders.status"),
-    ],
-    relations: [{ name: "added", in: "database" }, { name: "cars", in: "context" }],
-  };
-  assert.deepEqual(reportLines(report), [
+  assert.deepEqual(reportLines(MOVED), [
     "note the snapshot is of database shop; this is shop_ci",
     "note measured with the snapshot's settings, which differ from this run's: join.confirmed 0.85 (this run 0.95), sampleRows 1000 (this run 50000)",
     "note the schema changed since the snapshot",
@@ -255,26 +263,143 @@ test("reportLines: notes, one line per item that is not unchanged, counts, and t
   ]);
 
   // Only what could not be measured, and what did not move: reported, and nothing to fix.
-  const quiet: CheckReport = {
-    database: { snapshot: "shop", now: "shop" },
-    schemaChanged: false,
-    settings: [],
-    claims: report.claims.filter((c) => c.class === "unchanged" || c.class === "not measured"),
-    relations: [],
-  };
+  const quiet = reportOf(MOVED.claims.filter((c) => c.class === "unchanged" || c.class === "not measured"));
   assert.deepEqual(reportLines(quiet), [
     "not measured relationship:vehicles.model_year->customers.id: rejected 0.0% -> unverifiable (time budget exhausted)",
     "check shop: 1 not measured, 1 unchanged",
   ]);
   // A drift alone fails no default build, and the context is out of date all the same.
-  assert.deepEqual(reportLines({ ...quiet, claims: report.claims.filter((c) => c.class === "drift") }).slice(-1), ["run npx dbtruth and commit context/"]);
+  assert.deepEqual(reportLines({ ...quiet, claims: MOVED.claims.filter((c) => c.class === "drift") }).slice(-1), ["run npx dbtruth and commit context/"]);
+});
+
+test("the comment on a report with every class: the marker, the counts, what fails the default build in a table, the rest folded, the notes, and the fix", () => {
+  assert.equal(
+    reportMarkdown(MOVED),
+    [
+      "<!-- dbtruth-check -->",
+      "dbtruth: 1 regression, 3 stale, 1 drift, 1 improved, 1 changed, 1 not measured, 1 unchanged",
+      "",
+      "| Class | Claim | Before | After |",
+      "|---|---|---|---|",
+      "| regression | ` relationship:order_items.order_id->orders.id ` | confirmed 100.0% | broken 80.0% |",
+      "| stale | ` suspicion:inconsistent_values:orders.status ` | confirmed | ` orders.status ` is not in the database |",
+      "| stale | ` added ` |  | in the database, not in the context |",
+      "| stale | ` cars ` |  | in the context, not in the database |",
+      "",
+      "<details>",
+      "<summary>1 drift, 1 improved, 1 changed, 1 not measured</summary>",
+      "",
+      "| Class | Claim | Before | After |",
+      "|---|---|---|---|",
+      "| drift | ` relationship:orders.customer_id->customers.id ` | broken 88.0% | broken 90.0% |",
+      "| improved | ` suspicion:dead_table:cars ` | confirmed | rejected |",
+      "| changed | ` relationship:cars.customer_id->customers.id ` | empty | confirmed 100.0% |",
+      "| not measured | ` relationship:vehicles.model_year->customers.id ` | rejected 0.0% | unverifiable |",
+      "",
+      "</details>",
+      "",
+      "- note: the snapshot is of database ` shop `; this is ` shop_ci `",
+      "- note: measured with the snapshot's settings, which differ from this run's: join.confirmed 0.85 (this run 0.95), sampleRows 1000 (this run 50000)",
+      "- note: the schema changed since the snapshot",
+      "",
+      "run npx dbtruth and commit context/",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("a report of unchanged claims, or of none, with nothing to note is the marker and its counts alone: the all-clear an old comment is updated to", () => {
+  const unchanged = one("relationship", verdict("confirmed", 1), verdict("confirmed", 1));
+  const empty = diff(snapshotOf({}, {}), { database: "shop", schema: schemaOf(CATALOG), verdicts: {} }, config);
+  for (const [report, counts] of [[unchanged, "dbtruth: 1 unchanged"], [empty, "dbtruth: no claims"]] as const) {
+    assert.deepEqual(reportMarkdown(report).split("\n"), [COMMENT_MARKER, counts, ""], "the marker first, the counts, and no other line");
+  }
+});
+
+test("the comment shows at most 50 rows, the most serious first, then how many more", () => {
+  // The drifts come first in the report's order; the regressions take the rows all the same.
+  const comment = (regressions: number, drifts: number) =>
+    reportMarkdown(
+      reportOf([
+        ...Array.from({ length: drifts }, (_, i) => claim(`relationship:d${i}.id->t.id`, "drift", "broken", 0.8, verdict("broken", 0.9))),
+        ...Array.from({ length: regressions }, (_, i) => claim(`relationship:r${i}.id->t.id`, "regression", "confirmed", 1, verdict("broken", 0.8))),
+      ]),
+    ).split("\n");
+  // The class of each row, in the comment's order.
+  const rows = (lines: string[]) => lines.flatMap((line) => /^\| (regression|stale|drift|improved|changed|not measured) \|/.exec(line)?.[1] ?? []);
+  const times = (n: number, cls: string) => Array<string>(n).fill(cls);
+
+  const past = comment(60, 5);
+  assert.deepEqual(rows(past), times(50, "regression"), "the regressions take every row, the drifts none");
+  assert.ok(!past.includes("<details>"), "nothing left to fold");
+  assert.deepEqual(past.slice(-4), ["and 15 more", "", "run npx dbtruth and commit context/", ""]);
+
+  const folded = comment(45, 10);
+  assert.deepEqual(rows(folded), [...times(45, "regression"), ...times(5, "drift")]);
+  assert.ok(folded.includes("<summary>5 drift</summary>"), "the summary counts the rows it folds");
+  assert.ok(folded.includes("and 5 more"));
+
+  const full = comment(40, 10);
+  assert.deepEqual(rows(full), [...times(40, "regression"), ...times(10, "drift")]);
+  assert.ok(!full.some((line) => line.startsWith("and ")), "50 items, none left to count");
+});
+
+test("a name from the snapshot or the database is code in the comment: one cell, one row, no markup of its own", () => {
+  const regressed = (id: string) => claim(id, "regression", "confirmed", 1, verdict("broken", 0.8));
+  // A condition's value is free text, from the model or from a snapshot a pull request edited, and a relation or a
+  // database can be given any name Postgres takes quoted.
+  const hostile: CheckReport = {
+    ...reportOf([regressed("relationship:comments.commentable_id->posts.id[commentable_type=x\n| forged | row |]"), regressed("relationship:a.b->c.d[e=x\\|y``z]")], [{ name: "</details><img src=x>@octocat", in: "database" }]),
+    database: { snapshot: "shop", now: "shop|ci" },
+  };
+  const plain: CheckReport = { ...reportOf([regressed("relationship:a.b->c.d"), regressed("relationship:e.f->g.h")], [{ name: "added", in: "database" }]), database: { snapshot: "shop", now: "shop_ci" } };
+  const lines = reportMarkdown(hostile).split("\n");
+  for (const line of [
+    "| regression | ` relationship:comments.commentable_id->posts.id[commentable_type=x \\| forged \\| row \\|] ` | confirmed 100.0% | broken 80.0% |",
+    "| regression | ``` relationship:a.b->c.d[e=x\\\\|y``z] ``` | confirmed 100.0% | broken 80.0% |",
+    "| stale | ` </details><img src=x>@octocat ` |  | in the database, not in the context |",
+    // Outside a table a pipe ends nothing, and a backslash inside code would be shown.
+    "- note: the snapshot is of database ` shop `; this is ` shop|ci `",
+  ]) {
+    assert.ok(lines.includes(line), `no line ${line}`);
+  }
+  // GitHub ends a cell at a pipe with no backslash before it.
+  for (const row of lines.filter((line) => line.startsWith("| "))) assert.equal(row.split(/(?<!\\)\|/).length, 6, row);
+  assert.equal(lines.length, reportMarkdown(plain).split("\n").length, "as many lines as with plain names");
+});
+
+test("a name of 200,000 backtick runs, which a snapshot can hold, is still one code span in one cell", () => {
+  // More runs than a function call takes arguments.
+  const name = "`a".repeat(200_000);
+  const lines = reportMarkdown(reportOf([], [{ name, in: "context" }])).split("\n");
+  assert.ok(lines.includes(`| stale | \`\` ${name} \`\` |  | in the context, not in the database |`), "no row of the name in a fence of two");
+});
+
+test("a comment of the longest names Postgres allows stays under GitHub's 65,536 characters", () => {
+  // An identifier holds at most 63 bytes, and a condition is measured only on a column whose values are at most
+  // categoricalMaxValueLength long. A stale row names the column it lost as well, the longest row there is. A hundred
+  // such rows would pass the limit; the row cap keeps the comment under it.
+  const longest = "x".repeat(63);
+  const column = `${longest}.${longest}.${longest}`;
+  const value = (i: number) => String(i).padStart(config.categoricalMaxValueLength, "v");
+  const stale = Array.from({ length: 100 }, (_, i) => claim(`relationship:${column}->${column}[${longest}=${value(i)}]`, "stale", "confirmed", 1, verdict("unverifiable", undefined, `unknown table ${longest}.${longest}`), column));
+  assert.equal(stale[0]!.id.length, 493);
+  const bytes = Buffer.byteLength(reportMarkdown({ ...MOVED, database: { snapshot: longest, now: "y".repeat(63) }, claims: stale, relations: [] }));
+  assert.ok(bytes <= 65_536, `${bytes} bytes`);
+});
+
+test("the report is the value CheckReportSchema describes, whole", () => {
+  const stale = one("relationship", verdict("confirmed", 1), verdict("unverifiable", undefined, "unknown column orders.customer_id"), [relation("orders", ["id", "status"]), CATALOG[1]!]);
+  // Parsing refuses a report without its format, 1, and drops a key the schema lacks, so a report equal to its parse
+  // has the one and none of the other.
+  for (const report of [one("relationship", verdict("confirmed", 1), verdict("broken", 0.8)), stale, MOVED]) assert.deepEqual(CheckReportSchema.parse(report), report);
 });
 
 test("a snapshot that cannot be used exits 1 with its sentence before any connection", { timeout: 30_000 }, async (t) => {
   // A check that went on to connect would throw "could not connect to the database" instead of returning.
   const checked = async (cwd: string, snapshot = FILE) => {
     const err: string[] = [];
-    const code = await runCheck({ url: UNREACHABLE, snapshot, failOn: "regression", flags: {}, cwd, env: {}, err: (line) => err.push(line) });
+    const code = await runCheck({ url: UNREACHABLE, snapshot, failOn: "regression", json: false, flags: {}, cwd, env: {}, out: () => {}, err: (line) => err.push(line) });
     return { code, err };
   };
   const cwd = mkdtempSync(join(tmpdir(), "dbtruth-check-"));

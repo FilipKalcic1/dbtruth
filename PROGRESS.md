@@ -3502,3 +3502,274 @@ of each lost point, in the format of section 4.7 of the plan.
   ETIMEDOUT`, the 40,000-suspicion parse at 2,279 ms of its 2 s, a full run
   of 353 s where 150 s is usual. Rerun on the idle machine, all three scored
   100/100. Lesson for the lead: nothing heavy runs beside a scoring run.
+
+## T3.3 `check` reports: JSON and Markdown
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 of the plan, T3.2, T3.3, T4.1 and Appendices
+  A to E; the design brief for T3.3 and T4.1 in full, its section 0 facts
+  and the lead's decisions in its section 8; `src/check.ts`, `src/cli.ts`,
+  `src/schemas.ts`, `src/snapshot.ts` and their tests,
+  `test/remeasure.test.ts`, `test/joins.test.ts`, `test/readme.test.ts`,
+  `test/structure.test.ts`, `test/copies.ts`; README.md, NOTES.md (0.2.0,
+  0.3.0), CHANGELOG.md, the iterations above and `acceptance/`; the brief's
+  rendering prototype, which I ran: it prints the Markdown the brief quotes.
+- The code at HEAD ca22729 is as the brief read it: T2.2 changed nothing in
+  `reportLines`, `diff` or `CheckReport`, and the four in-process `runCheck`
+  calls are the ones the brief names.
+- One departure from the brief, to put to the lead: the pipe is escaped in
+  the table's cells, not inside `code()`. `code()` also writes the database
+  names in a note, which is a list item and not a table cell, and there the
+  backslash is shown. Rendered with the cmark-gfm wasm build the brief's
+  judge used: `` ` shop\|ci ` `` in a note gives `<code>shop\|ci</code>`,
+  `` ` shop|ci ` `` gives `<code>shop|ci</code>`, and in a cell
+  `` ` x.y\|z ` is not in the database `` gives one cell with
+  `<code>x.y|z</code>`. So `table()` escapes every pipe of each cell, and
+  U4 expects `` ` shop|ci ` `` in the note where the brief had
+  `` ` shop\|ci ` ``. Every table row is as the brief gives it.
+- Tests first, on the code as committed:
+  - `check.test.ts` and `remeasure.test.ts` did not load: `The requested
+    module '../src/check.js' does not provide an export named
+    'COMMENT_MARKER'`.
+  - Run from a throwaway copy with `COMMENT_MARKER`, `reportMarkdown` and
+    `CheckReportSchema` stubbed (a literal, a function that returns `""`, a
+    parse that returns its input), each new test failed for its reason:
+    U1 with `''` where the comment was expected; U2 with `[ '' ]` where
+    `[COMMENT_MARKER, 'dbtruth: 1 unchanged', '']`; U3 with `[]` where 50
+    regression rows; U4 with "no line | regression | `
+    relationship:comments.commentable_id->...`"; U6 with `undefined !== 1`
+    (now the schema's parse, which refuses a report without its format);
+    D1 and D2 with `error: unknown option '--json'`, `1 !== 2`; D3 with
+    `0 !== 1`. U5 passed, as a bound on size must against an empty comment.
+  - D3 and U6 failed with assert's own message; both were given one.
+- Built, as section 2 of the brief has it, with the escape above:
+  - `schemas.ts`: `CHECK_REPORT_FORMAT` and `CheckReportSchema`; `CheckReport`
+    and `ClaimCheck` inferred from it, each property comment kept.
+  - `check.ts`: `diff()` sets `report` first; `COMMENT_MARKER`,
+    `COMMENT_MAX_ROWS` and `FIX`; `rows`, `notes` and `tally`, from which
+    `reportLines` and the new `reportMarkdown` are made; `table`, `block` and
+    `code`; `side` without its `skipped`.
+  - `cli.ts`: `CheckOptions` gains `json`, `markdown` and `out`; `runCheck`
+    writes the comment, then prints the JSON; `check` takes `--json` and
+    `--markdown <path>`; `out` is defined once in `main`, beside `err`, for
+    the full run and `check`.
+- Checked by hand: `dbtruth --json check --url <fixture> --markdown c.md`,
+  the program's `--json` before the name, printed the report (`report`,
+  `database`, `schemaChanged`, `settings`, `claims`, `relations`, 12 claims)
+  and wrote the all-clear, `<!-- dbtruth-check -->` and `dbtruth: 12
+  unchanged`. U5's comment measures 37,220 bytes for eighty stale claims on
+  the longest names, 28,098 for eighty not measured and 27,975 for eighty
+  regressions.
+- Docs: README "Keeping context true" (two commands, "stdout stays empty
+  unless `--json` asks for the report there", a paragraph for each flag, the
+  example comment, which D1 compares with a real run), the troubleshooting
+  row of `could not write <path>: <error>`; NOTES 0.3.0, a new entry after
+  `check`'s; CHANGELOG 0.3.0, one bullet; `--help`, the two options.
+- Test changes, none to an assertion, as the lead approved: the four
+  in-process `runCheck` calls gain `json: false` and `out`; the fixed report
+  and its `claim` helper move to module scope as `MOVED`; `MOVED` and `quiet`
+  gain `report: 1`. Named in NOTES.
+- `acceptance/checks.json`: T3.3's checks, A1 (D1, U6) and A2 (U1, U2, U3,
+  D1), nine on tests, the gate, five on docs (the README section, the
+  troubleshooting row, `check --help`, NOTES, CHANGELOG) and two invariants
+  (T3.2's three structure tests; D2 and D1). Every test check uses T3.2's
+  command, so the script runs it once. `acceptance/manual.json`: the
+  sabotage item, empty.
+- The task's test files with those that guard what it touches (`check`,
+  `remeasure`, `joins`, `structure`, `readme`: 63 tests) pass on Postgres
+  12.22 and 18.6, in throwaway containers loaded with every fixture file in
+  compose order; with `ci` and `acceptance` (79 tests) under Linux as uid
+  1000 in `node:20` (20.20.2) and `node:22` (22.23.3), from a copy of the
+  working tree with LF endings, against the 18.6 server. No container and
+  no copy of `fixture_template` was left.
+- `npm run verify` exits 0: 258 tests, 256 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T3.3`
+  prints `T3.3: 80/100`, every check passing but the sabotage item. `npm run
+  acceptance` over every task: every other task built so far still 100/100.
+  Every task's file checks pass on the final files, a few of which changed
+  after that run.
+- Lost Tests (-20): `FAIL T3.3 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead: the pipe escaped in the cells rather than in `code()`
+  (above). The brief's sabotage "no `|` escape in `code()`" becomes "no `|`
+  escape in `table()`", which U4 must catch.
+### Iteration 2: 80/100
+- Four reviews gave sixteen findings. Each was checked against the code and
+  the plan before acting; none rejected. Two were one bug (the spread in
+  `code()` and the catch around it) and were fixed together; one was taken
+  in the second form it offered (`--json`, below).
+- Checked first, on iteration 1's code: the size test's eighty stale rows
+  came to 37,220 bytes with the cap and would come to about 59,200 without
+  it (734 bytes a row), under GitHub's limit either way, so the test held
+  without the cap; `reportMarkdown` of a relation named `` "`a" `` repeated
+  200,000 times threw `RangeError: Maximum call stack size exceeded`; a
+  report with a changed schema, a claim not measured and one unchanged,
+  which fails nothing even under `change`, gave a note and a `<details>`
+  block, not the marker and the counts alone. BUILD_PLAN.md already has
+  changed and not measured in T3.2's table.
+- Fixed:
+  - The fence and the catch (bugs, rules): `code()` finds the longest run
+    of backticks with a `reduce`, where it spread every run into
+    `Math.max`, and `runCheck` renders the comment before the `try`, which
+    now holds the write alone, so `could not write <path>` means a write
+    failed. New test "a name of 200,000 backtick runs, which a snapshot can
+    hold, is still one code span in one cell" failed on iteration 1's
+    `code()` with that `RangeError`.
+  - The size test renders a hundred stale rows, 75,508 bytes without the
+    cap, so it fails when the cap goes; with it the comment is 38,021.
+  - A stale claim's Before cell holds its status in the snapshot, since the
+    plan's table has claim, before, after and hit rates for stale items too;
+    a relation added or dropped still has none. stderr's line, T3.2's and
+    pinned by its test, still leaves it out: `reportLines` prints the before
+    for a row that is not stale, where it tested for a before. `rows` gives
+    every claim its before, and writes the fields both kinds of claim share
+    once.
+  - The notes come after the rows and `and <n> more`, before the fix line,
+    so the parts the plan names keep its order; they are not folded. U1 and
+    the README's example follow, and D1, which compares that example with a
+    real run, passes.
+  - `block()` is gone: the comment is a list of parts, the empty ones
+    dropped and the rest joined once with a blank line between two. `asIs`
+    is gone: `rows` and `notes` take the name as it is by default.
+  - Comments: `runCheck`'s says a check that cannot write the comment prints
+    no JSON, where it said no report; `COMMENT_MARKER`'s and the header of
+    `schemas.ts` no longer speak of an Action that does not exist yet.
+  - NOTES: changed and not measured are T3.2's classes, which T3.3 does not
+    place, not classes added after the plan; the all-clear is a report of
+    unchanged claims, or of none, with nothing to note, and a note or a
+    claim not measured still shows; the schema test is described as the
+    three reports it parses; the fence, the size, the catch around the
+    write alone, the stale Before and the notes' place as built. The
+    all-clear test is retitled to say the same, and `acceptance/checks.json`
+    follows (A2, `comment`, `all-clear`), with a `long-name` check for the
+    new test.
+  - README: the troubleshooting row tells the user to give `--markdown` a
+    path to a file, in a directory that exists and this user can write; the
+    comment's description has the notes in their new place.
+  - `remeasure.test.ts`: `REGRESSION` moves down to the two tests that use
+    it, and its comment says it is what "a broken foreign key is a
+    regression" does to the copy. That test keeps its own two statements
+    (4.4).
+  - `check.test.ts`: `quiet` is `reportOf(...)`, the same value, where it
+    spelled out the literal the helper returns. No assertion changed; named
+    in NOTES.
+- Taken in its second form, the `--json` finding (plan, major): `--json`
+  stays the whole `CheckReport`, each verdict with its query and reason.
+  Holding it to names, statuses, counts and rates would take the query out
+  of every verdict in the report T3.2 defines, against R7 and T3.3's own
+  "the `CheckReport` on stdout". NOTES no longer settles this as a reading:
+  it names the conflict and puts it to the lead (below).
+- Sabotage of the fixes, `src/check.ts` restored from a copy and compared
+  with `cmp` each time: the cap removed (`const shown = all`), "a comment
+  of the longest names Postgres allows stays under GitHub's 65,536
+  characters" failed with `75508 bytes`, and the row-cap test with it; the
+  runs spread into `Math.max` again, the new test failed with `RangeError:
+  Maximum call stack size exceeded`; `reportLines` printing a stale claim's
+  before, "reportLines: notes, ..." failed with `stale
+  suspicion:inconsistent_values:orders.status: confirmed -> orders.status
+  is not in the database` where the line without `confirmed ->` was
+  expected; the stale claim's before dropped from `rows`, U1 failed with an
+  empty cell where `confirmed` was expected. Restored.
+- `npm run verify` exits 0: 259 tests, 257 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T3.3`
+  prints `T3.3: 80/100`, every check passing but the sabotage item. The
+  file checks of every task, 76, still match README.md, NOTES.md and the
+  other files.
+- Lost Tests (-20): `FAIL T3.3 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record of the task's
+  core; the sabotage check is done by a later stage. The sabotages above
+  are of this iteration's fixes only.
+- Open for the lead, no point depends on any:
+  - `--json` against T3.3's third bullet. Should `--json` print each
+    verdict with its query, numbers and reason, as built, from the first
+    bullet ("the `CheckReport` on stdout") and R7, or only names, statuses,
+    counts and rates, as the third bullet says of both formats? The second
+    needs a shape of its own for `--json`, without the query R7 asks of
+    every verdict; T4.1 reads only the counts from it.
+  - The pipe escaped in the cells rather than in `code()` (iteration 1).
+  - `quiet` in T3.2's "reportLines: notes, ..." test is now built by
+    `reportOf`, one step past the `report: 1` the lead approved for it.
+- Sabotage check of the task's core (section 4.5), with the task's two
+  test files (`check`, `remeasure`: 41 tests, all passing before) run
+  after each break. `src/check.ts` and `src/cli.ts` were copied outside
+  the repository first; after each break the file was restored from its
+  copy, `cmp` identical, and `git diff HEAD -- <file>` printed byte for
+  byte the diff saved before.
+- Sabotage: the marker after the counts in `reportMarkdown`; "a report of
+  unchanged claims, or of none, with nothing to note is the marker and its
+  counts alone: ..." failed with "the marker first, the counts, and no
+  other line", `dbtruth: 1 unchanged` before `<!-- dbtruth-check -->`, and
+  "check --json prints the report alone on stdout, and --markdown writes
+  the comment the README shows" with "the README's example comment", U1
+  and "no hidden value reaches --json or --markdown" with it. Restored.
+- Sabotage: the cap keeping the last rows, `all.slice(-COMMENT_MAX_ROWS)`;
+  only "the comment shows at most 50 rows, the most serious first, then
+  how many more" failed, and with assert's own "Expected values to be
+  strictly deep-equal", five drift rows where five regressions. Its
+  comparison of the rows past the cap was given a message saying what it
+  checks, and the repeated sabotage failed with "the regressions take
+  every row, the drifts none". Restored.
+- Sabotage: the table and the fold swapped, `!` moved from `folded` to
+  `open`; "the comment on a report with every class: ..." failed with the
+  drift, improved, changed and not measured rows in the table where the
+  regression and the stale rows were expected, "check --json prints the
+  report alone ..." with "the README's example comment", the regression
+  inside `<details>` under `<summary>1 regression</summary>`, and the
+  row-cap test with "nothing left to fold". Restored.
+- Sabotage: `code()` returning the name as it is, `return text` first; "a
+  name from the snapshot or the database is code in the comment: ..."
+  failed with "no line | regression | ` relationship:comments.
+  commentable_id->posts.id[commentable_type=x \| forged \| row \|] ` |
+  confirmed 100.0% | broken 80.0% |", "a name of 200,000 backtick runs,
+  ..." with "no row of the name in a fence of two", and U1 and D1 with the
+  names outside code spans. Restored.
+- Sabotage: no pipe escaped in `table()`, `(cell) => cell`; only "a name
+  from the snapshot or the database is code in the comment: ..." failed,
+  with "no line | regression | ` relationship:comments.commentable_id->
+  posts.id[commentable_type=x \| forged \| row \|] ` | ...". Restored.
+- Sabotage: `code()` keeping the line breaks in a name, `const inline =
+  text`; only the same test failed, with the same "no line | regression |
+  ` relationship:comments.commentable_id->...`". Restored.
+- Sabotage: the reason a claim was not measured written into the After
+  cell, ``reason ? `${after} (${reason})` : after`` in `table()` (R3: the
+  comment holds names, statuses, counts and rates); only "the comment on a
+  report with every class: ..." failed, its diff showing `| unverifiable
+  (time budget exhausted) |` where `| unverifiable |`. Restored.
+- Sabotage: `diff()` without `report: CHECK_REPORT_FORMAT`; "the report is
+  the value CheckReportSchema describes, whole" failed with "ZodError:
+  [{ "code": "invalid_value", "values": [1], "path": ["report"],
+  "message": "Invalid input: expected 1" }]" (the TAP reporter prints the
+  error as `''`, the spec reporter in full), and "check --json prints the
+  report alone ..." with the same error at its parse of stdout. Restored.
+- Sabotage: `runCheck` printing its report lines with `out` in place of
+  `err`; "check --json prints the report alone ..." failed with
+  "Unexpected token 'o', "note the sc"... is not valid JSON", "a comment
+  that cannot be written stops check with exit 1 and no JSON" with "no
+  JSON", `check fixture: 12 unchanged` on stdout, and T3.2's sixteen tests
+  that read check's stderr, "... and stdout stays empty" among them.
+  Restored.
+- Sabotage: the failed write passed over, `return EXIT_FAILURE` dropped
+  from its `catch`; only "a comment that cannot be written stops check
+  with exit 1 and no JSON" failed, with "check fixture: 12 unchanged /
+  could not write context: EISDIR: illegal operation on a directory, ..."
+  and `0 !== 1`. Restored.
+- No sabotage left every test green. One failed its test only with
+  assert's own message; that comparison was given one, in T3.3's own
+  row-cap test, and no other test changed. With it the two files pass:
+  41 tests.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  259 tests, 257 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T3.3` prints `T3.3: 100/100`, every
+  check passing.
+### Iteration 3: the lead's answers
+- The `|` escape on each table cell in `table()`, not inside `code()`:
+  approved. Checked with cmark-gfm; the brief's version showed a stray
+  backslash for a name in a note, outside any table.
+- `--json` keeps each verdict's query and reason: decided. Section 0, item 6
+  of the plan makes section 3 win over a task's text, and R7 asks every
+  verdict to carry a query a human can rerun, while R3 lists query text among
+  what an output may carry; the reasons are what `Verified` already carries.
+  T3.3's "only names, statuses, counts and rates" holds for the pull request
+  comment, which carries neither.
+- `quiet` in T3.2's `reportLines` test built with `reportOf(...)` to the same
+  value, no assertion changed: approved.

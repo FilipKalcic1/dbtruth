@@ -1535,6 +1535,108 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     review like code, and a claim the snapshot never measured fails a build
     only once a name it uses is gone, so any other break on it waits for the
     next full run.
+- **`check --json` prints the report, and `--markdown` writes it as a pull
+  request comment.** `diff()` returns one `CheckReport`, and it is shown three
+  ways from one ordering: `rows`, `notes` and `tally` in `check.ts` give the
+  items that are not unchanged, most serious first, the notes and the counts;
+  `reportLines` prints them on stderr, byte for byte as before, and
+  `reportMarkdown` writes them as the comment; `--json` prints the object
+  itself. The comment is written first, then the JSON printed, then check
+  exits 0 or 2 as before.
+  - **The report has a schema and a format.** `CheckReportSchema` in
+    `schemas.ts` replaces the TypeScript types, which are now inferred from it,
+    as the T3.2 entry said, and its `report` field is `CHECK_REPORT_FORMAT`,
+    1, raised as `SNAPSHOT_FORMAT` is, whenever a reader of an older format
+    would misread the report. Nothing parses the report at run time: the
+    schema is the contract for the Action (T4.1), `mcp` (T5.1) and the tests.
+    One checks that the reports `diff` returns for a regression and for a
+    stale claim, and the fixed report the rendering tests use, each equal
+    their own parse, so none holds a key the schema lacks; the integration
+    test parses a real `--json` report the same way.
+  - **`--json` is the report whole,** each verdict with its query, its
+    numbers and the reason it was not measured, as a full run's `--json`
+    prints them (R7; R3 lets query text out). Here T3.3's first bullet, the
+    `CheckReport` on stdout, and R7 conflict with its third, that both
+    formats hold only names, statuses, counts and rates: `--json` follows the
+    first two, the comment the third. Put to the lead (PROGRESS, T3.3,
+    iteration 2). stdout holds JSON exactly when check exits 0 or 2: nothing
+    when it cannot run, and nothing when the comment cannot be written
+    (below).
+  - **The comment, and why it is laid out so.** The first line is the marker,
+    `<!-- dbtruth-check -->`, by which the Action will find its comment; then
+    one line of counts. The table holds what fails the default build,
+    regressions and stale items; a `<details>` block holds the rest: drift
+    and improvements, as T3.3 says, and changed and not measured, the other
+    classes of T3.2's table that fail no default build, which T3.3 does not
+    place. The columns are Class, Claim, Before and After, with the hit rate
+    inside each side. A stale claim's Before is its status in the snapshot,
+    which T3.2's line on stderr leaves out; a relation added or dropped has
+    none. At most 50 rows, counted over the whole comment in class order,
+    then `and <n> more`. The notes, which the plan does not place, come after
+    the rows, so that the parts it names keep its order, and are never
+    folded, so that the note on other settings, the only sign that a pull
+    request edited `measuredWith`, stays in view. Then the fix line when
+    there is one. A report whose claims are all unchanged, or that has none,
+    with nothing to note gives the marker and the counts alone, the all-clear
+    an older comment is updated to; a note or a claim not measured still
+    shows.
+  - **No query and no reason.** A reason can be the server's words, and a
+    comment is mailed to everyone who watches the pull request. The log and
+    `--json` keep both.
+  - **Names are code spans.** A claim's id carries free text since T2.3, a
+    condition's value from the model or from a snapshot a pull request edited,
+    and a relation or a database can have any name Postgres takes quoted. In
+    code GitHub makes no mention, issue reference, emoji or link, and reads no
+    HTML. The fence is one backtick longer than the longest run in the name,
+    with a space inside each end, which CommonMark strips; a line break becomes
+    a space. The longest run is found in one pass over the runs, not by
+    spreading them into `Math.max`, which overflows the stack at about
+    150,000 runs, a name of 300 KB in a snapshot that can hold 10 MB. A pipe inside a table cell is escaped with a backslash, because
+    cmark-gfm, GitHub's renderer, ends a cell at any other pipe, inside code
+    too: in `ext_scanners.re` a cell is `(escaped_char|[^|\r\n])+` and re2c
+    takes the longest match, so a pipe right after a backslash never ends a
+    cell, even after a second backslash, and `unescape_pipes` in `table.c`
+    then drops one backslash before each pipe. Checked with cmark-gfm
+    compiled to wasm: a name with a line break and pipes, one with a
+    backslash before a pipe and two backticks in a row, and `</details><img
+    src=x>@octocat` each stay text in one cell of one row. The escape is made
+    in the table's cells, not in the code span: in a note, outside a table, a
+    pipe ends nothing, and the backslash would be shown (`shop\|ci` for
+    `shop|ci`, also checked). This closes, for the comment, the raw names
+    T2.3 and T3.2 left; stderr still prints them raw, as the lead decided.
+  - **50 rows is a constant,** part of the comment's format, an exception to
+    R5 like the snapshot's 10 MB: GitHub refuses a body over 65,536
+    characters, and stderr and `--json` keep every item. At the lengths
+    Postgres allows, 63 bytes to an identifier, `schema.table.column` on both
+    sides of a join and a condition's value of 30 characters, the longest a
+    categorical column holds by default, an id is 493 characters. A hundred
+    such claims, stale, each naming the column it lost, give a comment of
+    38,021 bytes, and 75,508 without the cap; a hundred regressions, 27,976.
+    A condition with a longer value, a suspicion over many tables, or a
+    snapshot edited by hand can pass the limit; the Action is to cut such a
+    body (T4.1).
+  - **A comment that cannot be written exits 1.** A check that cannot write
+    it has not done what it was asked, so it prints no JSON: a job that reads
+    stdout finds nothing, not a pass without its comment. The line is `could
+    not write <path>: <error>`, whose row the README extends. Only the write
+    is caught: the comment is rendered before it, so a fault in rendering
+    reaches `main` as itself, not as a file that could not be written. A
+    connection error still reaches `main`, which prints it after `dbtruth: `.
+  - `CheckOptions` gains `json`, `markdown` and `out`, as `RunOptions` has
+    `json` and `out`. A program-level `--json` given before `check` is merged
+    in, as `--url` is.
+  - Test changes, none to an assertion, approved by the lead: the four
+    in-process `runCheck` calls (`checked` in `check.test.ts`, `checkIn` in
+    `remeasure.test.ts` and two in `joins.test.ts`) pass `json: false` and an
+    `out`; the fixed report of "reportLines: notes, ..." and its `claim`
+    helper move to module scope as `MOVED`, and `MOVED` and `quiet` gain
+    `report: 1`. After review, `quiet` is built by `reportOf`, the helper of
+    the new tests, to the same value; put to the lead (PROGRESS, T3.3,
+    iteration 2).
+  - Not done: shortening long names; `--fail-on` in the comment's first
+    lines; queries or reasons in the comment; escaping names on stderr; a
+    Markdown renderer in the tests, which compare the text; `--markdown -`,
+    since stdout holds JSON only (R6).
 - **The README says what a team will pay for, with the price and the waitlist
   left to a person.** The paid tier of the plan's section 2 is the GitHub
   Action on private repositories. A section, "Team tier", says so before the
