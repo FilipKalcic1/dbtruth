@@ -4145,6 +4145,17 @@ of each lost point, in the format of section 4.7 of the plan.
   iterations 1 and 2. Cause: each is a run on GitHub, which needs the
   Action's repository pushed (the lead's list in iteration 2, the red run
   on a sabotage branch included).
+### Iteration 4: 100/100 (the lead)
+- The maintainer created FilipKalcic1/dbtruth-action and pushed it after
+  granting the gh token the `workflow` scope (creating a public repository
+  was not the agent's to do). The runs on GitHub:
+- A1: https://github.com/FilipKalcic1/dbtruth-action/actions/runs/36151534406 (main, 0cc5eb8): scripts, scenarios and log green. pass: "check fixture: 12 unchanged"; fail: "check fixture: 1 regression, 11 unchanged"; skipped: the notice; error: "dbtruth: could not connect to the database: authentication failed; check the user and password in the URL".
+  First run 36151307682 (81c91d4): scripts and scenarios green; log red because gh api refuses to print a log with terminal escape sequences (its --allow-escape-sequences flag is not in gh 2.95); fixed with curl in 0cc5eb8.
+- A2: https://github.com/FilipKalcic1/dbtruth-action/pull/1, pushed twice (runs 36151722873 and 36151846504, all green): one comment by github-actions[bot] after the first push (id 5834631459, "<!-- dbtruth-check --> / dbtruth: 1 regression, 11 unchanged"), still exactly one after the second. The second run found it by marker and author and sent PATCH (no warning in the log, and no second comment although the report had findings, which would have created one); the body was identical, so GitHub records no edit. The scripts job's fake-gh cases prove a changed body is updated in place (one POST and two PATCHes in all). The pull request was closed without merging and its branch deleted.
+- A3: the skipped scenario in run 36151534406: "##[notice]dbtruth check skipped: database-url is empty, as it is on a pull request from a fork, which gets no secrets", result skipped, step green.
+- A4: in run 36151534406 the log job fetched the scenarios job's real log (1,144 lines), found dbtruth's authentication line and not the password; a re-check of the whole run log found "canary-pii-wrong" 0 times; the error scenario found it in no file the Action wrote; the pull request's comment holds no URL.
+- Sabotage (GitHub): branch ci-sabotage (exit 2 reported as pass in scripts/check.sh), run https://github.com/FilipKalcic1/dbtruth-action/actions/runs/36152049336 red: scripts job failed 4 cases ("a regression and two stale items fail: got ... result=pass ..., expected ... result=fail"), scenarios failed. Branch deleted, locally and on GitHub.
+
 
 ## T5.1 `dbtruth mcp`
 ### Iteration 1: 80/100
