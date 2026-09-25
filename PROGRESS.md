@@ -2384,3 +2384,740 @@ of each lost point, in the format of section 4.7 of the plan.
   passes; `npm run acceptance -- --task T6.1` prints `T6.1: 100/100`, every
   check passing. T1.5, whose checks run the same test file, is still
   100/100.
+
+## A rare failure of the verify gate (the lead, after T6.1)
+- Seen three times, never with its cause: once while T0.1 was built (a
+  database test file, output not kept), and twice as `FAIL <task> verify
+  gates: exit 1` inside `npm run acceptance` (T0.2 after T3.1, T1.5 after
+  T6.1), each time with every other task's identical `verify` passing in the
+  same batch. A rerun of the task passed each time.
+- Not reproduced outside the acceptance runs: 12 runs of `npm test`, 5 and
+  then 30 runs of `npm run verify` in a row, all green. Two suspects measured
+  and cleared: the 40,000-suspicion parse takes about 200 ms of its 2 s limit,
+  and `connect()` 28 ms at the median and 57 ms at most, under load, of the
+  0.2 s limit one safety test sets.
+- The first 20 lines the acceptance script prints of a failed `npm run
+  verify` are its preamble, so the cause was cut off every time. A failed
+  check's whole output is now also written to a file in the temporary
+  directory and its path printed (`full output: ...`); test "one passing and
+  one failing check ..." asserts it. Sabotage: the path line removed; that
+  test failed. Restored. The next occurrence will show its cause.
+- Seen again, with its output, in T1.4's first `npm run verify`, run on its
+  own: `not ok 148 - 300 tables: the budget is respected and output still
+  renders`, at `assert.ok(statuses.includes("unverifiable"), "some
+  measurements ran out of budget")`, `test/scale.test.ts` line 50; 206 tests,
+  203 pass, 1 fail, the 2 live tests skipped. The rerun passed.
+- Cause: a race in that test's own assumption. It gives the run a budget of
+  0.3 s and asserts that some claim runs out of it. Sampling may use 60% of
+  the budget (`extractBudgetShare`), the fake model then proposes one claim
+  per sampled table and 20 more, and verify has the rest. Whether a claim is
+  left over depends on how fast the server answers each phase: slow while
+  sampling and quick while verifying, few tables are sampled, their few
+  claims all fit, none is unverifiable, and the assertion fails. Measured
+  with a script that repeats the test's run and prints its counts (in the
+  scratchpad, not the repository): alone, 15 runs sampled 26 to 43 tables and
+  left 2 to 30 claims unmeasured, the 2 a near miss; three at once, as `npm
+  test` runs the database files side by side against one server, 5 of 45
+  runs sampled 20 to 22 tables and measured all 40 to 42 claims, each a
+  failure of this test.
+- This is the first failure of the gate whose output was kept. The three
+  before it fit this cause (a database test file, a full parallel run, a
+  rerun that passed), but their output is lost, so it is not proven that
+  they were this test.
+- Not changed: the test is an earlier task's, and section 4.4 rules out
+  rewriting it without a decision. For the lead: make the budget run out by
+  construction rather than by timing. One way is `extractBudgetShare: 1` in
+  the test's flags, so that sampling spends the whole budget and verify finds
+  none left, while no machine samples 300 tables in 0.3 s; the test would
+  still show that the budget is respected, extraction stops, and the output
+  renders.
+- Fixed by the lead after T1.4: the test's flags gain `extractBudgetShare: 1`,
+  so sampling spends the whole 0.3 s, which 300 tables always exhaust, and
+  verify finds no budget left; the assertions are unchanged. Twelve runs of
+  the whole scale file, three at a time against one server, all passed. The
+  loop of 30 `npm run verify` before it did not reproduce the failure, which
+  fits a cause that needs the load of a full parallel run.
+
+## T1.4 `dbtruth init`
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 and T1.4 of the plan, with T1.1, T1.3, T1.5,
+  T5.1, T5.2, T6.1, T7.1 and Appendices B and E; `src/cli.ts`,
+  `src/safety.ts`, `src/doctor.ts` and their tests, `test/readme.test.ts`,
+  `test/acceptance.test.ts`, `scripts/acceptance.mjs` and
+  `scripts/pack-smoke.mjs`; README.md, NOTES.md (0.2.0 and 0.3.0),
+  CHANGELOG.md, the iterations above and `acceptance/`.
+- Scope, as the lead set it: no `--skill` and no `claude mcp add` line, which
+  need the skill file of T5.2 and the server of T5.1. NOTES says each task
+  adds its part when it lands; no option or placeholder stands for them.
+- Checked before designing, on this machine (git 2.50.1, Node 22.18):
+  `git check-ignore --quiet --no-index .env` exits 1 with no `.gitignore`,
+  with `.env.local`, `.env/`, and `.env*` then `!.env`, and 0 with `.env`,
+  `/.env`, `.env*`, `*.env` and `*`; without `--no-index` a tracked `.env`
+  that `.gitignore` lists exits 1. Git reads `~/.config/git/ignore` with no
+  global config at all, and this machine has one; a repository's own empty
+  `core.excludesFile` shuts it out. Opening a directory named `.env` with `wx`
+  fails with `EEXIST`; `spawnSync("git")` with `PATH` empty fails with
+  `ENOENT`; outside a repository git exits 128.
+- Tests first, `test/init.test.ts`, ten tests, in `test:unit`: they need git,
+  not the databases.
+  - On the code as committed the file does not load: `The requested module
+    '../src/cli.js' does not provide an export named 'runInit'`. `dbtruth
+    init` prints `error: too many arguments. Expected 0 arguments but got 1:
+    init.` and exits 1, as the README said.
+  - On a stub `runInit` that printed nothing and returned 0, with the README
+    as committed, each failed on its own assertion: A1 with `no .env at the
+    root`; the nested package with `[]` for `wrote ..\..\.env` and the
+    warning naming `..\..\.gitignore`; the placeholders with `ENOENT` opening
+    the `.env`; the existing `.env` with `[]` for `.env already exists; left
+    as it is`; the `.env` directory with `0 !== 1`; the `.gitignore` cases
+    with `[]` for `wrote .env` and the warning; git missing with `[]` for the
+    warning that git could not say; outside a repository with `[]` for
+    `wrote .env`; A3 with "no block of next steps after the quick start's
+    `npx dbtruth init`"; the command with `error: too many arguments ...` and
+    `1 !== 0`. The stub was then removed; `src/cli.ts` matched `HEAD` again.
+  - That run also showed the README lookup was loose: with no block after
+    the quick start's mention of `init`, it took the closing fence of the
+    `bash` block for an opening one and read half the page as the next
+    steps. Both lookups now read the quick start section alone, and the block
+    must open with the first fence after the mention.
+- Built: `runInit` in `src/cli.ts`, beside `runCheck` (Appendix B has no
+  module for it), and the `init` subcommand, with no options;
+  `repositoryRoot` exported from `src/safety.ts`, T1.1's walk, not a second
+  one. It writes the `.env` at the repository root, or in the working
+  directory outside a repository, with `wx`, unless a file is there, which
+  it leaves as it is and says so; asks `git check-ignore --quiet --no-index
+  .env` at the root, inside a repository only; prints on stderr what it did,
+  a warning when git does not ignore the file or could not say, and the next
+  steps; exits 0, or 1 when it could not write. The file holds the quick
+  start's two settings and `ANTHROPIC_MODEL=claude-sonnet-5`, each behind
+  `# `, under two comment lines of their own.
+- Checked by hand: from `packages/api` of a scratch repository, `wrote
+  ..\..\.env`, the warning with both paths, the next steps, exit 0; the file
+  as written; a second run after `.env` went into `.gitignore`, stdout empty
+  and exit 0; `init --skill` refused as an unknown option, exit 1. Then
+  `doctor` from there: `FAIL no database URL: set DATABASE_URL in
+  ..\..\.env, ...` on the untouched file, and every check `ok` once
+  `DATABASE_URL` was uncommented and set to the fixture (with the variable
+  removed from the environment: set but empty, it hides the file's, as
+  T1.1 has it).
+- Under Linux as the non-root `node` user, in `node:20` (20.20.2) and
+  `node:22` (22.23.3), git 2.39.5, from a copy with LF line endings: the
+  init, readme, structure, cli and acceptance test files, 37 tests, 37 pass
+  on each. There too, a dangling `.env` link makes `init` exit 1 with
+  `EEXIST` and write nothing where it points, and a link to a file is left
+  as it is, as NOTES says.
+- Docs: README (the quick start's paragraph on `init` with the next steps in
+  a block, and no "coming"; the Commands list; the Team tier's sentence on
+  what stays free forever; rows for the three new messages; the row for
+  `could not write <path>: <error>` covering `init`'s; the row for an unknown
+  command naming only `mcp` as not built), NOTES (the entry under 0.2.0:
+  what, why, the git decision, the README as the reference for the next
+  steps, what is left to T5.1 and T5.2, what is not done), CHANGELOG (0.2.0),
+  `--help` (`init` in the program's list; `init --help` has only `-h`).
+  `acceptance/checks.json`: T1.4's checks, three for the A-items, twelve on
+  tests, the gate, seven on docs, four invariants; T1.5's `readme-init-coming`
+  is now `readme-init`, and its `readme-commands` no longer expects `init` to
+  be coming, as NOTES says. `acceptance/manual.json`: the sabotage item,
+  empty.
+- `npm run verify`: the first run exited 1 on `test/scale.test.ts`, not on
+  anything of this task; the cause is in "A rare failure of the verify gate"
+  above. The rerun exits 0: 206 tests, 204 pass, the 2 live tests skipped,
+  and the package smoke test passes.
+- `npm run acceptance -- --task T1.4` prints `T1.4: 80/100`, every check
+  passing but the sabotage item. `npm run acceptance` over every task: T0.1,
+  T0.2, T1.1, T1.2, T1.3, T1.5, T2.1, T3.1, T3.2 and T6.1 still 100/100,
+  after T1.5's two checks changed.
+- Lost Tests (-20): `FAIL T1.4 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead, no point depends on either: the fix for the scale test
+  above; and whether "the README the single source" of the next steps meant
+  `init` reading `README.md` at run time. Built: the README is the
+  reference, `init` keeps a copy, and the test holds the two, and the line
+  for `CLAUDE.md` under "Giving it to your agent", equal; NOTES says why.
+### Iteration 2: 80/100
+- Four reviews, nine findings, each checked against the code and the plan
+  before acting; none rejected. Three were one finding: git's answer took in
+  the user's own ignore file, while the plan and the quick start speak of
+  `.gitignore`.
+- Checked first, on this machine: in a repository whose config points
+  `core.excludesFile` at a file listing `.env`, `git check-ignore --quiet
+  --no-index .env` exits 0, and with `-c core.excludesFile=` before
+  `check-ignore` it exits 1; `.git/info/exclude` listing `.env` still gives
+  0 with that option. From Node 22.18, with `NoDefaultCurrentDirectoryInExePath`
+  deleted (Git Bash sets it), `spawnSync("git", ...)` with `cwd` on a
+  directory holding an empty `git.exe` fails with `EFTYPE`: that file was
+  started, not the git on the `PATH`; with `-C <dir>` and the temporary
+  directory as `cwd`, git answers 1. A test with `{ timeout: 50 }` whose
+  synchronous body waits 500 ms on a child reports `ok`.
+- Fixed:
+  - The warning is about `.gitignore`, as the plan says: `runInit` runs `git
+    -c core.excludesFile= check-ignore --quiet --no-index .env`, so a rule in
+    the user's own ignore file, which covers one machine, no longer silences
+    the warning a teammate's clone needs. Both warnings name the file they
+    are about: `WARNING: .gitignore does not ignore .env; add this line to
+    it: .env`, and `WARNING: git could not say whether .gitignore ignores
+    .env; if it does not, add this line to it: .env`. The quick start's
+    sentence, "asks git whether `.gitignore` ignores `.env`", is now what the
+    code does, so it stays; the two rows, NOTES and CHANGELOG follow. The
+    test helper no longer empties `core.excludesFile` in each repository,
+    since `init` now does; the new test "the user's own ignore file does not
+    stand in for the line in .gitignore" sets it in the repository's config,
+    the key a global setting uses. `.git/info/exclude` still counts, since
+    `check-ignore` cannot skip it; NOTES lists it under not done.
+  - Outside a repository `init` asks git too, and prints that git could not
+    say, with the line: the plan makes no exception, and the directory may
+    become a repository with the `.env` in it. The `if (root)` is gone: one
+    directory, `dir`, names both files and is where git looks. The test
+    outside a repository expects the warning, and its row names the case.
+  - Git is started in the temporary directory and pointed at the repository
+    with `-C`, so on Windows a `git.exe` in the repository is never the git
+    that runs. New test "init never runs a git.exe the repository holds": an
+    empty `git.exe` at the root, the variable deleted while `init` runs.
+  - A1 and A2 through the command: the command test runs in a fresh
+    repository and compares every other file, `.git` included, before and
+    after, and is a second lookahead of A1 and of A2.
+  - The ten `{ timeout }` options, dead on synchronous tests, are gone; the
+    `spawnSync` timeout in the command test, the one that works, stays.
+  - The block of next steps is found by its first line, `next steps:`,
+    without a lookahead.
+  - NOTES: the sentence on where `runInit` sits says why in plain words.
+- Sabotage of the fixes, `src/cli.ts` restored byte for byte after each:
+  without `-c core.excludesFile=`, "the user's own ignore file ..." failed,
+  its expected warning missing from the lines; git started with `cwd: dir`,
+  "init never runs a git.exe ..." failed with `WARNING: git could not say
+  whether .gitignore ignores .env; ...` where the other warning was
+  expected; git asked inside a repository only, "outside a repository ..."
+  failed, the warning missing; the `init` command renamed, the command test
+  failed with `error: too many arguments. Expected 0 arguments but got 1:
+  init.` and `1 !== 0`, and A1 with it. In README.md, the block's first line
+  changed: "the next steps ..." failed with `no block of next steps in the
+  quick start`, as did every test that compares printed lines. README.md
+  restored byte for byte.
+- `npm run verify` exits 0: 208 tests, 206 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T1.4`
+  prints `T1.4: 80/100`, every check passing but the sabotage item. T1.5 and
+  T6.1, whose checks read the rows and the Team tier, still 100/100.
+- Lost Tests (-20): `FAIL T1.4 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record of the task's
+  core; the sabotage check is done by a later stage. The sabotages above are
+  of this iteration's fixes only.
+- Open for the lead, as in iteration 1; no point depends on either.
+- Sabotage check of the task's core (section 4.5), with `test/init.test.ts`
+  run after each break. `src/cli.ts` and `test/init.test.ts` were copied
+  outside the repository first; after each break `src/cli.ts` was restored
+  from its copy, `cmp` identical, and `git diff HEAD -- src/cli.ts` printed
+  byte for byte the diff saved before.
+- Sabotage: the existing-file check dropped and the `.env` opened with `w`
+  in place of `wx`, so `init` writes over whatever is there; "an existing
+  .env is left as it is, byte for byte, and init says so and goes on" failed
+  with "Expected values to be strictly deep-equal: + '.env': Buffer(267) -
+  '.env': Buffer(113)" and a dump of both files' bytes, a message assert
+  generated. That comparison was given a message saying what it checks, as
+  the fresh repository's has. Repeated; the test failed with "every file,
+  .env included, as it was + '.env': Buffer(267) - '.env': Buffer(113)", and
+  "a .env that is a directory, such as a Python virtualenv, ..." and the
+  command test with "The input did not match the regular expression
+  /^could not write \.env: EEXIST: /. Input: "could not write .env: EISDIR:
+  illegal operation on a directory, ..."". Restored.
+- Sabotage: the `.env` written in the working directory, `const dir =
+  here`, not at the repository root; "from a nested package init writes the
+  .env at the repository root, and names both files from there" failed with
+  "+ 'wrote .env', + 'WARNING: .gitignore does not ignore .env; ...', -
+  'wrote ..\..\.env', - 'WARNING: ..\..\.gitignore does not ignore
+  ..\..\.env; ...'". Restored.
+- Sabotage: the `.gitignore` warning's condition inverted, the warning on
+  git's 0 and none on its 1; "git decides whether .env is ignored, and
+  .gitignore is only read" failed with "- 'WARNING: .gitignore does not
+  ignore .env; add this line to it: .env'", missing after 'wrote .env' in
+  the repository with no `.gitignore`, and seven other tests with it.
+  Restored.
+- Sabotage: `--no-index` dropped from `git check-ignore`. Every test stayed
+  green: no test had a `.env` git tracks, the case NOTES gives `--no-index`
+  for. New test "a .env git already tracks draws no warning when .gitignore
+  lists it": a `.env` added with `git add --force` under a `.gitignore` that
+  lists it, as when it was committed before the line went in; it passes on
+  the code as built. NOTES.md's list of the cases the tests cover names it,
+  and `acceptance/checks.json` has a check for it, as for each test in the
+  file. Repeated; the new test failed with "+ 'WARNING: .gitignore does not
+  ignore .env; add this line to it: .env'" after '.env already exists; left
+  as it is'. Restored.
+- Sabotage: `DATABASE_URL` written uncommented in the `.env`; "the .env init
+  writes holds no setting until a line is uncommented, and then that line's
+  alone, as the quick start writes it" failed with "nothing is read until a
+  line is filled in + { DATABASE_URL:
+  'postgres://user:password@host:5432/dbname' } - {}". Restored.
+- The changes left are the message on the byte-for-byte comparison, the new
+  test, its check and its words in NOTES.md.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  209 tests, 207 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T1.4` prints `T1.4: 100/100`, every
+  check passing.
+
+## T2.3 Conditional relationships for polymorphic references
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 of the plan and T2.2 to T2.4, with T3.1, T3.2,
+  T5.1 and Appendices A to C; the design brief for T2.3, T2.4 and T2.2 and
+  the lead's decisions in its section 7, which set the order T2.3, T2.4,
+  T2.2; `src/verify.ts`, `src/safety.ts`, `src/schemas.ts`, `src/check.ts`,
+  `src/write.ts`, `src/snapshot.ts`, `src/extract.ts`, `src/cli.ts`, both
+  prompts and their tests; README.md, NOTES.md (0.2.0, 0.3.0 and the limits),
+  CHANGELOG.md, the iterations above and `acceptance/`.
+- Checked before building, on the fixture server (Postgres 16) with pg 8.23:
+  a statement with an empty parameter list goes by the simple protocol, as
+  every statement `connect()` sends already does (`requiresPreparation` is
+  false without values), so the statements without a condition travel as
+  before; a NUL bound as a parameter is refused by the server with 22021,
+  `invalid byte sequence for encoding "UTF8": 0x00`, a `DatabaseError` with
+  its code, so the claim is unverifiable and the run goes on; the brief's
+  case for asking the lead, a throw without a SQLSTATE, which `connect()`
+  takes for a lost connection, does not arise; and `total_cents = $1`
+  with `05` bound compares as 5, where `total_cents::text = $1` does not.
+- The fixture first: `test/fixtures/polymorph.sql`, all of it, as the brief
+  writes it, mounted as `60-polymorph.sql` before the template, and loaded
+  once into the running server with `docker exec -i dbtruth-db-1 psql -v
+  ON_ERROR_STOP=1 -U dbtruth -d fixture < test/fixtures/polymorph.sql`: 300
+  `post` comments over ids 1 to 100 and 180 `photo` comments over 1 to 60;
+  `reltuples` 40, 480, 200, 40, 100 and 20 for accounts, comments,
+  invoices, photos, posts and refunds.
+- Tests first: eight unit tests (three in verify, two in schemas, one each in
+  write, check and snapshot) and six database tests in the new
+  `test/joins.test.ts`, which joins `test:db`; `fakeDb` in `verify.test.ts`
+  also records each statement's parameters. On the code as committed:
+  - `schemas.test.ts` did not load: `The requested module
+    '../src/schemas.js' does not provide an export named 'sqlString'`.
+  - On polymorph the condition was dropped by the schema and every branch
+    measured as the whole join: the post branch read `total: 480, hits: 480`
+    for 300 of 300; no statement held `::text = $1`, `[]` where seven values
+    were expected; no line of `comments.md` had `when commentable_type =
+    'post'`; the claim on `comments.nope` came back confirmed; and check
+    printed `check polymorph: 4 unchanged` for `11 unchanged`, the branches'
+    ids having fallen into the whole join's. The canary test passed, as it
+    must before and after.
+  - The verify tests: the statement read `FROM (SELECT * FROM
+    "public"."comments" LIMIT 50000) f`, no filter; the four statements of
+    the retries carried `[]` four times for `["photo"]`; the unknown and the
+    hidden column were queried (`nothing here should be queried`).
+  - The write test found no line with the condition; the check test classed
+    the branch whose column was dropped `not measured`, not `stale` with
+    `orders.status`; the snapshot test found one relationship where three
+    branches were written.
+- Built, as section 2.1 of the brief has it: `when` on `RelationshipSchema`,
+  optional and not nullable; the raw `[column=value]` suffix in
+  `relationshipId`; `sqlString` in `schemas.ts`; bind parameters through
+  `querySampled` and `runWithTextFallback`; `claimRows` and `column()` in
+  `verify.ts`, with an unknown condition column checked with the others, a
+  hidden one after emptiness, the filter in both forms of the join, and the
+  note `-- $1 = <value>` before the statement in the query kept, never in
+  the one run; the condition's column among a relationship's names in
+  `claimNames`; the condition in the per-table file's edge. Prompt A's
+  bullet replaced and its schema given `"when"?`; prompt B given the
+  sentence and the rule. The stored query for the photo branch is the
+  brief's section 2.2, character for character.
+- Where the code at HEAD and the brief differ: nowhere that changed what
+  was built. `SNAPSHOT_FORMAT` stays 1, as decided.
+- Checked beyond the tests: the fixture server reads `sqlString`'s literal
+  back as the value for `photo`, `x'; DROP TABLE posts; --`, a value with a
+  newline, quotes and a backslash, one with CR LF, one with `\n` as two
+  characters, a tab and a lone backslash, each on one line.
+- Docs: NOTES (the entry under 0.2.0, with the old and new bullet of prompt
+  A, the decisions and what is not done; the known limit renamed "A join is
+  unconditional unless its claim names a condition."; "One sample, one
+  target" no longer says polymorphic references go to a suspicion; the id
+  suffix under "Where string matching does appear"), README ("How it
+  works", and polymorph in the Development line), CHANGELOG (0.2.0), both
+  prompts. No option was added, so `--help` is unchanged. The one new text
+  is a verdict's reason, `<table>.<column> is hidden, so no condition on it
+  is measured`, shown where `unknown column <table>.<column>` is: in the
+  per-table files and after `unverifiable` on a `check` line. Reasons have no
+  troubleshooting rows and `test/readme.test.ts` does not read them, so the
+  table is unchanged.
+- `acceptance/checks.json`: T2.3's checks, four for the A-items (A4 the
+  brief's check on NOTES), thirteen on tests, the gate, seven on docs, three
+  invariants. `acceptance/manual.json`: the sabotage item, empty.
+- The database tests (`joins`, `remeasure`, `integration`, `doctor`,
+  `safety`, `sampling`, `scale`: 82 tests, 80 pass, the 2 live tests
+  skipped) pass on Postgres 12 (12.22) and 18 (18.6), in throwaway
+  containers loaded with every fixture file in compose order, as on 16. No
+  copy was left.
+- Under Linux as a non-root user (uid 1000), in `node:20` (20.20.2) and
+  `node:22` (22.23.3), from a copy of the working tree with LF endings and
+  `npm ci`, against the 18.6 server: the task's six test files with
+  `readme`, `ci`, `structure`, `acceptance` and `remeasure`, 103 tests, 103
+  pass on each.
+- `npm run verify` exits 0: 223 tests, 221 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.3`
+  prints `T2.3: 80/100`, every check passing but the sabotage item.
+  `npm run acceptance` over every task: T0.1, T0.2, T1.1, T1.2, T1.3, T1.4,
+  T1.5, T2.1, T3.1, T3.2 and T6.1 still 100/100; after the last edits to
+  README.md and NOTES.md every file check of every task still matches.
+- Lost Tests (-20): `FAIL T2.3 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead, no point depends on it: whether a verdict's reason,
+  such as the new one for a hidden condition column, should have a
+  troubleshooting row. None has one today, `unknown column` included.
+### Iteration 2: 80/100
+- Four reviews, twelve findings, each checked against the code and the plan
+  before acting; none rejected. Two pairs overlapped (the fixture's
+  `refunds` and the test claims on it; `claimRows` and `column()`), and the
+  two on which columns a condition may name were fixed together, since the
+  rule one asks for reads settings the other shows a snapshot can widen.
+- Checked first, in the code: `visible` is categorical, a declared non-text
+  key or revealed (`extract.ts`), so a gate on it let `comments.id` through;
+  `remeasure` lays the snapshot's `measuredWith` over this run's config and
+  profiles with it, and `parseSnapshot` gives the two categorical bounds no
+  upper limit; the statement guard lets through only a statement that
+  starts with `SELECT` or `WITH`, so a kept query with its note first could
+  not be rerun through `connect()` as it was stored.
+- Fixed:
+  - The stored query ends with the note, as the plan says:
+    `<statement>\n-- $1 = '<value>'`. Iteration 1 put it first on the
+    lead's word, which the plan does not carry. The kept query now reruns
+    as it is: the database test binds the value to the whole of it, and the
+    tests in `verify.test.ts` and `joins.test.ts` read the note as the last
+    line. NOTES: "The stored query ends with the value."
+  - Prompt A asks for one relationship per value of the other column, each
+    to the table that value selects, as the plan says, not one per target:
+    two values that selected one table made one claim, and the rows of the
+    other were never measured. NOTES quotes the new bullet and says why.
+  - A condition must be on a categorical column: visible, with no more than
+    `categoricalMaxDistinct` values on the sample, none longer than
+    `categoricalMaxValueLength`. `visible` alone let a key through, and
+    `id = '42'` narrowed the join to one comment. The reason reads
+    `<table>.<column> is not categorical, so no condition on it is
+    measured`. A revealed column is held to the same bounds, so the full run
+    and `check` differ on it only when no value repeats on its sample. A
+    key on a table no larger than the bound, and a value one row alone
+    holds, still narrow to a row; NOTES says so. New claim `keyed` in
+    `joins.test.ts`; the `comments` of `verify.test.ts` has a key and
+    statistics like the fixture's.
+  - In `check` a snapshot can no longer widen what is categorical:
+    `remeasure` hides every column from `verify` when the snapshot's bounds
+    are wider than this run's or its `sampleRows` smaller, so no branch is
+    measured, and every other claim is measured as before, since nothing
+    else reads `visible` there. With this removed, the guess
+    `comments.commentable_id = '57'` under `categoricalMaxDistinct` 1000000
+    came back confirmed. New test "check measures no condition when the
+    snapshot's settings would show more values than this run's", over each
+    of the three settings, which also finds no statement with a parameter.
+    NOTES: "In `check`, a snapshot cannot widen what is categorical."
+  - `claimRows` and `column()` are gone, with the `Column` import:
+    `measureRelationship` looks the condition's column up once, as `on`,
+    and writes the filter and its parameter where the statement is built.
+  - `refunds` is out of `polymorph.sql`, with its header item and the one
+    about T2.2's key test, and the unconditional `invoices` claim is out of
+    `CLAIMS`. `accounts` and `invoices` stay: T2.4 adds them, and
+    `invoices.account_id` is the condition on a column that is not text.
+    The fixture was reloaded with `docker compose down -v && docker compose
+    up -d --wait`. The check line is `check polymorph: 10 unchanged`.
+  - `joins.test.ts`: `offline()` takes nothing and returns no exit code;
+    `claim(table, column, to, when?)` needs no split and no cast.
+    `verify.test.ts`: `photoBranch`'s parameter is `on`. `sqlString` sits
+    after `suspicionId`, so the two id functions are together.
+  - README "How it works" says the other column must be categorical and
+    that each of its values is a claim; CHANGELOG likewise.
+    `acceptance/checks.json`: the renamed tests, the NOTES bullets, the
+    README sentence, and one new check, `check-wider`.
+- Sabotage of the fixes, each file restored from a copy and compared with
+  `cmp`: `sampleRows` dropped from the comparison in `remeasure`, "check
+  measures no condition ..." failed with `{"sampleRows":60}: nor a branch
+  the full run measured`, `[ 'confirmed', undefined ]` where `[
+  'unverifiable', 'comments.commentable_type is not categorical, so no
+  condition on it is measured' ]` was expected; `categoricalMaxDistinct`
+  dropped from it, the same test failed with
+  `{"categoricalMaxDistinct":1000000}`, the guess `[ 'confirmed', undefined
+  ]`; the gate back to `on.visible` alone, three tests failed, among them
+  "a discriminator value is always a bind parameter ...", which found `[
+  'posts', '42' ]` among the bound values.
+- `npm run verify` exits 0: 224 tests, 222 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.3`
+  prints `T2.3: 80/100`, every check passing but the sabotage item. `npm run
+  acceptance` over every task: every other task built so far still 100/100.
+- Lost Tests (-20): `FAIL T2.3 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record of the task's
+  core; the sabotage check is done by a later stage. The sabotages above are
+  of this iteration's fixes only.
+- Open for the lead, as in iteration 1: whether a verdict's reason, now
+  `<table>.<column> is not categorical, so no condition on it is measured`,
+  should have a troubleshooting row.
+- Sabotage check of the task's core (section 4.5), with the task's six test
+  files (`joins`, `verify`, `schemas`, `write`, `check`, `snapshot`: 62
+  tests, all passing before) run after each break. `src/verify.ts`,
+  `src/schemas.ts`, `src/safety.ts`, `src/write.ts` and `src/check.ts` were
+  copied outside the repository first; after each break the file was
+  restored from its copy, `cmp` identical, and `git diff HEAD -- <file>`
+  printed byte for byte the diff saved before.
+- Sabotage: the condition's filter and its parameter dropped in
+  `measureRelationship`, so a branch is measured over every sampled row;
+  "each branch of a polymorphic reference gets its own verdict with its own
+  numbers" failed with "+ hits: 480, - hits: 300, + total: 480 - total: 300"
+  for the post branch, and five other tests with it. Restored.
+- Sabotage: the value written into the statement as a literal through
+  `sqlString`, `::text = 'photo'` in place of `$1`, and no parameter sent,
+  so the numbers stay right; "a condition filters the sampled rows by a
+  bound value, shown only in a note after the statement" failed with the
+  statement it ran, which read `w."commentable_type"::text = 'photo'`, and
+  "the plain-form retry and the text fallback send the condition's value
+  too" with "+ [ [], [], [], [] ]" where `[ 'photo' ]` was expected four
+  times. "a discriminator value is always a bind parameter, ..." failed too,
+  but before its own assertions, with "database connection lost: invalid
+  message format": the NUL claim's value was now in the statement's text.
+  Restored.
+- Sabotage: `relationshipId` without the `[column=value]` suffix; "a
+  condition is part of a claim's id: ..." failed with the four claims
+  reduced to two ids, "relationship:comments.commentable_id->posts.id" and
+  "...->photos.id", and "check measures every branch again, ..." with "+
+  'check polymorph: 3 unchanged' - 'check polymorph: 10 unchanged'", among
+  nine tests. Restored.
+- Sabotage: `querySampled` retrying the plain form without the parameters;
+  "the plain-form retry and the text fallback send the condition's value
+  too" failed with "+ [ [ 'photo' ], [], [ 'photo' ], [] ]" where the value
+  was expected four times. Restored.
+- Sabotage: the edge in `tableFile` without its condition; "the per-table
+  files show each branch with its condition" failed with "no line in
+  comments.md starts - comments.commentable_id -> posts.id when
+  commentable_type = 'post': confirmed, 100.0% of 300 sampled rows match
+  (inferred". "a branch reads with its condition, ..." in `write.test.ts`
+  failed too, with only the table's name, "comments", as its message.
+  Restored.
+- Sabotage: the kept query without its closing note; "a condition filters
+  the sampled rows by a bound value, shown only in a note after the
+  statement" failed with "the query kept is the one run, before a note that
+  gives $1", and "a discriminator value is always a bind parameter, ..."
+  found the statement's last line where "-- $1 = 'x''; DROP TABLE posts;
+  --'" was expected. Restored.
+- Sabotage: the check that the condition's column exists removed; "a
+  condition on a column the table lacks or that is not categorical is
+  unverifiable, ..." failed with "+ 'column w.nope does not exist'" and the
+  statement run where "'unknown column comments.nope', ''" was expected,
+  and "a condition on a column the table lacks, or on one that is not
+  categorical, is unverifiable and nothing runs" with "nothing here should
+  be queried". Restored.
+- Sabotage: `claimNames` in `check.ts` without the condition's column; "a
+  claim whose condition names a column the database lost is stale" failed
+  with "+ 'not measured', + undefined - 'stale', - 'orders.status'".
+  Restored.
+- Sabotage: the categorical gate removed, so a condition on any column is
+  measured; "a condition on a column the table lacks or that is not
+  categorical is unverifiable, ..." failed with "a count under a guessed
+  value would tell whether a hidden value exists": `comments.body = 'x'`
+  came back `empty`, with its statement, where `unverifiable` and
+  "comments.body is not categorical, so no condition on it is measured"
+  were expected; three other tests failed with it. Restored.
+- No sabotage left every test green, so no test was changed.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  224 tests, 222 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T2.3` prints `T2.3: 100/100`, every
+  check passing.
+
+## T2.4 Where the orphans fall
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 of the plan and T2.4, with T2.2, T2.3 and
+  Appendices A to C; the design brief's section 3 and ground rules, and the
+  lead's decisions in its section 7; `src/verify.ts`, `src/write.ts`,
+  `src/safety.ts`, `src/schemas.ts`, prompt B and their tests,
+  `test/joins.test.ts`, `test/canned.ts`, `test/integration.test.ts`,
+  `test/readme.test.ts`; README.md, NOTES.md (0.2.0, the string-matching
+  list and the limits), CHANGELOG.md, T2.3's iterations above and
+  `acceptance/`.
+- Where the guidance and the code at HEAD differ: the lead's note says
+  `polymorph` already holds `refunds`, the table for orphans below a key.
+  It does not: T2.3's iteration 2 took it out, with its header item, since
+  nothing of T2.3 read it. It is back as the brief's section 2.6 writes it,
+  header item 3, and the databases were reloaded with `docker compose down
+  -v && docker compose up -d --wait`; `reltuples` 40, 200 and 20 for
+  accounts, invoices and refunds, and by hand 15 of its 20 rows match, 5
+  below account 1, none above. NOTES records it.
+- Tests first: four unit tests (two in `verify.test.ts`, one each in
+  `write.test.ts` and `safety.test.ts`) and three database tests in
+  `test/joins.test.ts`, whose `offline()` now takes the URL and the claims
+  (polymorph and T2.3's claims by default, so T2.3's tests read as before).
+  On the code as committed:
+  - `safety.test.ts` did not load: `The requested module
+    '../src/safety.js' does not provide an export named 'isIntegerType'`.
+  - "against an integer key it leads, ..." found the statement ending `AS
+    hits\n  FROM (SELECT * FROM "public"."orders" LIMIT 50000) f`, with no
+    count of either end.
+  - The write test found the broken line with nothing between "60 orphans
+    (inferred)." and "An inner join drops the orphans".
+  - On the databases: "orphans are counted where they fall ..." failed with
+    `orphansAbove: undefined, orphansBelow: undefined` where 60 and 0 were
+    expected for `orders.customer_id -> customers.id`; "only counts leave
+    the database ..." with "one statement for each join", 0 !== 3; "the
+    per-table files say where the orphans fall ..." with "orders.md does not
+    say 60 orphans (inferred). All 60 are above the highest customers.id.
+    ...".
+  - "no orphan ends where a column is not an integer, ..." passed, as a
+    guard must while nothing counts the ends.
+- Built, as section 3.1 of the brief has it: `isIntegerType` in `safety.ts`
+  beside `typeFamily`, which is unchanged; in `measureRelationship`, when
+  both columns are integers, the probe form of the join, the one taken when
+  the target column leads the key and is compared as is, also counts
+  `orphans_above` and `orphans_below` against one uncorrelated `max` and
+  `min` of the key, without the plan's `<orphan> AND`; the counts are read
+  when the returned row has them, so the fakes of existing tests need no
+  change; `orphanShape` in `write.ts` adds one sentence after
+  "(inferred)." on a broken line, the place only; prompt B gets the two
+  numbers in its numbers paragraph and the rule that where the orphans fall
+  is a hint, not a proven cause.
+- Checked beyond the tests: `EXPLAIN` of the fixture's statement shows each
+  end as an InitPlan, run once, over `Index Only Scan (Backward)` of
+  `customers_pkey` with `Limit`; the stored queries on polymorph and the
+  fixture, and the broken lines of every per-table file, read as the tests
+  expect; a confirmed join into an integer key carries 0 and 0, and one that
+  is not probed (`customers.address -> customers.full_name`) carries
+  neither.
+- Docs: NOTES (the entry under 0.2.0: the two counts and why no second
+  probe, only integers and only where the key is probed, no third number,
+  the file's facts and prompt B's hint, `refunds`, the `offline()` change,
+  the README output left for release, and what is not done;
+  `isIntegerType` under "Where string matching does appear"), README ("How
+  it works"), CHANGELOG (0.2.0), prompt B. No option was added, so `--help`
+  is unchanged. No new message reaches stderr, so the troubleshooting table
+  is unchanged; `readme.test.ts` still passes.
+- `acceptance/checks.json`: T2.4's checks, three for the A-items, seven on
+  tests, the gate, five on docs, three invariants. `acceptance/manual.json`:
+  the sabotage item, empty.
+- The database tests (`joins`, `integration`, `remeasure`, `doctor`,
+  `safety`, `sampling`, `scale`: 87 tests, 85 pass, the 2 live tests
+  skipped) pass on Postgres 12 (12.22) and 18 (18.6), in throwaway
+  containers loaded with every fixture file in compose order, as on 16. No
+  container was left.
+- Under Linux as a non-root user (uid 1000), in `node:20` (20.20.2) and
+  `node:22` (22.23.3), from a copy of the working tree with LF endings and
+  `npm ci`, against the 18.6 server: the task's four test files with
+  `readme`, `ci`, `structure`, `acceptance`, `remeasure` and `integration`,
+  117 tests, 115 pass, the 2 live tests skipped, on each. The first attempt
+  ran without `docker run --init`, and "a check that hangs is killed ..."
+  failed because nothing reaped the killed process, as that test's comment
+  says a container without an init does; with `--init` it passes.
+- `npm run verify` exits 0: 231 tests, 229 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.4`
+  prints `T2.4: 80/100`, every check passing but the sabotage item. `npm run
+  acceptance` over every task: every other task built so far still
+  100/100.
+- Lost Tests (-20): `FAIL T2.4 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+### Iteration 2: 80/100
+- Four reviews gave eight findings. Each was checked against the code and
+  the plan before acting; none rejected. Two overlapped (the reload command
+  for an older volume) and were fixed together.
+- Checked first: on the fixture server `1::smallint = 2::bigint`, `1::int >
+  (SELECT max(x::bigint) ...)` and `3::bigint < 2::smallint` all run, so two
+  integer columns never raise a datatype mismatch and the text fallback
+  never reaches a join that counts ends; a join is confirmed at 95%, so a
+  confirmed one can have orphans, and nothing in `verify.ts` ties the ends
+  to a verdict; `polymorph.sql` starts with `CREATE DATABASE polymorph`, so
+  loading it into a server that has `polymorph` stops there under
+  `ON_ERROR_STOP`.
+- Fixed:
+  - The broken line puts the place in the count, as the plan writes it:
+    "60 orphans, all above the highest customers.id (inferred).", and for a
+    split "60 orphans, 48 above the highest customers.id and 12 inside the
+    customers.id range (inferred).". Iteration 1 added a sentence after
+    "(inferred)." that repeated the count, so that the words existing tests
+    matched stayed as they were. `orphanShape` writes "all" where one place
+    holds every orphan and lists the places with `Intl.ListFormat`, so the
+    branch on how many places there are is gone. Since A3 changes that
+    line, two existing assertions change with it, named in NOTES: the
+    `orders` line in `test/integration.test.ts` and the photo branch's in
+    "the per-table files show each branch with its condition"
+    (`test/joins.test.ts`). The new tests' expectations and the CHANGELOG
+    example follow; NOTES drops the sentence that justified the deviation.
+  - NOTES no longer says a confirmed join carries 0 and 0: every join
+    measured with the ends carries them, whatever its verdict.
+  - NOTES on the fixture: T2.3's entry calls `accounts` and `invoices` two
+    of the tables T2.4 adds; T2.4's gives only the rebuild, `docker compose
+    down -v && docker compose up -d --wait`, and says that loading
+    `polymorph.sql` into the running server fails once `polymorph` exists.
+  - README "How it works" and CHANGELOG name both conditions and speak of
+    counts: a broken join from an integer column into an integer primary
+    key says how many of its orphans lie above the key's highest value and
+    how many below its lowest; the rest lie inside its range.
+  - The text-fallback case is out of "no orphan ends where a column is not
+    an integer or the column does not lead the key" (`verify.test.ts`),
+    with its second `db` and `m`, and NOTES no longer explains the ends of
+    a comparison as text: two integer columns always compare as they are.
+  - `write.test.ts`: the no-cause assertion after the line's full equality
+    is gone, since it could fail only where the equality had. The test is
+    now "a broken join's orphan count says where they fall, and nothing
+    without the counts".
+  - `joins.test.ts`: `says` takes the run's `file` accessor, and the
+    closing loop reads the table files through it, as the test before it
+    does.
+  - `acceptance/checks.json`: the renamed tests (A3, `table-file`,
+    `verify-no-ends`), and the README and CHANGELOG sentences.
+- Sabotage of the fixes, `src/write.ts` restored from a copy and compared
+  with `cmp` each time: "all" replaced by the count, "a broken join's
+  orphan count says ..." failed with the line reading "60 orphans, 60 above
+  the highest customers.id (inferred)" where "60 orphans, all above ..."
+  was expected; the places joined with ", " in place of `Intl.ListFormat`,
+  it failed with "48 above the highest customers.id, 12 inside the
+  customers.id range" where "... and 12 inside ..." was expected.
+- `npm run verify` exits 0: 231 tests, 229 pass, the 2 live tests skipped,
+  and the package smoke test passes. `npm run acceptance -- --task T2.4`
+  prints `T2.4: 80/100`, every check passing but the sabotage item; `npm
+  run acceptance -- --task T2.3` still prints `T2.3: 100/100`.
+- Lost Tests (-20): `FAIL T2.4 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record of the task's
+  core; the sabotage check is done by a later stage. The sabotages above
+  are of this iteration's fixes only.
+- Sabotage check of the task's core (section 4.5), with the task's four
+  test files (`joins`, `verify`, `write`, `safety`: 57 tests, all passing
+  before) run after each break. `src/verify.ts`, `src/write.ts` and
+  `src/safety.ts` were copied outside the repository first; after each
+  break the file was restored from its copy, `cmp` identical, and `git
+  diff HEAD -- <file>` printed byte for byte the diff saved before.
+- Sabotage: the ends' names swapped in `measureRelationship`, the count
+  past the key's `max` returned as `orphans_below` and the one past its
+  `min` as `orphans_above`; "orphans are counted where they fall: above
+  the key on the fixture, inside it and below it on polymorph" failed with
+  "customer ids from 9001 on, past the 250 customers", `orphansAbove: 0,
+  orphansBelow: 60` where 60 and 0 were expected, and three other tests
+  with it. Restored.
+- Sabotage: the integer gate weakened to either column, `||` in place of
+  `&&`; "no orphan ends where a column is not an integer or the column
+  does not lead the key" failed with "a numeric from-column", the
+  statement it ran counting `orphans_above` and `orphans_below`. Restored.
+- Sabotage: `orphanShape` returning at once, `if (true) return ""`; "a
+  broken join's orphan count says where they fall, and nothing without the
+  counts" failed with "{"orphansAbove":60,"orphansBelow":0}", the line
+  reading "60 orphans (inferred)." where "60 orphans, all above the
+  highest customers.id (inferred)." was expected, and the two tests of the
+  per-table files with it. Restored.
+- Sabotage: the orphans inside the range computed as `orphans -
+  orphansAbove`, forgetting those below; "a broken join's orphan count
+  says where they fall, and nothing without the counts" failed with
+  "{"orphansAbove":0,"orphansBelow":60}", the line reading "all below the
+  lowest customers.id and all inside the customers.id range", and "the
+  per-table files say where the orphans fall, and no cause" with
+  "refunds.md does not say 75.0% match (15 of 20 sampled), 5 orphans, all
+  below the lowest accounts.id (inferred).". Restored.
+- Sabotage: the statement returning the key's highest value beside the
+  counts, `(SELECT max(t."id") ...) AS key_max`; "only counts leave the
+  database for where the orphans fall" failed with "never the ends of the
+  key", `+ 'key_max'` among the returned columns, and "against an integer
+  key it leads, ..." with the statement it ran. Restored.
+- Sabotage: `isIntegerType` by substring, `/int/.test(type.toLowerCase())`;
+  "isIntegerType is smallint, integer and bigint, by declared type" failed
+  with "integer[]", `true !== false`. Restored.
+- Sabotage: the ends counted in the hashed form of the join too, where the
+  target column does not lead the key; "no orphan ends where a column is
+  not an integer or the column does not lead the key" failed with "a
+  column second in the key", its statement a `LEFT JOIN` counting both
+  ends. Restored.
+- Sabotage: the returned row checked for `orphansAbove`, the name in the
+  numbers, in place of the column `orphans_above`, so the ends are counted
+  and never read; "against an integer key it leads, the join also counts
+  the orphans past either end of it" failed with `orphansAbove: 60,
+  orphansBelow: 0` missing from the numbers, and "orphans are counted
+  where they fall: ..." with "customer ids from 9001 on, past the 250
+  customers", both `undefined`; the two tests of the per-table files
+  failed with them. Restored.
+- No sabotage left every test green, so no test was changed.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  231 tests, 229 pass, the 2 live tests skipped, and the package smoke test
+  passes; `npm run acceptance -- --task T2.4` prints `T2.4: 100/100`, every
+  check passing.

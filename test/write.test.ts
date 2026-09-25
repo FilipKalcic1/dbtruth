@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModel } from "../src/model.js";
-import type { TableFacts, Verdict, Verified } from "../src/schemas.js";
+import { relationshipId, type Relationship, type TableFacts, type Verdict, type Verified } from "../src/schemas.js";
 import { confine, persist, tableFile, write } from "../src/write.js";
 
 const facts = (name: string, extra: Partial<TableFacts> = {}): TableFacts => ({ name, kind: "table", rowEstimate: 500, primaryKey: ["id"], categorical: {}, ...extra });
@@ -59,6 +59,51 @@ test("a table file carries the measured numbers, both directions of a join, and 
   assert.match(cars, /\ntable, no rows, primary key: id\n/);
   assert.match(cars, /\n- cars\.customer_id -> customers\.id \(inferred, not measured: no non-null rows to test\)\n/);
   assert.match(cars, /\n- \*\*dead_table\*\*: empty beside vehicles \(count 0, exact 1\)\.\n/);
+});
+
+test("a branch reads with its condition, the value as SQL writes it", () => {
+  const branch = (equals: string): Relationship => ({
+    from: { table: "comments", column: "commentable_id" },
+    to: { table: "photos", column: "id" },
+    when: { column: "commentable_type", equals },
+    basis: "inferred",
+    confidence: 0.8,
+    reason: "commentable_type selects the table",
+  });
+  const [quoted, twoLines] = [branch("it's"), branch("two\nlines")];
+  const v: Verified = {
+    ...nothing,
+    tables: [facts("comments"), facts("photos")],
+    claims: { ...nothing.claims, relationships: [quoted, twoLines] },
+    verdicts: {
+      [relationshipId(quoted)]: verdict("broken", { total: 180, hits: 120, orphans: 60, hit: 120 / 180, nulls: 0 }),
+      [relationshipId(twoLines)]: verdict("empty", {}, "no non-null rows to test"),
+    },
+  };
+  for (const t of v.tables) {
+    const lines = tableFile(v, t).split("\n");
+    assert.ok(lines.includes("- **BROKEN** comments.commentable_id -> photos.id when commentable_type = 'it''s': 66.7% match (120 of 180 sampled), 60 orphans (inferred). An inner join drops the orphans: use LEFT JOIN, or filter them on purpose."), t.name);
+    assert.ok(lines.includes("- comments.commentable_id -> photos.id when commentable_type = E'two\\nlines' (inferred, not measured: no non-null rows to test)"), `${t.name}: a line break in the value stays on one line`);
+  }
+});
+
+test("a broken join's orphan count says where they fall, and nothing without the counts", () => {
+  const broken = (ends: Record<string, number>) => {
+    const numbers = { total: 500, hits: 440, orphans: 60, hit: 0.88, nulls: 0, ...ends };
+    const v = { ...shop, verdicts: { ...shop.verdicts, "relationship:orders.customer_id->customers.id": verdict("broken", numbers) } };
+    return tableFile(v, shop.tables[0]!).split("\n").find((line) => line.startsWith("- **BROKEN**"));
+  };
+  const head = "- **BROKEN** orders.customer_id -> customers.id: 88.0% match (440 of 500 sampled), 60 orphans";
+  const tail = " (inferred). An inner join drops the orphans: use LEFT JOIN, or filter them on purpose.";
+  const shapes: [Record<string, number>, string][] = [
+    [{ orphansAbove: 60, orphansBelow: 0 }, ", all above the highest customers.id"],
+    [{ orphansAbove: 0, orphansBelow: 0 }, ", all inside the customers.id range"],
+    [{ orphansAbove: 0, orphansBelow: 60 }, ", all below the lowest customers.id"],
+    [{ orphansAbove: 48, orphansBelow: 0 }, ", 48 above the highest customers.id and 12 inside the customers.id range"],
+    [{ orphansAbove: 30, orphansBelow: 20 }, ", 30 above the highest customers.id, 20 below the lowest customers.id, and 10 inside the customers.id range"],
+    [{}, ""],
+  ];
+  for (const [ends, shape] of shapes) assert.equal(broken(ends), head + shape + tail, JSON.stringify(ends));
 });
 
 test("a view, a partitioned table and a table without a key say so", () => {

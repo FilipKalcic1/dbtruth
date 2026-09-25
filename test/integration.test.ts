@@ -94,7 +94,7 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   assert.ok(existsSync(join(cwd, "context", "README.md")));
   assert.ok(existsSync(join(cwd, "context", "ENTITIES.md")));
   const tableFile = (name: string) => readFileSync(join(cwd, "context", "tables", `${name}.md`), "utf8");
-  assert.match(tableFile("orders"), /\*\*BROKEN\*\* orders\.customer_id -> customers\.id: 88\.0% match \(440 of 500 sampled\), 60 orphans \(inferred\)/, "rendered from the measurement, not the model's canned file");
+  assert.match(tableFile("orders"), /\*\*BROKEN\*\* orders\.customer_id -> customers\.id: 88\.0% match \(440 of 500 sampled\), 60 orphans, all above the highest customers\.id \(inferred\)/, "rendered from the measurement, not the model's canned file");
   assert.deepEqual((/- status: (.*)\n/.exec(tableFile("orders"))?.[1] ?? "").split(", ").sort(), ['"Pending"', '"SHIPPED"', '"cancelled"', '"pending"', '"shipped"'], "every value, quoted");
   assert.match(tableFile("customers"), /orders\.customer_id -> customers\.id/, "a table the model wrote no file for has one, with its incoming join");
   assert.match(tableFile("order_totals"), /^# order_totals\n\nmaterialized view, no rows, primary key: none\n/);

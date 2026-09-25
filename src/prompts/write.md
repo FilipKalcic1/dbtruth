@@ -3,10 +3,15 @@ against this database. You receive the analysis with every claim marked
 confirmed / broken / rejected / unverifiable / empty, with the evidence:
 the query that was run and the numbers it returned. A relationship's
 numbers are total (sampled rows with a value in the from-column), nulls
-(sampled rows without one), hits, orphans and hit (hits / total). You
-also receive per-relation facts measured from the database: kind (table,
-view, materialized view), partitions if any, primary key, row estimate,
-and the values of categorical columns.
+(sampled rows without one), hits, orphans and hit (hits / total). A
+relationship with "when" holds only on the rows where that column of the
+from-table equals that value, and its numbers are over those rows.
+orphansAbove and orphansBelow, where present, count the orphans above the
+highest value of the key the relationship points at and below its lowest;
+the rest lie inside its range. You also receive per-relation facts
+measured from the database: kind (table, view, materialized view),
+partitions if any, primary key, row estimate, and the values of
+categorical columns.
 
 The tool writes context/tables/<table>.md for every relation from these
 same facts: purpose, grain, key, size, every join with its numbers, every
@@ -28,6 +33,13 @@ Rules that override everything else:
   filter nulls, prefer another key). When nulls is not zero, say so next
   to the hit rate and name the share: orphans point nowhere, nulls have no
   value, and an inner join drops both.
+- Where a broken relationship's orphans fall is a hint, not a proven cause;
+  say it as one. Orphans above the highest key usually mean parents that
+  were never loaded or ids from another sequence; inside its range,
+  deleted parents; below the lowest, ids from another source.
+- A relationship with "when" is one branch of a column that points at
+  different tables. Give each branch with its condition and its own verdict
+  and numbers; never merge branches into one relationship or one hit rate.
 - Rejected claims do not appear at all.
 - Unverifiable and empty claims, and everything with basis "inferred", are
   labelled "(inferred)" inline. Never launder a guess into a fact.

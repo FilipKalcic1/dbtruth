@@ -49,6 +49,11 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   `ok`, `FAIL` with what to fix, or `note` for what is worth knowing, such as
   a missing API key, without spending a token, and exits 1 when something must
   be fixed.
+- `npx dbtruth init` writes a `.env` with the settings commented out at the
+  repository root, or in the current directory outside a repository, and
+  prints the next steps. It leaves a `.env` that is already there as it is,
+  never edits `.gitignore`, and warns, with the line to add, when `.gitignore`
+  does not ignore `.env`.
 - A failed connection is told in one sentence per cause (nothing listening,
   host not found, authentication failed, no such database, SSL required,
   timeout), never in the driver's words, which could quote the user, the host
@@ -63,6 +68,19 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   their size now comes from the partitions' estimates or is scaled up from a
   count over a few pages (`--pilot-pages`), and the per-table file says when
   it was estimated from a sample. Temporary tables are no longer listed.
+- A column that points at different tables depending on another column, such
+  as `commentable_id` beside `commentable_type`, is measured one branch at a
+  time: when that column is categorical, the model claims one relationship
+  per value of it, each is measured on the rows that hold its value and gets
+  its own verdict, and the per-table files give the condition, as in `when
+  commentable_type = 'photo'`. The value is sent to the database as a
+  parameter, never as SQL.
+- A broken join from an integer column into an integer primary key says
+  where its orphans lie: how many above the key's highest value, how many
+  below its lowest, and the rest inside its range. The per-table files give
+  the place with the count, as in "60 orphans, all above the highest
+  customers.id"; the model, which writes `README.md`, is told what each place
+  usually means, and to give it as a hint, not a cause.
 - README: a quick start that runs `doctor` before the first run, a
   troubleshooting table with a row for every message dbtruth prints when
   something is wrong, and the commands, with those not built yet marked as

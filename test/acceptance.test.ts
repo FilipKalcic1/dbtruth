@@ -36,6 +36,9 @@ test("one passing and one failing check: the score is below 100 and the output n
   assert.match(r.stdout, /^FAIL T9\.1 A2 acceptance: exit 3, expected 0$/m, "the failing check is named, with the reason");
   assert.match(r.stdout, /^ {2}20$/m, "the first 20 lines of its output follow");
   assert.doesNotMatch(r.stdout, /^ {2}21$/m, "and no more");
+  const saved = /^ {2}full output: (.+)$/m.exec(r.stdout)?.[1];
+  assert.ok(saved, "the whole output is kept, since a long command fails far below its first lines");
+  assert.match(readFileSync(saved.trim(), "utf8"), /^30$/m);
   assert.match(r.stdout, /^T9\.1: 75\/100$/m, "half of the 50 acceptance points are lost");
   assert.equal(r.status, 1, "exit 0 only at 100");
 });

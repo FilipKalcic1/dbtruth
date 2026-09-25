@@ -153,6 +153,15 @@ test("a claim is stale when the database lost a name it uses, unless the snapsho
   assert.deepEqual(classes(invented), [["unchanged", undefined]]);
 });
 
+test("a claim whose condition names a column the database lost is stale", () => {
+  const shipped = { ...JOIN, when: { column: "status", equals: "shipped" } };
+  const id = relationshipId(shipped);
+  const before = snapshotOf({ [id]: verdict("confirmed", 1) }, { relationships: [shipped] });
+  const withoutStatus = [relation("orders", ["id", "customer_id"]), CATALOG[1]!];
+  const report = diff(before, { database: "shop", schema: schemaOf(withoutStatus), verdicts: { [id]: verdict("unverifiable", undefined, "unknown column orders.status") } }, config);
+  assert.deepEqual(report.claims.map((c) => [c.id, c.class, c.missing]), [[id, "stale", "orders.status"]]);
+});
+
 test("relations added and removed are stale; a relation not examined is still in the context", () => {
   // customers and cars were listed but not examined: skipped over budget, or dropped to fit the model.
   const before = snapshotOf({}, {}, [...CATALOG, relation("cars", ["id"])], ["orders"]);

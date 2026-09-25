@@ -104,7 +104,7 @@ export function findDotEnv(start: string): { path?: string; values: Record<strin
 }
 
 /** The first directory from dir upward that holds a .git, or undefined when none does up to the filesystem or drive root. */
-function repositoryRoot(dir: string): string | undefined {
+export function repositoryRoot(dir: string): string | undefined {
   while (!existsSync(join(dir, ".git"))) {
     if (dirname(dir) === dir) return undefined;
     dir = dirname(dir);
@@ -308,6 +308,11 @@ export function typeFamily(type: string): "text" | "time" | "other" {
   return "other";
 }
 
+/** smallint, integer or bigint, as the catalog writes a column's type; an array of them, or a domain over one, is not. */
+export function isIntegerType(type: string): boolean {
+  return ["smallint", "integer", "bigint"].includes(type.trim().toLowerCase());
+}
+
 // ---------- SQL text helpers: every module that builds SQL uses these ----------
 
 /** Double-quoted identifier. */
@@ -351,23 +356,24 @@ export function sampleSource(t: { schema: string; name: string; rowEstimate: num
 }
 
 /**
- * Runs a statement built over a sampled source. If the sampled form is rejected (a relation that
- * does not support TABLESAMPLE, for one), the plain LIMIT form is tried once. Timeouts and the
- * budget are not retried.
+ * Runs a statement built over a sampled source, with its bind parameters. If the sampled form is
+ * rejected (a relation that does not support TABLESAMPLE, for one), the plain LIMIT form is tried
+ * once, with the same parameters. Timeouts and the budget are not retried.
  */
 export async function querySampled(
   db: Db,
   t: { schema: string; name: string; rowEstimate: number },
   cfg: SampleConfig,
   build: (source: string) => string,
+  params: unknown[] = [],
 ): Promise<{ source: string; result: QueryResult }> {
   const sampled = sampleSource(t, cfg);
   const plain = sampleSource(t, cfg, false);
   let source = sampled;
-  let result = await db.query(build(source));
+  let result = await db.query(build(source), params);
   if (!result.ok && result.reason === "error" && sampled !== plain) {
     source = plain;
-    result = await db.query(build(source));
+    result = await db.query(build(source), params);
   }
   return { source, result };
 }

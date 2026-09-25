@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { connect, findDotEnv, readDotEnv, resolveDatabaseUrl, sampleSource } from "../src/safety.js";
+import { connect, findDotEnv, isIntegerType, readDotEnv, resolveDatabaseUrl, sampleSource } from "../src/safety.js";
 import { config } from "../src/config.js";
 import { writeUnreadable } from "./unreadable.js";
 
@@ -30,6 +30,11 @@ test("a large table is sampled at the share of pages that holds the sample size,
   assert.match(sampleSource({ ...big, rowEstimate: 3_000_000 }, config), /SYSTEM \(1\.667\)/, "four significant digits, no floating-point noise in a query a human reruns");
   assert.equal(sampleSource({ ...big, rowEstimate: config.sampleRows }, config), `(SELECT * FROM "public"."big" LIMIT ${config.sampleRows})`, "a table no larger than the sample is read whole");
   assert.equal(sampleSource(big, config, false), `(SELECT * FROM "public"."big" LIMIT ${config.sampleRows})`, "the plain form on request");
+});
+
+test("isIntegerType is smallint, integer and bigint, by declared type", () => {
+  for (const type of ["smallint", "integer", "bigint", " Integer "]) assert.equal(isIntegerType(type), true, type);
+  for (const type of ["numeric", "integer[]", "real", "text", "oid"]) assert.equal(isIntegerType(type), false, type);
 });
 
 test("the session is proven read-only and only SELECT statements get through", async () => {

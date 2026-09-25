@@ -29,11 +29,16 @@ How to think:
 - Propose every declared foreign key as a relationship with basis "stated",
   so each gets measured and reported with its hit rate, and add the ones
   you infer on top.
-- A relationship must hold unconditionally: every non-null value of the
+- A relationship holds on every row it covers: every non-null value of the
   from-column should be a key of the to-table. A column that points at
-  different tables depending on another column (a polymorphic reference)
-  cannot be tested as a join. Report it once as a suspicion of kind "other",
-  naming the column, instead of one relationship per possible target.
+  different tables depending on another column of its table (a polymorphic
+  reference) is one relationship per value of that other column, each to
+  the table that value selects, with "when": {"column": that other column,
+  "equals": the value, exactly as its "values" list shows it}; each is
+  measured on its own rows. When that column has no "values" list, the
+  reference cannot be tested: report it once as a suspicion of kind
+  "other", naming the column, instead of one relationship per possible
+  target.
 - Fewer confident claims beat many weak ones.
 - Name business entities (customer, order, vehicle...). Say which table is
   the primary home of each and which others carry a reference to it.
@@ -64,6 +69,7 @@ Schema:
   "relationships": [
     { "from": {"table": string, "column": string},
       "to":   {"table": string, "column": string},
+      "when"?: {"column": string, "equals": string},
       "basis": "stated"|"inferred", "confidence": 0-1, "reason": string }
   ],
   "suspicions": [

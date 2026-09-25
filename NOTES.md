@@ -761,6 +761,288 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     a foreign partition and an estimate of its own, from an `ANALYZE` of the
     parent on 14 and later, is still sampled with `TABLESAMPLE`, which reads
     that partition whole, as in 0.1.8.
+- **`dbtruth init` writes a `.env` to fill in, and says what to do next.** A
+  first run needs a settings file with the right lines in the right place;
+  `init` writes it, so the next command, `doctor`, has a file to read and to
+  name. It writes at the repository root, found by T1.1's rule
+  (`repositoryRoot` in `safety.ts`, now exported, so there is one walk), or in
+  the working directory outside a repository; says what it did on stderr,
+  stdout staying empty (R6); and exits 0, or 1 when it could not write.
+  `runInit` is one function, so it sits in `cli.ts` beside `runCheck` rather
+  than in a module of its own; the plan's module map (Appendix B) has none
+  for it.
+  - **The file is the quick start's, commented out.** `DATABASE_URL` and
+    `ANTHROPIC_API_KEY` as the quick start writes them, and `ANTHROPIC_MODEL`
+    set to the default, `DEFAULT_MODEL`, so that uncommenting it changes
+    nothing; each behind `# `, under two comment lines of their own.
+    `readEnvFile` reads a value to the end of its line (above, "The quick
+    start's `.env` had a comment the parser keeps"), so no comment shares a
+    line with a setting. `test/init.test.ts` reads the file as written with
+    `readEnvFile` and finds no setting; then it uncomments one line at a time,
+    as found whole after `# `, and finds that setting alone, with the quick
+    start's value.
+  - **It changes no file that exists.** A `.env` file already there is left
+    as it is, and `init` says so and goes on. Otherwise the file is opened
+    with `wx`, which fails rather than open anything that is there: a file
+    that appeared since the check, a dangling link, or a directory named
+    `.env`, such as a Python virtualenv. That directory is not a settings file
+    (T1.1), and none can be written in its place, so `init` stops with `could
+    not write .env: EEXIST: ...` and exits 1; the row for that message says to
+    rename it or use `--dotenv`. The tests compare every file under the
+    repository, `.git` included, byte for byte, before and after.
+  - **Git judges whether `.gitignore` ignores `.env`.** `init` runs `git -c
+    core.excludesFile= check-ignore --quiet --no-index .env` on the directory
+    it writes to and never reads `.gitignore` itself. Its patterns are easy to
+    read wrong by hand: `*.env` and `.env*` cover `.env`, `.env/` covers only
+    a directory, and a later `!.env` takes an earlier pattern back. The plan
+    asks about `.gitignore`, the file every clone shares, so the user's own
+    ignore file (`core.excludesFile`, by default `~/.config/git/ignore`) is
+    left out: a rule there covers one machine, and a teammate who writes a
+    `.env` in a clone without it would commit the file. `--no-index` judges
+    the patterns alone: without it, a `.env` git already tracks counts as not
+    ignored even when `.gitignore` lists it, and the warning would ask for a
+    line that is there. Exit 1 gives `WARNING: .gitignore does not ignore
+    .env; add this line to it: .env`, with both paths relative to the working
+    directory. No answer gives a warning that git could not say, with the same
+    line: outside a repository, where the plan makes no exception and the
+    directory may become one with the `.env` in it; with git missing from the
+    `PATH`; or in a repository git refuses, such as one owned by another user.
+    Git is started in the temporary directory and pointed at the repository
+    with `-C`: on Windows a bare command name is looked for in the working
+    directory before the `PATH`, unless `NoDefaultCurrentDirectoryInExePath`
+    is set, as Git Bash sets it, so started at the root it would run a
+    `git.exe` the repository holds. The tests make real repositories with `git
+    init --template=` and cover no `.gitignore`, `.env`, `/.env` with CRLF,
+    `.env*`, `*.env`, `.env.local`, `.env/`, `.env*` then `!.env`, a personal
+    ignore file that lists `.env`, a tracked `.env` that `.gitignore` lists,
+    an empty `git.exe` at the root, git missing from the `PATH`, and no
+    repository.
+  - **The next steps are the README's.** The plan's list without what is not
+    built: fill in `.env`, run `npx dbtruth doctor`, run `npx dbtruth`, and
+    add the line for `CLAUDE.md` under "Giving it to your agent". The quick
+    start shows them as `init` prints them, in the block after its paragraph
+    on `init`, and `test/init.test.ts` takes that block as the expected output
+    and checks that its line for `CLAUDE.md` is the one under "Giving it to
+    your agent", so none of the three can change alone. `init` keeps its own
+    copy rather than read `README.md` at run time: the file ships in the
+    package, but reading it would put a Markdown parser in the CLI, and a
+    failure no user could fix.
+  - **Not built here: `--skill` and the `claude mcp add` line.** They need the
+    skill file of T5.2 and the MCP server of T5.1; each task adds its part to
+    `init` when it lands. No option or placeholder stands for them now, so
+    `init --skill` is refused as an unknown option.
+  - Changed with it: the quick start, the Commands list and the Team tier's
+    sentence on what stays free forever no longer call `init` coming, and the
+    row for an unknown command names only `mcp` as not built;
+    `test/readme.test.ts` reads what is built from `cli.ts`, which now defines
+    `init`. In `acceptance/checks.json`, T1.5's two checks that expected
+    `init` to be coming, `readme-init-coming` (now `readme-init`) and
+    `readme-commands`, expect it built. The row for `could not write <path>:
+    <error>` covers `init`'s, and each new message has its own.
+  - Not done: editing `.gitignore`, which the plan rules out; leaving out
+    `.git/info/exclude`, which is one clone's too but which `check-ignore`
+    has no option to skip, so a `.env` listed only there gets no warning;
+    saying that a `.env` git already tracks is committed, which `git rm
+    --cached` settles, not this command; from a package that has a `.env` of its own, saying that
+    a run there reads that one and not the root's; and a `.env` anywhere but
+    the root.
+- **A polymorphic reference is measured one branch at a time.** A column
+  such as `comments.commentable_id` points at `posts` where
+  `commentable_type` is `post` and at `photos` where it is `photo`. Measured
+  whole, its matches are split over the targets, or a coincidence of small
+  ids passes for a join: on the new `polymorph` database,
+  `comments.commentable_id -> posts.id` matches all 480 rows, since every
+  photo id from 1 to 60 is also a post id, while the photo branch is broken,
+  120 of 180. Until now prompt A sent such a column to a suspicion of kind
+  `other`, which nothing measures. A relationship may now carry `"when":
+  {"column": ..., "equals": ...}`, and each branch is a claim with its own
+  verdict.
+  - **The id ends in `[column=value]`,** the plan's raw form:
+    `relationship:comments.commentable_id->photos.id[commentable_type=photo]`.
+    Names are already printed raw, and nothing reads an id back. With the
+    condition in the id, `claimsSchema` needs no change: two branches stay
+    two claims, and one branch given twice is one. `when` is optional, not
+    nullable, so a `null` goes back to the model like any other invalid
+    reply. The value is free text, from the model or from a snapshot, and is
+    printed raw on stderr as a name is, which T3.2 left not done; T3.3's
+    Markdown must escape it.
+  - **The condition filters the one sample.** Where the join read the
+    sample, it reads `(SELECT * FROM <sample> w WHERE w."<column>"::text =
+    $1)`, so a branch is measured on the pages every other claim on its table
+    reads, and its numbers are over its own rows. Both forms of the join take
+    the filter: the probe of the key, and the comparison as text. The column
+    is compared as text, the form its values were listed to the model in: on
+    `polymorph`, `invoices.account_id` equal to `5` selects 4 rows and `05`
+    none, where a comparison of integers would take both for 5.
+  - **The value is only ever `$1`.** `querySampled` and
+    `runWithTextFallback` take bind parameters and send them with every
+    attempt: the plain form after a refused sample, and the comparison as
+    text after a datatype mismatch. Without any, pg keeps the simple
+    protocol, as before. The value comes from the model, in `check` from a
+    snapshot a pull request can edit, and in T5.1 from an agent (R8); the
+    column must be one of the from-table's in the catalog, and is quoted with
+    `q()`. A test gives a
+    branch the value `x'; DROP TABLE posts; --`: it is empty, no statement
+    holds the text, and `posts` keeps its 100 rows. In `check`, a snapshot
+    edited to name the column `commentable_type" = 'x' OR true; --` makes
+    that branch stale with no statement run, and a NUL in a value, which no
+    Postgres text holds, is refused by the server (22021): unverifiable.
+  - **The stored query ends with the value.** The statement run has no
+    comment. The query kept in the verdict is that statement and one line
+    after it, as the plan has it, `-- $1 = 'photo'`, the value written as SQL
+    writes a string: quotes doubled, and a value with a line break in the
+    `E''` form, its backslashes, `\n` and `\r` escaped, so the note stays one
+    line and cannot end early (`sqlString` in `schemas.ts`, which `verify.ts`
+    and `write.ts` both import; the fixture server read each form back as
+    its value). A test reruns a kept query as it is, its value bound, and
+    gets the verdict's numbers: the query still starts with `SELECT`, which
+    is all `safety.ts` lets through, and Postgres skips the closing comment.
+    The per-table file writes the condition with the same literal, which an
+    agent can paste into a `WHERE`: `comments.commentable_id -> photos.id
+    when commentable_type = 'photo'`.
+  - **A condition must be on a categorical column.** On a column the
+    from-table lacks, a branch is unverifiable, as for any unknown column; on
+    one that is not categorical on the sample, too, with `<table>.<column> is
+    not categorical, so no condition on it is measured`. The column must be
+    visible, with no more than `categoricalMaxDistinct` values, none longer
+    than `categoricalMaxValueLength`, as the columns prompt A is given a
+    `values` list for are. A count under a guessed value of a hidden column
+    would say whether that value exists, and a snapshot's `when.equals`, or
+    T5.1's `measure_join`, could ask one guess at a time (R3). A key is
+    visible without being categorical, and a condition on it narrows the
+    join to one row, whose hidden from-column the counts then describe: on
+    `polymorph`, `id = '42'` selects one comment. The bounds keep out a key
+    with more values than `categoricalMaxDistinct`. The key of a table no
+    larger than that, and a value that one row alone holds in a categorical
+    column, narrow as far and get through; that is not closed. Leaving out
+    declared keys instead would also leave out a foreign key that is itself
+    the discriminator, such as a `commentable_type_id` with a few values.
+    The plan is silent on all this. An empty table is empty before its
+    condition is judged, since none of its columns shows a value. A column
+    shown with `--reveal` is visible only in the run that reveals it, and
+    counts only within the same bounds, so a full run and `check` differ on
+    it only when no value repeats on its sample: a branch on it is then `not
+    measured` in `check`, which fails no build.
+  - **In `check`, a snapshot cannot widen what is categorical.** There the
+    snapshot's settings decide what looks categorical, and a pull request
+    can edit them: under `categoricalMaxDistinct` 1000000 the guess
+    `comments.commentable_id = '57'` was measured, 6 sampled rows, and a
+    smaller `sampleRows` does the same, since on a few rows most short
+    columns repeat a value. So when the snapshot's bounds are wider than
+    this run's, or its sample smaller, `remeasure` takes no column as
+    categorical and every branch is `not measured`; the note on settings
+    names what differs. Every other claim is measured as before: only a
+    condition reads whether a column is visible in `check`. The seed, the
+    oversampling and the pilot pages move which rows a sample reads more
+    than how many, and stay the snapshot's.
+  - **A dropped condition column makes the branch stale.** `check` counts
+    the column a condition names among a claim's names, so a pull request
+    that drops `commentable_type` fails the build, as one that drops the
+    from-column does. T3.2 named only a join's two columns.
+  - **Prompt A.** The bullet that read "A relationship must hold
+    unconditionally: every non-null value of the from-column should be a key
+    of the to-table. A column that points at different tables depending on
+    another column (a polymorphic reference) cannot be tested as a join.
+    Report it once as a suspicion of kind "other", naming the column,
+    instead of one relationship per possible target." now reads "A
+    relationship holds on every row it covers: every non-null value of the
+    from-column should be a key of the to-table. A column that points at
+    different tables depending on another column of its table (a polymorphic
+    reference) is one relationship per value of that other column, each to
+    the table that value selects, with "when": {"column": that other column,
+    "equals": the value, exactly as its "values" list shows it}; each is
+    measured on its own rows. When that column has no "values" list, the
+    reference cannot be tested: report it once as a suspicion of kind
+    "other", naming the column, instead of one relationship per possible
+    target." One per value, as the plan asks, not one per target: two values
+    can select one table, and each covers rows of its own. The schema at its
+    end gains `"when"?`. Prompt B is told that a relationship with `when`
+    holds on those rows only, and to give each branch with its own verdict
+    and numbers, never merged.
+  - **The snapshot format stays 1.** `when` is a key that a reader of format
+    1 without it would drop, reading each branch as the whole join, and such
+    a key raises `SNAPSHOT_FORMAT` (0.3.0). No release that writes snapshots
+    has shipped, so no such reader exists; decided by the lead. Were one to
+    ship first, the format would be 2, and the reader would take both.
+  - **The `polymorph` database** (`test/fixtures/polymorph.sql`, mounted as
+    `60-polymorph.sql`, before the template) holds the reference above, and
+    two of the tables T2.4 adds to it: `accounts`, with ids 10 to 19 missing,
+    and `invoices`, pointing at all 50, whose `account_id`, an integer with
+    50 values, is here the condition on a column that is not text. Its text
+    columns hold `canary-pii` and are hidden.
+    A volume made before it loads it with `docker compose down -v && docker
+    compose up -d --wait`, or, into the running server, `docker compose exec
+    -T db psql -v ON_ERROR_STOP=1 -U dbtruth -d fixture <
+    test/fixtures/polymorph.sql`. Its tests are in `test/joins.test.ts`,
+    under `test:db`.
+  - One test helper changed, and no assertion: `fakeDb` in `verify.test.ts`
+    records each statement's parameters beside its text.
+  - Not done: a condition on the target's side; one on several columns, or
+    on a list of values; one on a column that is not categorical; and
+    finding polymorphic columns in code, from a sibling named like `_type`,
+    which reads names for meaning (R4). The model proposes the branches, and
+    the database measures them.
+- **A broken join into an integer key says where its orphans fall.** An
+  orphan count said how many rows point nowhere, not where they point, and
+  each place asks for a different fix: past the highest key, parents never
+  loaded or ids from another sequence; inside the key's range, deleted
+  parents; below the lowest key, ids from another source. On the fixture
+  all 60 orphans of `orders.customer_id -> customers.id` are above the
+  highest `customers.id`; on `polymorph` the 40 of `invoices.account_id ->
+  accounts.id` are inside its range, the 5 of `refunds.account_id ->
+  accounts.id` below it, and the 60 of the photo branch above the highest
+  `photos.id`.
+  - **Two counts in the join's own statement.** Where the key is probed,
+    the statement also returns `count(*) FILTER (WHERE col > (SELECT
+    max(t.<key>) FROM <target> t)) AS orphans_above`, and the same with
+    `min` and `<` as `orphans_below`. The plan writes `<orphan> AND col >
+    max`; a value past either end of the key matches no row of it, so it is
+    an orphan already and needs no second probe. Each end is a subquery
+    that does not depend on the row, which Postgres runs once, as a lookup
+    in the key's index. The ends are compared inside the database and only
+    the counts come back (R3): a test reads every row such a statement
+    returns on `polymorph` and finds exactly `total`, `nulls`, `hits`,
+    `orphans_above` and `orphans_below`. The query kept is the statement
+    run, so it reruns to the same counts.
+  - **Only integers, and only where the key is probed.** Both columns must
+    be `smallint`, `integer` or `bigint` as the catalog writes their types
+    (`isIntegerType` in `safety.ts`), and the target column must lead the
+    target's primary key, which is when the join probes it and when its
+    `min` and `max` are index lookups.
+  - **Two numbers, not three.** `orphansAbove` and `orphansBelow` join the
+    measurement when the row the statement returned has them; the orphans
+    inside the range are the rest, worked out where they are written. Every
+    join measured that way carries them, whatever its verdict, in the JSON,
+    the snapshot and what prompt B is sent; `check` still compares a
+    verdict's status and hit rate only.
+  - **The file states the place, and prompt B gets the hint.** A broken
+    line's orphan count says where they fall, as the plan writes it: "60
+    orphans, all above the highest customers.id", "40 orphans, all inside
+    the accounts.id range", "5 orphans, all below the lowest accounts.id",
+    or, when they fall in more than one place, "60 orphans, 48 above the
+    highest customers.id and 12 inside the customers.id range", before
+    "(inferred)". It gives no cause, and a test holds every per-table file of both runs to
+    that. Since A3 changes this line, two existing assertions change with
+    it: the `orders` line in `test/integration.test.ts` and the photo
+    branch's in "the per-table files show each branch with its condition"
+    (`test/joins.test.ts`) now read the count with its place. Prompt B is
+    told what the two numbers count, and a rule: where a broken
+    relationship's orphans fall is a hint, not a proven cause, with what
+    each place usually means.
+  - **`polymorph` gains `refunds`,** for orphans below a key:
+    `refunds.account_id` holds -1 to -5, below account 1, and 21 to 35,
+    which all exist, so 15 of 20 match (75%). It has no key. It was
+    designed with the rest of the fixture, for this task, and T2.3 left it
+    out, since nothing of T2.3 read it. A volume made before it is rebuilt
+    with `docker compose down -v && docker compose up -d --wait`; loading
+    `polymorph.sql` into the running server fails once `polymorph` exists.
+    In `test/joins.test.ts`, `offline()` now takes the URL and the claims,
+    `polymorph` and T2.3's claims unless told otherwise, so this task's
+    tests run the fixture and claims of their own.
+  - The README's fixture output predates this and is regenerated at release
+    (T7.1).
+  - Not done: where the orphans fall against a key of text, uuid or dates,
+    or of more than one column.
 
 ## 0.3.0 (unreleased)
 
@@ -1135,6 +1417,21 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     one for `init` and `mcp`, and the Action is versioned in its own
     repository.
 
+- **A failed check keeps its whole output.** The acceptance script prints
+  the first 20 lines of a failed check, as the plan says; for `npm run
+  verify` those are npm's preamble, and a rare failure of that gate (three
+  times in some forty runs, never outside an acceptance run) was cut off each
+  time. The whole output is now also written to a file in the temporary
+  directory, and its path printed beneath the 20 lines. The first failure
+  whose output was kept (T1.4) named its cause: the scale test "300 tables:
+  the budget is respected and output still renders" gives the run 0.3 s and
+  asserts some claim runs out of it, but with sampling at its default 60% share
+  a server slow to sample and quick to measure left few claims, which all fit
+  in the rest (5 of 45 runs with three test files side by side). The test now
+  gives sampling the whole budget (`extractBudgetShare: 1`), which 300 tables
+  always exhaust, so the claims run out by construction; its assertions are
+  unchanged. A change to an earlier task's test, decided by the lead.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values
@@ -1145,23 +1442,29 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   model's reply is validated, and spells it as the extract does from then on.
 - `safety.ts` checks that a statement begins with SELECT or WITH, quotes
   identifiers, and parses one line of `.env`.
-- `verify.ts` recognises timestamp types for the dead-table measurement.
+- `verify.ts` recognises timestamp types for the dead-table measurement, and
+  `isIntegerType` in `safety.ts` the integer types, by declared type, for
+  where a join's orphans fall.
 - `write.ts` normalises output paths into `context/`.
 - Verdict ids are prefixed `relationship:` / `suspicion:` so the exit code and
-  the summary can tell them apart.
+  the summary can tell them apart. A branch's id ends in `[column=value]`,
+  its condition as the claim gives it, so that each branch is a claim of its
+  own; nothing reads the value back out of an id.
 
 ## Known limits, deliberately not fixed
 
-- **The join measurement is unconditional.** It asks whether every non-null
-  value of the from-column exists in the to-column. A polymorphic column
-  (one that points at different tables depending on a sibling column) can
-  therefore hit 100% against several tables by coincidence of small integer
-  ids, and each would be stated as a fact. The first live run did exactly
-  that. Prompt A now defines a relationship as unconditional and sends
-  polymorphic references to a suspicion of kind `other`, which is labelled
-  inferred, and every run since has behaved. The measurement itself still
-  cannot express "only where entity = x"; that would be a conditional join
-  claim, allowed fix 3, and was not added because the prompt fix held.
+- **A join is unconditional unless its claim names a condition.** It asks
+  whether every non-null value of the from-column exists in the to-column,
+  over the rows the claim covers. A polymorphic column, one that points at
+  different tables depending on another column, can hit 100% against a
+  table by a coincidence of small integer ids, and the first live run
+  stated such a match as a fact. Since 0.2.0 prompt A claims such a column
+  one branch at a time, each measured on the rows its value selects ("A
+  polymorphic reference is measured one branch at a time", 0.2.0). A
+  discriminator that is not categorical cannot be branched on, and is still
+  sent to a suspicion of kind `other`, labelled inferred. And a claim with
+  no condition is measured whole, so a coincidental match still reads
+  confirmed: on `polymorph`, `comments.commentable_id -> posts.id` does.
 - `WITH` is accepted by the statement guard because verify uses CTEs. A
   data-modifying CTE would be refused by the read-only session anyway.
 - Structured outputs (`output_config.format`) could replace JSON extraction
@@ -1178,7 +1481,7 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   coincidence is in the data. Sweeping every type-compatible target per claim
   would multiply statements by the table count and report joins nobody
   claimed. The defence is the claim: prompt A proposes joins from names, types
-  and constraints, and routes polymorphic references to a suspicion.
+  and constraints, and claims a polymorphic reference one branch at a time.
 - **The value-length gate is a length, not a shape.** A text column is
   categorical only if it has few distinct values and none longer than
   `categoricalMaxValueLength`. That hides MD5 (32), SHA-1 (40), bcrypt (60)
