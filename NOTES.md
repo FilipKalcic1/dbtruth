@@ -2050,17 +2050,23 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   rule interactive. An agent can ask for any value of a categorical column,
   and a value that one row alone holds narrows a join to that row. The README
   says to give the server a role that reads only what an agent may learn.
-- **`close()` waits for the call in flight.** The handlers' `close()` ended
-  the connection it found at once, so a call still opening its connection
-  opened it after `close()` had found none, and the open socket kept the
-  process alive. Found by the lead after T5.1: a rescoring run left a test
-  process of `test/mcp.test.ts` holding two idle sessions for two and a half
-  hours, which blocked the next `npm run verify` until its 600 s timeout.
-  `close()` now waits in the same queue as the calls; a call that fails still
-  ends its connection at once, inside its own turn. A test opens a connection
-  slowly, closes while a call waits for it, and counts one close; with the old
-  `close()` it counted none. The same race could keep `dbtruth mcp` running
-  after its client closed stdin mid-call.
+- **`close()` ends the connection, then waits for the calls in flight.**
+  The handlers' `close()` ended the connection it found at once, so a call
+  still opening its connection opened it after `close()` had found none, and
+  the open socket kept the process alive. Found by the lead after T5.1: a
+  rescoring run left a test process of `test/mcp.test.ts` holding two idle
+  sessions for two and a half hours, which blocked the next `npm run verify`
+  until its 600 s timeout. The first fix queued `close()` behind the calls,
+  and that made SIGTERM wait for a call held by a lock: CI failed "SIGTERM
+  during a call ends the server and leaves no session behind" on every
+  Postgres and Node, since only Linux runs the signal handler. `close()` now
+  ends the connection first, so a call waiting on the database fails at once
+  with the connection's error, then waits for the calls already made; a call
+  that opens its connection after `close()` throws before using it and ends
+  it in its own turn. Two tests with a fake connection hold both on every
+  platform: one opens slowly and counts one close by the time `close()`
+  returns, one reads the catalog until its connection is closed and needs
+  `close()` to return while it waits.
 - **`init --skill` installs the skill that tells an agent when to measure.**
   The MCP server gives an agent tools; `skills/dbtruth/SKILL.md` tells it when
   to use them (T5.2): read `context/README.md` and each table's file before

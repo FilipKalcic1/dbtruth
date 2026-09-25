@@ -4528,6 +4528,48 @@ of each lost point, in the format of section 4.7 of the plan.
   CheckReport JSON is approved; the `cmd /c` line stays in the README, and
   T5.2's manual A3 run decides whether `init` prints it.
 
+### Iteration 4: 100/100 (the lead)
+- CI of the T5.1 and T4.1 commits (runs 36182081768 and 36182322447) failed
+  on all eight Postgres and Node pairs with one test: "SIGTERM during a call
+  ends the server and leaves no session behind", `error: 'ended promptly'`.
+  Missed at the time: the rescoring ran on Windows, where no signal handler
+  runs and the process is simply terminated.
+- Cause: iteration 3's fix queued `close()` behind the calls, and SIGTERM's
+  handler awaits `close()`, so it waited for the call held by the test's
+  lock. Reproduced in a node:22 container on the fixture's Docker network:
+  the same failure.
+- Fix: `close()` sets `closed`, ends the connection at once, so the call
+  waiting on the lock fails with the connection's error, then awaits the
+  calls' queue; a call that finds `closed` after opening its connection
+  throws "the server is closing" before using it, and its catch ends the
+  connection. The race test was renamed "close waits for a call still
+  opening its connection, and that call closes the connection it opened"
+  and now counts the close before awaiting the call; the new test "close
+  ends the connection a call is waiting on, and the call fails at once
+  instead of holding close" gives a catalog read that waits until its
+  connection is closed, with a 5 s timeout. Both have a tests check in
+  `acceptance/checks.json` (`close-waits`, `close-ends`); the fake connection
+  of both comes from `fakeConnection`.
+- Runs: the three close tests pass on Windows; all 26 tests of
+  `test/mcp.test.ts` pass in node:20 and node:22 containers on Linux.
+- Sabotage, each restored byte for byte from a copy outside the repository
+  (`cmp`): `close()` queued behind the calls as in iteration 3, and
+  `await drop()` left out of `close()`: "close ends the connection a call is
+  waiting on" failed, `Promise resolution is still pending but the event
+  loop has already resolved`; the `closed` check after opening left out, and
+  `await turn` left out of `close()`: "close waits for a call still opening
+  its connection" failed, "the connection the call opened was closed before
+  close returned, not left to keep the process alive", `0 !== 1`. The queued
+  `close()` also failed the SIGTERM test on Linux, in CI and in the
+  container.
+- The first rescore after the fix: T5.1 11/100 and T5.2 26/100, every test
+  check failing on one test, "every error the CLI can print has a row in the
+  README's troubleshooting table": `no troubleshooting row for "the server is
+  closing"`. It can be seen: a client that closes the server's input and
+  still reads its output gets it as the answer to a call in flight. The row
+  was added to the README (the call ran nothing, a connection it had just
+  opened was closed; start the server again and repeat the call), and
+  `test/readme.test.ts` passes.
 ## T5.2 Skill
 ### Iteration 1: 63/100
 - Read first: sections 0 to 5 of the plan, T1.4, T5.1, T5.2 and T7.1,

@@ -612,25 +612,52 @@ test("a schema changed during a session is seen by the next call", LIMIT, async 
   }
 });
 
-test("close waits for a call still opening its connection, and closes the connection that call opened", async () => {
-  // A connection that opens slowly, answers every catalog read with no rows, and counts how often it is closed.
-  let closed = 0;
-  const db: Connection = {
+/** A connection that answers every catalog read with no rows, but for what overrides says. */
+function fakeConnection(overrides: Partial<Connection>): Connection {
+  return {
     database: "x",
     readOnlyProven: true,
     query: async () => ({ ok: true, rows: [] }),
     catalog: async () => ({ ok: true, rows: [] }),
     budget: () => ({ budgetMs: 1000, spentMs: 0, remainingMs: 1000, exhausted: false }),
-    close: async () => void closed++,
+    close: async () => {},
     resetBudget: () => {},
     lost: () => undefined,
+    ...overrides,
   };
+}
+
+test("close waits for a call still opening its connection, and that call closes the connection it opened", async () => {
+  // A connection that opens slowly and counts how often it is closed.
+  let closed = 0;
+  const db = fakeConnection({ close: async () => void closed++ });
   const handlers = tools(directory(), () => delay(100).then((): Opened => ({ db, cfg: config })));
   // Shut down while the call waits for its connection, as a client that closes stdin mid-call does.
   const call = handlers.describeTable({ table: "orders" });
   await handlers.close();
-  assert.equal((await call).isError, true, "an unknown table, answered once the connection opened");
-  assert.equal(closed, 1, "the connection the call opened was closed, not left to keep the process alive");
+  assert.equal(closed, 1, "the connection the call opened was closed before close returned, not left to keep the process alive");
+  assert.deepEqual(texts(await call), ["the server is closing"], "the call ran nothing on the connection it opened");
+});
+
+test("close ends the connection a call is waiting on, and the call fails at once instead of holding close", { timeout: 5_000 }, async () => {
+  // A catalog read that waits, as one behind a lock does, until its connection is closed, then fails as pg fails it.
+  let read!: () => void;
+  let end!: () => void;
+  const reading = new Promise<void>((resolve) => (read = resolve));
+  const ended = new Promise<void>((resolve) => (end = resolve));
+  const db = fakeConnection({
+    catalog: async () => {
+      read();
+      await ended;
+      throw new Error("Connection terminated");
+    },
+    close: async () => end(),
+  });
+  const handlers = tools(directory(), async (): Promise<Opened> => ({ db, cfg: config }));
+  const call = handlers.describeTable({ table: "orders" });
+  await reading;
+  await handlers.close();
+  assert.deepEqual(texts(await call), ["Connection terminated"]);
 });
 
 test("SIGTERM during a call ends the server and leaves no session behind", LIMIT, async (t) => {

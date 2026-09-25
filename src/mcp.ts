@@ -49,8 +49,9 @@ export function tools(project: string, open: () => Promise<Opened>) {
   let held: Opened | undefined;
   // Each call that uses the database waits for the one before. None rejects, so one that fails never stops the next.
   let turn: Promise<unknown> = Promise.resolve();
+  let closed = false;
 
-  /** Ends the connection now: inside a call's turn, where no other call can be using it. */
+  /** Ends the connection now; a call still using it fails with the connection's error. */
   async function drop(): Promise<void> {
     const connection = held;
     held = undefined;
@@ -63,6 +64,8 @@ export function tools(project: string, open: () => Promise<Opened>) {
         // Closed by the server or the network while the session idled: replaced without a word.
         if (held?.db.lost() !== undefined) await drop();
         held ??= await open();
+        // Closed while this call waited its turn or opened the connection: nothing uses it, and nothing keeps it open.
+        if (closed) throw new Error("the server is closing");
         held.db.resetBudget(held.cfg.mcpCallBudgetSeconds);
         return await work(held.db, held.cfg);
       } catch (e) {
@@ -78,13 +81,13 @@ export function tools(project: string, open: () => Promise<Opened>) {
 
   return {
     /**
-     * Ends the connection after the calls already made: one still opening its connection would otherwise open it after
-     * this found none to end, and the open socket would keep the process from exiting.
+     * Ends the connection now, so a call waiting on the database fails at once instead of holding the server open, then
+     * waits for the calls already made: one still opening its connection ends that connection itself.
      */
-    close(): Promise<void> {
-      const closing = turn.then(drop);
-      turn = closing;
-      return closing;
+    async close(): Promise<void> {
+      closed = true;
+      await drop();
+      await turn;
     },
 
     async context({ table }: { table?: string }): Promise<Reply> {
