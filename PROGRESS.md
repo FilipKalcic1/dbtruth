@@ -4527,3 +4527,330 @@ of each lost point, in the format of section 4.7 of the plan.
 - The lead's answers: the `check` tool returning the lines and the
   CheckReport JSON is approved; the `cmd /c` line stays in the README, and
   T5.2's manual A3 run decides whether `init` prints it.
+
+## T5.2 Skill
+### Iteration 1: 63/100
+- Read first: sections 0 to 5 of the plan, T1.4, T5.1, T5.2 and T7.1,
+  Appendices A, B, D and E; the design brief for T5.1 and T5.2 (sections 0,
+  1, 6, 7, 9 to 12, the lead's decisions binding) and the lead's guidance for
+  this task; `src/cli.ts`, `src/mcp.ts` and `src/write.ts` at HEAD 68f9bd7,
+  `scripts/pack-smoke.mjs`, `scripts/acceptance.mjs`, `test/init.test.ts`,
+  `test/readme.test.ts`, `test/structure.test.ts`, `test/acceptance.test.ts`
+  and `src/prompts/write.md`; README.md, NOTES.md (0.2.0's `init` entry and
+  0.4.0), CHANGELOG.md, the T1.4 and T5.1 iterations above and `acceptance/`.
+- Where the lead's guidance and the brief differ, the guidance won: a second
+  `init --skill` without `--force` refuses with a message and a row of its
+  own, where the brief printed the `.env`'s "left as it is" line and exited 0.
+  The code at HEAD agrees with the brief on the rest: `mcp.ts` registers
+  `context`, `describe_table`, `measure_join` and `check`.
+- Checked against the documentation on 2026-09-25, with the quotes in NOTES:
+  Claude Code's skills page (code.claude.com/docs/en/skills): a project skill
+  at `.claude/skills/<skill-name>/SKILL.md`, the command from the folder's
+  name, the frontmatter read only when `---` is the first line, every field
+  optional, `description` and `when_to_use` cut at 1,536 characters, under
+  500 lines advised, descriptions in context each session and the file loaded
+  when invoked, skill directories watched without a restart. The Agent Skills
+  specification (agentskills.io/specification): `name` and `description`
+  required, `name` 1 to 64 characters of `a-z`, `0-9` and `-` and equal to
+  the folder, `description` 1 to 1,024 characters, a body under 5,000 tokens
+  recommended.
+- Checked the earlier checks this touches: T1.5's `readme-commands` pins the
+  Commands list's lines as consecutive; T1.4's `readme-commands` pins the
+  `init` line word for word, and its `help` pins `init +write`, which
+  commander prints as `init [options]` once `init` has options; T0.1's A3
+  pins the smoke test's line of required files; T1.4's `readme-rows` pins
+  "From `init`, the path is the `.env` it would have written".
+- Tests first: `test/skill.test.ts`, new, four tests, in `test:unit`, and
+  three in `test/init.test.ts`.
+  - Before anything else was written, both files failed to load: `ENOENT: no
+    such file or directory, open '...\skills\dbtruth\SKILL.md'`.
+  - With the skill written and `src/cli.ts` as at HEAD, the four skill tests
+    passed, since they test the file, and each init test failed for its
+    reason: "init --skill installs the skill the package ships ..." with the
+    deep-equal missing `wrote ..\..\.claude\skills\dbtruth\SKILL.md` before
+    the next steps; "a skill path taken by a directory ..." with `expected: 1,
+    actual: 0`; "as a command, init --skill ..." with `error: unknown option
+    '--skill'` and `1 !== 0`.
+- Built:
+  - `skills/dbtruth/SKILL.md`, 2,728 characters: Appendix D, checked line by
+    line against what `write.ts` and prompt B put in `context/` today, and
+    rewritten where it no longer held (NOTES: "What changed from Appendix D,
+    and why"). The frontmatter is `name` and `description` alone; no
+    `allowed-tools`.
+  - `package.json`: `files` gains `skills`; `test:unit` gains
+    `test/skill.test.ts`. The build is unchanged: `init` reads the file one
+    level up from `cli.ts`, as `--version` reads `package.json`, so it is the
+    package root under tsx and once installed, and there is nothing to copy.
+  - `src/cli.ts`: `init --skill` and `--force`; `runInit` installs the skill
+    at `.claude/skills/dbtruth/SKILL.md` in the directory where it writes the
+    `.env`, refuses a file there without `--force` (`<path> already exists;
+    pass --force to replace it`, exit 1, after the `.env`'s line and before
+    the next steps), and with `--force` removes what is at that path and
+    writes with `wx`. `create`, one function, writes the `.env` and the skill
+    and prints `wrote` or `could not write` for both. The `init` description
+    is unchanged; the options have their help text.
+  - `scripts/pack-smoke.mjs`: last, runs the installed `dbtruth init --skill`
+    in its temporary project and compares the file with
+    `skills/dbtruth/SKILL.md` byte for byte, which also proves that the
+    tarball holds it.
+- Checked by hand under Linux (node:22, as the `node` user), since Windows
+  here refuses a file symlink without privileges (`EPERM`): with
+  `.claude/skills/dbtruth/SKILL.md` a link to a file outside the project,
+  `init --skill` refused it as a skill already there, and `init --skill
+  --force` wrote a regular file in the link's place, the skill as shipped,
+  and left the file the link pointed at as it was.
+- Docs: README (a subsection of "Giving it to your agent", "Telling it when to
+  measure: the skill"; a sentence in the quick start's paragraph on `init`;
+  the Commands list's `npx dbtruth init --skill` line; a row for the refusal;
+  the rows for `could not write <path>: <error>` and for an unknown option;
+  the Team tier no longer calls the skill coming; Development), NOTES (under
+  0.4.0: "`init --skill` installs the skill that tells an agent when to
+  measure", with the format as read, what changed from Appendix D, the tests,
+  why the build copies nothing, the refusal and `--force`, the check changes,
+  what is not done), CHANGELOG (0.4.0), `--help` (`init [options]`) and `init
+  --help` (`--skill`, `--force`).
+- Changes to earlier checks, none to what an assertion means, each named in
+  NOTES: T1.4's `help` expects `init [options]` (the lead's decision D6, left
+  to T5.2 by T5.1's NOTES); T1.5's `readme-commands` takes the new `init
+  --skill` line between `init` and `check`.
+- `acceptance/checks.json`: 22 checks for T5.2. A1 is `npm run verify` with
+  the two init tests' lines and the smoke test's skill line, one run shared
+  with the gate; A2 is the tool-name test; tests: the four skill tests, the
+  three init tests and the smoke test's line; the gate; docs: README (five),
+  `init --help`, NOTES, CHANGELOG; invariants: the structure tests, stdout
+  (the new command test and T1.4's), the troubleshooting rows.
+  `acceptance/manual.json`: A3 and the sabotage item, both empty.
+- `npm run verify` exits 0: 305 tests, 303 pass, the 2 live tests skipped,
+  and the package smoke test passes with its new line. `npm run acceptance --
+  --task T5.2` prints `T5.2: 63/100`; `--task T1.4` and `--task T1.5`, whose
+  checks changed, print 100/100; the 112 file and `--help` checks of every
+  task match the final files.
+- Under Linux as the non-root `node` user, from a copy of the working tree
+  with LF line ends: in `node:22` (22.23.3) and `node:20` (20.20.2), git
+  2.39.5, the skill, init, readme, structure and acceptance test files, 44 of
+  44 pass on each; in `node:22` also the typecheck, the build and the package
+  smoke test against the fixture, its skill line included.
+- Lost A3 (-16.7): `FAIL T5.2 A3 acceptance: no evidence for: Manual ...`.
+  Cause: the transcript of Claude Code with the server and the skill needs a
+  `claude` CLI, which this machine does not have; the lead produces it after
+  this workflow (brief section 7, the A3 procedure).
+- Lost Tests (-20): `FAIL T5.2 sabotage tests: no evidence for: Sabotage
+  check ...`. Cause: no sabotage record; the sabotage check is done by a
+  later stage.
+- Open for the lead: a refused second `--skill` exits 1 without the next
+  steps, read from the plan's contrast between the `.env` ("says so and
+  continues") and the skill ("refuses"); and the file ships with the line
+  ends of the checkout it is packed from, CRLF from a Windows one with
+  `core.autocrlf`, which A3's run on native Windows can confirm Claude Code
+  reads.
+### Iteration 2: 83/100
+- Read first: the four reviews of iteration 1 (7 findings, from the plan,
+  quality and bugs lenses), sections 3 and 4 of the plan, T1.4 and T5.2
+  again. Each finding was checked against the code, the plan and, where it
+  claimed a behavior, a run, before anything changed.
+- Real, and fixed at the cause:
+  - `init --skill` never installed the skill beside a directory named `.env`:
+    `runInit` returned 1 as soon as the `.env` could not be written.
+    Reproduced by the new test below, before the fix: in a repository holding
+    `.env/bin/python`, `could not write .env: EEXIST ...` alone, exit 1, no
+    skill. After it, the command run there prints that line and `wrote
+    .claude\skills\dbtruth\SKILL.md`, exits 1 and prints nothing on stdout.
+    The README supports that
+    setup (keep the settings in another file, `--dotenv`), so such a project
+    had no way to get the skill from `init`. Taken as the finding's first
+    fix, not its README-only alternative: the `.env`'s result is kept in
+    `hasEnv`; without a `.env`, git judges nothing and no next steps are
+    printed, as T1.4 has it, but the skill is installed first and `init`
+    then exits 1. T1.4's two tests of a `.env` directory pass unchanged.
+    NOTES: "A `.env` that cannot be written does not keep the skill out";
+    README: the `could not write <path>` row says `init --skill` still
+    installs the skill.
+  - The frontmatter test's regex took values YAML does not read as written.
+    Checked in node: `description: Use it before SQL:` (a mapping indicator
+    at the end), `description: Use it<tab># note` (a comment) and
+    `description: null` all matched. The value regex now refuses a `:`
+    before a blank or at the end, a `#` after a blank, and `null`, `true` or
+    `false` in any case; the comment and NOTES say so.
+  - `test/skill.test.ts` read the frontmatter through `lines`, `close`,
+    `field` and a key comparison. It now normalizes the line ends once and
+    matches the frontmatter once, `^---\nname: (.*)\ndescription: (.*)\n---\n`,
+    which also pins line 1, the two keys alone and their order; `FOLDER`
+    and its comment are gone. The four tests keep their names.
+  - The quick start said `init` "never changes a file that is already
+    there", which `--skill --force` breaks; so did the `.env`'s row. Both now
+    name the `.env` and `.gitignore`. The finding's wording, which appends
+    the `--force` clause to the `--skill` sentence, would break T5.2's
+    `readme-quickstart`, which pins that sentence's end; the skill's section
+    already says what `--force` does.
+  - The skill's section said Claude Code reads the rest of the skill "when
+    the agent is about to write, review or debug SQL", a trigger dbtruth
+    cannot promise, and "it reads the files", with the skill as "it". Now:
+    the agent loads the rest when it judges that a task fits the
+    description, and without the server the agent reads the files.
+  - `test/init.test.ts` had two `command` helpers, one per command test. One
+    now sits beside `init()`, taking the options; T1.4's command test calls
+    it with the same arguments, and no assertion changed (NOTES, "Test and
+    check changes").
+  - The build copies nothing, where the plan's Build and section 5.4 have it
+    copy the skill, and iteration 1 put that to no one. The code stays: a
+    copy under `dist/` would ship the same file twice, and `files` already
+    ships `skills/`. It is now open for the lead, below.
+- Taken in part: none. Rejected: none.
+- New test, run against the code before its fix: "init --skill installs the
+  skill beside a directory named .env, such as a virtualenv, and exits 1: it
+  could not write the .env" failed with `actual: []`, `expected: [ 'wrote
+  .claude\\skills\\dbtruth\\SKILL.md' ]`. The frontmatter test, with the
+  skill's description replaced in turn by each of the three values above,
+  failed with `not a plain value: null` and the like; with a third key, with
+  `the file does not open with a frontmatter of name and description alone`.
+  With the new code, dropping the final `if (!hasEnv) return EXIT_FAILURE`
+  failed T1.4's two `.env` directory tests and the new one (`0 !== 1`), and
+  running git's check without a `.env` failed T1.4's command test and the
+  new one (the `WARNING: .gitignore does not ignore .env` line). Each file
+  was restored byte for byte from a copy outside the repository (`cmp`).
+  These show the tests fail for their reason; they are not the task's
+  sabotage record.
+- `acceptance/checks.json`: one tests check, `env-directory`, for the new
+  test.
+- `npm run verify` exits 0: 306 tests, 304 pass, the 2 live tests skipped,
+  and the package smoke test passes, its `init --skill` line included. `npm
+  run acceptance -- --task T5.2` prints `T5.2: 63/100`, its 23 automated
+  checks passing; the 99 file checks of every task match the final files.
+- Lost A3 (-16.7): `FAIL T5.2 A3 acceptance: no evidence for: Manual ...`.
+  Cause: the transcript of Claude Code with the server and the skill needs a
+  `claude` CLI, which this machine does not have; the lead produces it.
+- Lost Tests (-20): `FAIL T5.2 sabotage tests: no evidence for: Sabotage
+  check ...`. Cause: no sabotage record; the sabotage check is done by a
+  later stage.
+- Open for the lead, with iteration 1's two: the build copies nothing, since
+  `init` reads `skills/dbtruth/SKILL.md` from the package root under tsx and
+  once installed, where the plan's Build says "copied by the build" and
+  section 5.4 "tsc + copy prompts (+ skills from T5.2)"; NOTES ("The file
+  ships from the package's root") gives the reason and will cite the
+  decision.
+- The sabotage check of the task (section 4.5). `src/cli.ts`, `src/mcp.ts`,
+  `skills/dbtruth/SKILL.md`, `package.json`, `test/skill.test.ts` and
+  `test/init.test.ts` were copied outside the repository first. After each
+  break `test/skill.test.ts` and `test/init.test.ts` were run (22 tests, all
+  passing before); after the break in `package.json`, `npm run build` and
+  the package smoke test, `npm run test:pack`.
+- Sabotage: the skill installed in the working directory, `join(here,
+  ".claude", SKILL)`, not where the `.env` goes; "init --skill installs the
+  skill the package ships at the repository root, beside the .env, and
+  nothing else" failed with "+ 'wrote .claude\\skills\\dbtruth\\SKILL.md', -
+  'wrote ..\\..\\.claude\\skills\\dbtruth\\SKILL.md'". Restored.
+- Sabotage: the refusal dropped and every skill replaced (`if (false && ...)`
+  and `create(..., true)`), so a skill the user edited is written over; "as
+  a command, init --skill installs the skill, refuses a second time without
+  --force, and --force replaces the skill alone" failed with the second
+  run's stderr, "wrote .claude\skills\dbtruth\SKILL.md" and the next steps,
+  and "0 !== 1". Restored.
+- Sabotage: `--force` without its `rm` (`if (replace) rmSync(...)` removed),
+  so it replaces nothing; the same test failed with "could not write
+  .claude\skills\dbtruth\SKILL.md: EEXIST: file already exists, open
+  '...'" and "1 !== 0". Restored.
+- Sabotage: `--force` removing a directory too, `rmSync(path, { force: true,
+  recursive: true })`; "a skill path taken by a directory is left alone,
+  with --force too, and init exits 1: it could not write the file" failed
+  with "wrote .claude\skills\dbtruth\SKILL.md" and the next steps, and "0
+  !== 1": the directory and the file in it were deleted. Restored.
+- Sabotage: iteration 2's fix reverted, `if (!hasEnv) return EXIT_FAILURE`
+  before the skill; "init --skill installs the skill beside a directory
+  named .env, such as a virtualenv, and exits 1: it could not write the
+  .env" failed with "the skill's line alone after the .env's: no warning
+  about a .env not written, and no next steps", `[]` where `[
+  'wrote .claude\\skills\\dbtruth\\SKILL.md' ]`. Restored.
+- Sabotage: the skill read beside `cli.ts`, `new URL(SKILL,
+  import.meta.url)` without `../`; the four init tests that run `--skill`
+  failed, the first with "ENOENT: no such file or directory, open
+  '...\dbtruth\src\skills\dbtruth\SKILL.md'". Restored.
+- Sabotage: the skill written with the `.env`'s text, `create(skill, DOTENV,
+  ...)`; "init --skill installs the skill the package ships ..." failed with
+  ".claude\skills\dbtruth\SKILL.md at the root is not the skill the package
+  ships", and the `.env` directory test and the command test with "... is
+  not the skill the package ships". Restored.
+- Sabotage: `--force` reaching the `.env` (`!opts.force &&` on its
+  existence check, `opts.force` passed to its `create`); "a skill path taken
+  by a directory ..." failed with "every file as it was, --force true",
+  `'.env': Buffer(267)` where `Buffer(0)`, and the command test with "+
+  'wrote .env\n' - '.env already exists; left as it is\n'". Restored.
+- Sabotage: the command not passing `--skill` on (`skill: own.skill` removed
+  from `runInit`'s options); the command test failed with its first run's
+  stderr lacking "- 'wrote .claude\\skills\\dbtruth\\SKILL.md\n'" after
+  ".env already exists; left as it is". Restored.
+- Sabotage: the server renaming `measure_join` to `measure_relationship` in
+  `src/mcp.ts`, the skill unchanged; "the skill names every tool the MCP
+  server registers, and no other" failed, but only with assert's "Expected
+  values to be strictly deep-equal" and the two lists, not saying which was
+  the skill's. The comparison was given a message; repeated, the test
+  failed with "the tools the skill names, against those mcp.ts registers",
+  `'measure_join'` where `'measure_relationship'`. Restored.
+- Sabotage: `skills` dropped from `files` in `package.json`; after `npm run
+  build`, the package smoke test failed with "pack-smoke: FAIL Command
+  failed: "node_modules\.bin\dbtruth" init --skill ... dbtruth: ENOENT: no
+  such file or directory, open
+  '...\node_modules\dbtruth\skills\dbtruth\SKILL.md'": the tarball without
+  the skill. Restored.
+- Sabotage: the `--reveal` rule taken out of the skill's Never section; "the
+  skill mentions --reveal only to forbid it" failed with "the Never section
+  does not forbid --reveal". Restored.
+- Sabotage: a blank line before the skill's frontmatter, which Claude Code
+  then does not read; "the skill's frontmatter opens on its first line and
+  holds a name and a description, each a plain value" failed with "the file
+  does not open with a frontmatter of name and description alone".
+  Restored.
+- Sabotage: the skill named `dbtruth-context` in its folder `dbtruth`; "the
+  skill's name is its folder's, its description under 1,024 characters, and
+  the whole file under 5,000" failed only with assert's "Expected values to
+  be strictly equal", `'dbtruth-context'` against `'dbtruth'`. The
+  comparison was given a message; repeated, the test failed with "a name
+  other than its folder's". Restored.
+- Sabotage: `rmSync(path)` without `force: true`. Every test stayed green:
+  no test ran `--force` where there was no skill, and there `init --skill
+  --force` printed "could not write .claude\skills\dbtruth\SKILL.md: ENOENT:
+  no such file or directory, lstat '...'" and exited 1. New test "init
+  --skill --force installs the skill where there is none yet"; it passes on
+  the code as built. Repeated; it failed with ".env already exists; left as
+  it is", "could not write .claude\skills\dbtruth\SKILL.md: ENOENT: no such
+  file or directory, lstat '...'" and "1 !== 0". Restored.
+- Sabotage: `--force` writing in place, `flag: replace ? "w" : "wx"` without
+  the `rm`, which writes through a link. Every test stayed green: no test
+  put a link at the skill's path, the case the code's comment and NOTES give
+  the `rm` for, checked only by hand under Linux in iteration 1. New test
+  "init --skill --force puts a file of its own where the skill is a link,
+  and leaves the linked file as it was", with a hard link, since Windows
+  makes a symbolic one only with privileges (`EPERM` here); it passes on
+  the code as built. Repeated; it failed with "shared.md was written through
+  the link", the skill's text where "shared\n". Restored.
+- Each file was restored from its copy and matched it byte for byte (`cmp`);
+  `git diff HEAD -- src/cli.ts` and `-- package.json` printed byte for byte
+  the diffs saved before, `src/mcp.ts` had none, and
+  `skills/dbtruth/SKILL.md`, untracked, matched its copy. The changes left:
+  two messages in `test/skill.test.ts`, no assertion changed; the two new
+  tests in `test/init.test.ts`, a tests check for each in
+  `acceptance/checks.json` (`force-new`, `force-link`), and two sentences
+  on them in NOTES, under "A second `--skill` refuses". With them the two
+  files pass: 24 tests.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  308 tests, 306 pass, the 2 live tests skipped, and the package smoke test
+  passes, its `init --skill` line included; `npm run acceptance -- --task
+  T5.2` prints `T5.2: 83/100`, its 25 automated checks and the sabotage item
+  passing; the 99 file checks of every task match the final files.
+- Lost A3 (-16.7): `FAIL T5.2 A3 acceptance: no evidence for: Manual ...`.
+  Cause: the transcript of Claude Code with the server and the skill needs a
+  `claude` CLI, which this machine does not have; the lead produces it.
+### Iteration 3: 100/100 (the lead)
+- A3, by an agent standing in for Claude Code (there is no claude CLI on this
+  machine): a fresh agent was given only the skill, the fixture project that
+  `scripts/make-fixture-snapshot.mjs` writes, and the four tools of the real
+  `dbtruth mcp` server started with `--project` on it, and asked "write a
+  query joining orders to customers". Its trace: it read `context/README.md`,
+  then `context/tables/orders.md` and `customers.md`, listed the tools, called
+  `measure_join` on orders.customer_id -> customers.id (broken: 440 of 500,
+  60 orphans, all above the highest customers.id) and `describe_table` on
+  both tables, and only then answered. The answer used a LEFT JOIN on purpose,
+  said 60 of 500 orders (12%) point to no customer and how to keep or drop
+  them on purpose, compared status with `lower(btrim(status))`, and left out
+  `api_token`. A person should repeat it in Claude Code with the server added;
+  that run also settles whether `init` prints the `cmd /c` form on native
+  Windows.

@@ -36,9 +36,11 @@ a line of its own.
 Or let `npx dbtruth init` write the file, at the repository root or, outside a
 repository, in the current directory. It writes the three lines commented
 out, so nothing in the file is read until you remove the `#` before a line and
-fill in its value. It never changes a file that is already there: it leaves an
-existing `.env` as it is, and asks git whether `.gitignore` ignores `.env`,
-printing the line to add when it does not. Last, it prints the next steps:
+fill in its value. It never changes an existing `.env` or `.gitignore`: it
+leaves the `.env` as it is, and asks git whether `.gitignore` ignores `.env`,
+printing the line to add when it does not. With `--skill` it also installs
+the skill for Claude Code (see Giving it to your agent). Last, it prints the
+next steps:
 
 ```
 next steps:
@@ -131,8 +133,9 @@ in its own words.
 | `(<n> skipped)`<br>`relations: <kinds>, <n> not examined` | The first is part of the line that starts `Sending to`, the second of the summary. Some relations were not read: sampling used up its share of the time budget (`--extract-budget-share` of `--budget-seconds`) before it reached them, or they were dropped to fit the model's input (next row). Nothing is measured on them, and a measurement the budget cut off is marked `not measured: time budget exhausted` in `context/tables/`. Raise `--budget-seconds`. |
 | `sample rows dropped to fit the model's input limit`<br>`sample rows and value lists dropped to fit the model's input limit`<br>`sample rows, value lists and <n> tables dropped to fit the model's input limit` | Printed as part of the line that starts `Sending to`. The schema with its samples is larger than the model's input ceiling, `DBTRUTH_MODEL_MAX_INPUT_TOKENS`, so detail was dropped until it fit: sample rows first, then value lists, then whole tables. The model sees less and proposes less; what it proposes is still measured on the database. Raise `--model-max-input-tokens` only for a model that takes more. |
 | `the verdicts' queries dropped to fit the model's input limit`<br>`README.md and ENTITIES.md not written: over the model's input limit even without the verdicts' queries` | Printed as part of the line that starts `write:`. What the model is sent to write `README.md` and `ENTITIES.md`, every claim with its verdict, query and numbers, is larger than the model's input ceiling, `DBTRUTH_MODEL_MAX_INPUT_TOKENS`; a database with many joins compared with other keys (see How it works) reaches it first. So the queries were left out of it: the numbers were all sent, and every query is still in `context/snapshot.json` and in `--json`. When even that is too large, the model is not called: the per-table files and the snapshot are written, `README.md` and `ENTITIES.md` are not, and the last run's are removed. Raise `--model-max-input-tokens` only for a model that takes more; a lower `--weak-evidence-max-candidates` shortens the query of every join compared. |
-| `could not write <path>: <error>` | A file under `context/` could not be written, or, when the error names `unlink` or `rm`, a file the last run wrote there for a table since renamed or dropped could not be removed. The cause is a directory this user cannot write (`EACCES`), a full disk, or on Windows another program that holds the file open (`EBUSY`). The other files were written, and a file that could not be removed stays as the last run left it. Close the program, or fix the cause, and run again. From `init`, the path is the `.env` it would have written, and `EEXIST` means a directory of that name is there, such as a Python virtualenv: dbtruth reads no directory as settings, so rename it, or keep the settings in a file of another name and pass `--dotenv <path>`. From `check`, the path is the file `--markdown` names; check then exits 1 without printing its JSON. Give it a path to a file, in a directory that exists and this user can write. |
-| `<path> already exists; left as it is` | `init` found a `.env` where it would write one. It never changes a file that is there, so the file is as it was: check that it holds the settings the quick start shows, and follow the next steps printed after this line. |
+| `could not write <path>: <error>` | A file under `context/` could not be written, or, when the error names `unlink` or `rm`, a file the last run wrote there for a table since renamed or dropped could not be removed. The cause is a directory this user cannot write (`EACCES`), a full disk, or on Windows another program that holds the file open (`EBUSY`). The other files were written, and a file that could not be removed stays as the last run left it. Close the program, or fix the cause, and run again. From `init`, the path is the `.env` it would have written, and `EEXIST` means a directory of that name is there, such as a Python virtualenv: dbtruth reads no directory as settings, so rename it, or keep the settings in a file of another name and pass `--dotenv <path>`; `init --skill` still installs the skill. With `--skill`, the path can be the skill's, `.claude/skills/dbtruth/SKILL.md`, where `EEXIST`, or `EISDIR` with `--force`, means a directory of that name is there: `init` removes no directory, so move it. From `check`, the path is the file `--markdown` names; check then exits 1 without printing its JSON. Give it a path to a file, in a directory that exists and this user can write. |
+| `<path> already exists; left as it is` | `init` found a `.env` where it would write one. It never changes a `.env` that is there, so the file is as it was: check that it holds the settings the quick start shows, and follow the next steps printed after this line. |
+| `<path> already exists; pass --force to replace it` | `init --skill` found a skill at `.claude/skills/dbtruth/SKILL.md`, left it as it is, since it may have been edited, and stopped: it exits `1` without the next steps. To install the skill of the dbtruth you run, after an upgrade for example, run `npx dbtruth init --skill --force`, which replaces that file and nothing else; the `.env` is never replaced. |
 | `WARNING: <path> does not ignore <path>; add this line to it: .env` | Printed by `init`: no rule in the `.gitignore` at the repository root covers the `.env` there, so git would commit the password and the key in it on any machine without a rule of its own. Add the line `.env` to that `.gitignore`, and create the file if there is none; `init` never edits it. A rule in your own ignore file, `core.excludesFile`, does not count: it covers your machine alone. A rule for `.env/` covers only a directory, and a later `!.env` takes an earlier rule back. |
 | `WARNING: git could not say whether <path> ignores <path>; if it does not, add this line to it: .env` | Printed by `init` when git gives no answer: outside a repository, before `git init`; when git is not installed or not on the `PATH`; or in a repository git refuses, as it does one owned by another user. Make sure the `.gitignore` at the repository root holds the line `.env`, once there is a repository; `git check-ignore -v .env`, run there, shows git's own words. |
 | `no <path>: run npx dbtruth first` | There is no snapshot at that path, relative to the current directory. Every full run writes `context/snapshot.json`, and `check` measures the database against it; `--snapshot <path>` names another file. Run `npx dbtruth` in the directory that holds `context/`, and commit `context/` with the snapshot in it. The `mcp` tools `context` and `check` say it too, with the full path, when `context/` has no such file: run `npx dbtruth` in the project directory (see Giving it to your agent). A run over the model's input limit writes no `README.md`; ask `context` for a table instead. |
@@ -141,7 +144,7 @@ in its own words.
 | `FAIL Node <version>: dbtruth needs Node 20 or newer` | Install Node 20 or newer. |
 | `FAIL Postgres <n>: dbtruth needs Postgres 12 or newer` | The server is older than dbtruth supports: its queries read catalog columns and use SQL that Postgres 12 added. Point it at Postgres 12 or newer. |
 | `error: option '--fail-on <when>' argument '<value>' is invalid. Allowed choices are regression, change, never.` | `check --fail-on` takes one of three values: `regression`, the default, fails the build on a regression or a stale item; `change` on any change; `never` reports and passes. |
-| `error: too many arguments. Expected 0 arguments but got 1: <word>.`<br>`error: unknown option '<option>'`<br>`error: option '<option>' argument missing` | A command or an option this dbtruth does not have, or an option given without its value. A dbtruth older than 0.4.0 has no `mcp`, one older than 0.3.0 has no `check`, and one older than 0.2.0 has no `doctor`, `init` or `--version`. `npx dbtruth --help` lists what there is. |
+| `error: too many arguments. Expected 0 arguments but got 1: <word>.`<br>`error: unknown option '<option>'`<br>`error: option '<option>' argument missing` | A command or an option this dbtruth does not have, or an option given without its value. A dbtruth older than 0.4.0 has no `mcp` and no `init --skill`, one older than 0.3.0 has no `check`, and one older than 0.2.0 has no `doctor`, `init` or `--version`. `npx dbtruth --help` lists what there is. |
 | `unknown table <name>; the closest: <names>`<br>`unknown column <table>.<column>; the closest: <names>` | From the `mcp` tools. `describe_table` and `measure_join` did not find the name in the catalog, read again at every call, so a table added since the server started is found; `context` found no file of that name in `context/tables/`. `describe_table` and `measure_join` find a table by its name, or as `schema.table` outside `public`, whatever the case, and a column only as spelled; `context` finds a table's file only by its name exactly as written. Nothing was measured. The closest names are those the fewest edits away, or `none` when there is nothing to compare with. |
 | `<table> was not examined within this call's time budget; raise DBTRUTH_MCP_CALL_BUDGET_SECONDS` | From `mcp`: sampling the table used up its share (`--extract-budget-share`) of the call's time budget, 20 seconds by default, so nothing was measured. Set `DBTRUTH_MCP_CALL_BUDGET_SECONDS` in the server's environment, or `--mcp-call-budget-seconds` after `mcp` in the command that starts it, and restart the server. |
 | `--project <dir>: no such directory` | `dbtruth mcp --project` names a directory that does not exist, relative to the one the server starts in. The server does not start, and exits `1`: correct the path in the agent's settings for the server. |
@@ -154,6 +157,7 @@ in its own words.
 npx dbtruth              # writes ./context/ and prints a summary
 npx dbtruth doctor       # checks the setup, one line per check, without spending a token
 npx dbtruth init         # writes a .env with placeholders at the repository root, and prints the next steps
+npx dbtruth init --skill # also installs the skill at .claude/skills/dbtruth/SKILL.md; --force replaces it
 npx dbtruth check        # re-measures what context/ claims, without a model or an API key
 npx dbtruth mcp          # serves context/ and measurements to an agent over MCP, without a model or an API key
 npx dbtruth --version    # prints the version (also -v)
@@ -252,6 +256,26 @@ table or column the database does not have is refused with the closest names
 it does have, and nothing is measured. `npx -y` runs the newest release when
 npm's cache holds none; write `dbtruth@<version>` to run only the one you
 reviewed.
+
+### Telling it when to measure: the skill
+
+The server gives the agent tools; the skill tells it when to use them.
+`npx dbtruth init --skill` installs it for Claude Code as
+`.claude/skills/dbtruth/SKILL.md` at the repository root, or outside a
+repository in the current directory, beside the `.env`. Commit it, so everyone
+on the project gets it. Claude Code keeps the skill's one-line description in
+every session; the agent loads the rest when it judges that a task fits that
+description, such as writing, reviewing or debugging SQL. The skill tells the
+agent to read `context/README.md` and the file of every table a query touches,
+to call `measure_join` before a join those files do not list as confirmed, what
+to do about a broken join, a join on weak evidence or one branch of a column
+that points at different tables, and never to start a full run or pass
+`--reveal` itself. Without the server, the agent reads the files in `context/`.
+
+A second `init --skill` finds the file there and stops without changing it,
+since you may have edited it, and exits `1`. `--force` replaces it with the
+skill of the dbtruth you run, after an upgrade for example, and nothing else:
+the `.env` is never replaced.
 
 ## Keeping context true: dbtruth check
 
@@ -392,8 +416,8 @@ gives it, writes what moved into one comment on the pull request, updated in
 place, and by default fails the job on a regression or a stale item.
 
 These stay free forever: the CLI (`dbtruth`, `doctor`, `init`, `check`, and
-`mcp`); the skill, still coming, that tells an agent when to read the context
-and measure a join; and the Action on public repositories.
+`mcp`); the skill that tells an agent when to read the context and measure a
+join; and the Action on public repositories.
 
 No database content passes through a server of ours, on either tier. You
 bring your own model access: a full run calls the Anthropic API with your
@@ -613,9 +637,10 @@ loads them again; the tests that change data work on copies of
 The package smoke test (`npm run test:pack`, the last step of `verify`) packs
 the package, installs the tarball into an empty project and runs the installed
 `dbtruth --help`, `dbtruth --version` and `dbtruth doctor` (against
-`DATABASE_URL`, else the fixture), then starts the installed `dbtruth mcp` as
-an agent would, lists its tools and measures a join, so it tests what a user
-installs.
+`DATABASE_URL`, else the fixture), starts the installed `dbtruth mcp` as an
+agent would, lists its tools and measures a join, and last runs the installed
+`dbtruth init --skill` and compares the skill it writes with
+`skills/dbtruth/SKILL.md`, so it tests what a user installs.
 `npm run acceptance` runs the checks in `acceptance/checks.json`, counts the
 manual items in `acceptance/manual.json`, and prints every check, each task's
 score and, without `--task`, the overall score, weighted as section 4 of

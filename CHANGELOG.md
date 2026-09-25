@@ -13,6 +13,12 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   project; else Claude Code's `CLAUDE_PROJECT_DIR`, else the directory the
   server starts in. Each call has 20 seconds (`--mcp-call-budget-seconds`).
 - `init`'s next steps end with the `claude mcp add` line.
+- `npx dbtruth init --skill` also installs the dbtruth skill for Claude Code,
+  `.claude/skills/dbtruth/SKILL.md` at the repository root, which tells the
+  agent to read `context/` and to call `measure_join` before a join `context/`
+  does not list as confirmed. A skill already there is left as it is and
+  `init` exits 1; `--force` replaces it, and never the `.env`. The package
+  ships the skill in `skills/`.
 - A connection the server closes while dbtruth waits, such as during the
   model's answer, is now `database connection lost: <reason>` on the next
   statement, not a crash with Node's stack trace.

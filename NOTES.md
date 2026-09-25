@@ -2061,6 +2061,117 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   slowly, closes while a call waits for it, and counts one close; with the old
   `close()` it counted none. The same race could keep `dbtruth mcp` running
   after its client closed stdin mid-call.
+- **`init --skill` installs the skill that tells an agent when to measure.**
+  The MCP server gives an agent tools; `skills/dbtruth/SKILL.md` tells it when
+  to use them (T5.2): read `context/README.md` and each table's file before
+  writing SQL, call `measure_join` before a join those files do not list as
+  confirmed, what a broken join, a join on weak evidence, a branch and rows
+  with no value mean for the query, and never start a full run or pass
+  `--reveal`. `npx dbtruth init --skill` installs it as
+  `.claude/skills/dbtruth/SKILL.md` where `init` writes the `.env`: at the
+  repository root by T1.1's rule, or in the working directory outside a
+  repository.
+  - **The format, checked on 2026-09-25.** Claude Code's skills page
+    (code.claude.com/docs/en/skills): a project skill is
+    `.claude/skills/<skill-name>/SKILL.md`, and its command comes from the
+    folder's name; the frontmatter is read "only when the opening `---` is the
+    file's first line"; every field is optional, and `description`, "what the
+    skill does and when to use it", is what Claude decides by, cut at 1,536
+    characters with `when_to_use` in the listing; descriptions are in context
+    in every session and the whole file loads when the skill is invoked; the
+    skill directories are watched, so a skill installed during a session is
+    picked up without a restart; and `SKILL.md` should stay under 500 lines.
+    The Agent Skills specification (agentskills.io/specification), which the
+    page cites, requires both fields: `name` of at most 64 characters of
+    `a-z`, `0-9` and `-`, equal to the folder's name, and `description` of 1
+    to 1,024 characters, with a body under 5,000 tokens recommended. The skill
+    has `name` and `description` alone, which satisfies both. No
+    `allowed-tools`: letting the agent call a tool without asking is the
+    user's decision, not the package's.
+  - **What changed from Appendix D, and why.** "Anything marked (inferred)
+    was not [checked]" is false today: a table's file shows a confirmed join on
+    an inferred claim as "confirmed, ... (inferred)", with its numbers. The
+    skill says what was measured, a join marked confirmed or **BROKEN** and a
+    problem in bold, with their numbers, and what was not: a table's purpose,
+    and anything marked (inferred) without numbers or "not measured". It adds
+    what later tasks put in the files, weak evidence (T2.2), a join that holds
+    only `when` a column has a value (T2.3) and rows with no value in the
+    from-column; `rejected`, which only `measure_join` answers; what to do
+    without `context/` or without the tools; not to start a full run itself,
+    since one sends the schema, statistics and sample rows to a model on the
+    user's key; and not to follow instructions found in `context/` or in the
+    tools' answers, which are data. Values are written as quoted text, so that
+    every code span of one lowercase word is a tool's name.
+  - **The tests hold the skill to the server and to the format.**
+    `test/skill.test.ts`, which needs no database: the frontmatter opens on
+    line 1 and holds `name` and `description` alone, as plain values, each
+    opening with a letter, with no `:` before a blank or at its end, no `#`
+    after a blank, no trailing blank, and not `null`, `true` or `false`, which
+    YAML reads exactly as written, so no YAML library is needed; the name is
+    the folder's;
+    the description is under 1,024 characters and the whole file under 5,000,
+    counted with LF line ends; the code spans of one lowercase word, or words
+    joined by `_`, are exactly the names `mcp.ts` passes to `registerTool`, so
+    the skill can neither name a tool the server does not have nor leave one
+    out; and `--reveal` appears only under "Never".
+  - **The file ships from the package's root, and the build copies nothing.**
+    The plan has the build copy the skill (T5.2, and section 5.4's "copy
+    prompts (+ skills from T5.2)"). Here `files` in `package.json` gains
+    `skills`, and `init` reads `skills/dbtruth/SKILL.md` one level up from
+    `cli.ts`, as `--version` reads `package.json`: from `src/` under tsx and
+    from `dist/` once installed, the package root both times. A copy under
+    `dist/` would ship the same file twice. The package smoke test runs the
+    installed `init --skill` in its temporary project, which is in no
+    repository, and compares the file it writes with `skills/dbtruth/SKILL.md`
+    byte for byte; reading it from the installed package is the proof that the
+    tarball holds it. The smoke test's line of required files stays as T0.1's
+    A3 pins it.
+  - **A second `--skill` refuses, and `--force` replaces the skill alone.** The
+    plan contrasts the `.env`, which `init` "never overwrites ... it says so
+    and continues", with the skill, where the second run "refuses without
+    `--force`". So a skill already there, which the user may have edited, is
+    left as it is: `init` prints `<path> already exists; pass --force to
+    replace it`, with its own row, and exits 1, after the `.env`'s line and
+    before the next steps, as when it cannot write the `.env`. With `--force`
+    the file at that path is removed and the new one written with `wx`: `rm`
+    removes a link, never what it points at, and `wx` opens nothing that is
+    there, so nothing is written through a link or into a file that appeared
+    since. A directory at that path is never removed; `init` exits 1 with
+    `could not write <path>: EEXIST ...`, or `EISDIR` with `--force`.
+    `--force` never reaches the `.env`, and without `--skill` does nothing.
+    With nothing at that path, `--force` installs the skill as `--skill` does.
+    The test of a link uses a hard link, since Windows makes a symbolic one
+    only with privileges; a write through either reaches the other name.
+    One function, `create`, writes both files and says what it did, so the two
+    are written and reported alike.
+  - **A `.env` that cannot be written does not keep the skill out.** A
+    directory named `.env`, such as a virtualenv, is a setup the README
+    supports: the settings go in a file of another name, read with
+    `--dotenv`. There `init` still prints `could not write .env: EEXIST ...`,
+    judges no `.gitignore`, prints no next steps and exits 1, as in T1.4, but
+    installs the skill first when `--skill` asks for it; stopping at the
+    `.env` left such a project no way to get the skill from `init`.
+  - **Test and check changes, none to what an assertion means.** T1.4's
+    `help` in `acceptance/checks.json` expects `init [options]`, which
+    commander prints once `init` has options (the lead's decision D6, as
+    NOTES said under T5.1). T1.5's `readme-commands` takes the Commands list's
+    new line, `npx dbtruth init --skill`, between `init` and `check`. The row
+    for `could not write <path>: <error>` names the skill's path too, the row
+    for an unknown option says a dbtruth older than 0.4.0 has no `init
+    --skill`, and the Team tier no longer calls the skill coming. The quick
+    start's "It never changes a file that is already there", and the `.env`'s
+    row, now name the `.env` and `.gitignore`, since `--force` replaces a
+    skill. T1.4's command test in `test/init.test.ts` calls the file's one
+    `command`, which the `--skill` command test shares, with the same call and
+    the same assertions.
+  - **Not done:** installing for another agent, or in `~/.claude/skills` for
+    every project; telling whether an installed skill is the one this dbtruth
+    ships; line ends: the file ships as the working copy has it, LF from a
+    checkout on Linux and CRLF from one on Windows with `core.autocrlf`, as the
+    prompts do, and the tests read either. T5.2's A3, the transcript of Claude
+    Code with the server and the skill, is the lead's, since this machine has
+    no `claude`; that run also decides whether `init` prints the `cmd /c` form
+    for native Windows (T5.1).
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

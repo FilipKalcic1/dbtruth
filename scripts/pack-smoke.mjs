@@ -5,7 +5,7 @@
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { execSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,12 @@ try {
     await client.close();
   }
   console.log(`pack-smoke: the installed dbtruth mcp lists ${TOOLS}, and measures orders.customer_id -> customers.id as broken`);
+  // Last, since it writes a .env where doctor and mcp would read one. The project is in no repository, so init writes
+  // there, and it reads the skill from the installed package: this is also the proof that the tarball holds it.
+  sh(`${dbtruth} init --skill`, dir);
+  const skill = join("skills", "dbtruth", "SKILL.md");
+  if (!readFileSync(join(dir, ".claude", skill)).equals(readFileSync(join(ROOT, skill)))) throw new Error("the installed dbtruth init --skill wrote a skill other than skills/dbtruth/SKILL.md");
+  console.log("pack-smoke: the installed dbtruth init --skill writes .claude/skills/dbtruth/SKILL.md from the tarball, byte for byte skills/dbtruth/SKILL.md");
 } catch (e) {
   console.error(`pack-smoke: FAIL ${e instanceof Error ? e.message : String(e)}`);
   process.exitCode = 1;

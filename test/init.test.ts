@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,9 @@ const QUICK_START = /^## Quick start$([\s\S]*?)^## /m.exec(README)?.[1] ?? "";
 const NEXT = (/^```\r?\n(next steps:\r?\n[\s\S]*?)^```/m.exec(QUICK_START)?.[1] ?? "").trimEnd().split(/\r?\n/);
 /** The line for CLAUDE.md under "Giving it to your agent", unwrapped. */
 const CLAUDE_LINE = /^- \*\*Claude Code\*\*: one line in `CLAUDE\.md`\. \*([^*]+)\*/m.exec(README)?.[1]?.replace(/\s+/g, " ");
+/** Where init --skill installs the skill, from the repository root, and the file the package ships. */
+const SKILL = join(".claude", "skills", "dbtruth", "SKILL.md");
+const SHIPPED = readFileSync(new URL("../skills/dbtruth/SKILL.md", import.meta.url));
 
 const git = (cwd: string, ...args: string[]) => assert.equal(spawnSync("git", args, { cwd }).status, 0, `git ${args.join(" ")}`);
 
@@ -41,12 +44,15 @@ function contents(dir: string): Record<string, Buffer> {
   return out;
 }
 
-/** Runs init from cwd: its exit code and every line it printed. */
-function init(cwd: string): { code: number; lines: string[] } {
+/** Runs init from cwd, with --skill and --force as given: its exit code and every line it printed. */
+function init(cwd: string, options: { skill?: boolean; force?: boolean } = {}): { code: number; lines: string[] } {
   const lines: string[] = [];
-  const code = runInit({ cwd, err: (line) => lines.push(line) });
+  const code = runInit({ cwd, ...options, err: (line) => lines.push(line) });
   return { code, lines };
 }
+
+/** Runs dbtruth init as a command from cwd, with the options given. */
+const command = (cwd: string, ...options: string[]) => spawnSync(process.execPath, ["--import", TSX, CLI, "init", ...options], { cwd, encoding: "utf8", timeout: 20_000 });
 
 const NOT_IGNORED = "WARNING: .gitignore does not ignore .env; add this line to it: .env";
 const NO_ANSWER = "WARNING: git could not say whether .gitignore ignores .env; if it does not, add this line to it: .env";
@@ -206,7 +212,6 @@ test("the next steps end with the command that adds dbtruth mcp to Claude Code, 
 });
 
 test("as a command, init writes .env and nothing else, prints nothing on stdout, and exits 0, or 1 when it could not write", () => {
-  const command = (cwd: string) => spawnSync(process.execPath, ["--import", TSX, CLI, "init"], { cwd, encoding: "utf8", timeout: 20_000 });
   const root = repository();
   const before = contents(root);
   const done = command(root);
@@ -221,4 +226,85 @@ test("as a command, init writes .env and nothing else, prints nothing on stdout,
   assert.equal(blocked.status, 1, blocked.stderr);
   assert.equal(blocked.stdout, "");
   assert.match(blocked.stderr, /^could not write \.env: EEXIST: [^\n]+\n$/);
+});
+
+test("init --skill installs the skill the package ships at the repository root, beside the .env, and nothing else", () => {
+  const root = repository({ "packages/api/package.json": "{}\n" });
+  const before = contents(root);
+  const up = (file: string) => join("..", "..", file);
+  const { code, lines } = init(join(root, "packages", "api"), { skill: true });
+  assert.equal(code, 0, lines.join("\n"));
+  assert.deepEqual(lines, [`wrote ${up(".env")}`, `WARNING: ${up(".gitignore")} does not ignore ${up(".env")}; add this line to it: .env`, `wrote ${up(SKILL)}`, ...NEXT]);
+  const { ".env": written, [SKILL]: skill, ...rest } = contents(root);
+  assert.ok(written, "no .env at the root");
+  assert.ok(skill?.equals(SHIPPED), `${SKILL} at the root is not the skill the package ships`);
+  assert.deepEqual(rest, before, "every other file, .git included, as it was");
+});
+
+test("init --skill --force installs the skill where there is none yet", () => {
+  const root = repository({ ".env": "", ".gitignore": ".env\n" });
+  const { code, lines } = init(root, { skill: true, force: true });
+  assert.equal(code, 0, lines.join("\n"));
+  assert.deepEqual(lines, [".env already exists; left as it is", `wrote ${SKILL}`, ...NEXT]);
+  assert.ok(readFileSync(join(root, SKILL)).equals(SHIPPED), `${SKILL} is not the skill the package ships`);
+});
+
+test("init --skill --force puts a file of its own where the skill is a link, and leaves the linked file as it was", () => {
+  // A hard link, since Windows makes a symbolic one only with privileges: either would carry a write to the other name.
+  const root = repository({ ".env": "", ".gitignore": ".env\n", "shared.md": "shared\n" });
+  mkdirSync(dirname(join(root, SKILL)), { recursive: true });
+  linkSync(join(root, "shared.md"), join(root, SKILL));
+  const { code, lines } = init(root, { skill: true, force: true });
+  assert.equal(code, 0, lines.join("\n"));
+  assert.equal(readFileSync(join(root, "shared.md"), "utf8"), "shared\n", "shared.md was written through the link");
+  assert.ok(readFileSync(join(root, SKILL)).equals(SHIPPED), `${SKILL} is not the skill the package ships`);
+});
+
+test("a skill path taken by a directory is left alone, with --force too, and init exits 1: it could not write the file", () => {
+  const root = repository({ [join(SKILL, "notes.md")]: "kept\n", ".env": "", ".gitignore": ".env\n" });
+  const before = contents(root);
+  for (const force of [false, true]) {
+    const { code, lines } = init(root, { skill: true, force });
+    assert.equal(code, 1, lines.join("\n"));
+    assert.deepEqual(contents(root), before, `every file as it was, --force ${force}`);
+    assert.equal(lines.length, 2, lines.join("\n"));
+    assert.ok(lines[1]!.startsWith(`could not write ${SKILL}: `), lines.join("\n"));
+  }
+});
+
+test("init --skill installs the skill beside a directory named .env, such as a virtualenv, and exits 1: it could not write the .env", () => {
+  const root = repository({ ".env/bin/python": "" });
+  const before = contents(root);
+  const { code, lines } = init(root, { skill: true });
+  assert.equal(code, 1, lines.join("\n"));
+  assert.match(lines[0]!, /^could not write \.env: EEXIST: /);
+  assert.deepEqual(lines.slice(1), [`wrote ${SKILL}`], "the skill's line alone after the .env's: no warning about a .env not written, and no next steps");
+  const { [SKILL]: skill, ...rest } = contents(root);
+  assert.ok(skill?.equals(SHIPPED), `${SKILL} is not the skill the package ships`);
+  assert.deepEqual(rest, before, "every other file, .git included, as it was");
+});
+
+test("as a command, init --skill installs the skill, refuses a second time without --force, and --force replaces the skill alone", () => {
+  // A .env no option may touch, with values init must never print.
+  const root = repository({ ".env": "DATABASE_URL=postgres://canary-pii:canary-pii-pass@canary-pii/canary-pii\n", ".gitignore": ".env\n" });
+  const kept = ".env already exists; left as it is";
+  const first = command(root, "--skill");
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(first.stderr, [kept, `wrote ${SKILL}`, ...NEXT, ""].join("\n"));
+
+  // Edited since, as a user may edit it: kept, and nothing else is written.
+  writeFileSync(join(root, SKILL), "edited by hand\n");
+  const before = contents(root);
+  const second = command(root, "--skill");
+  assert.equal(second.status, 1, second.stderr);
+  assert.equal(second.stderr, [kept, `${SKILL} already exists; pass --force to replace it`, ""].join("\n"));
+  assert.deepEqual(contents(root), before, "every file as it was");
+
+  const forced = command(root, "--skill", "--force");
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.equal(forced.stderr, [kept, `wrote ${SKILL}`, ...NEXT, ""].join("\n"));
+  const after = contents(root);
+  assert.ok(after[SKILL]?.equals(SHIPPED), `${SKILL} is not the skill the package ships`);
+  assert.deepEqual({ ...after, [SKILL]: before[SKILL] }, before, "the .env and every other file as they were");
+  for (const run of [first, second, forced]) assert.equal(run.stdout, "");
 });
