@@ -8,9 +8,12 @@
 //   2. Only SELECT / WITH statements are issued through query().
 //   3. Every statement has a timeout, and a timeout is a skipped measurement, not a crash. Connecting has the same limit.
 //   4. A wall-clock budget covers all sampling and measuring; once spent, query() skips instead of running.
-//   5. A lost connection is an error that stops the run: it is never reported as "nothing found".
+//   5. A lost connection is an error that stops the run: it is never reported as "nothing found". One lost while idle is
+//      reported by the next statement, not by a crash.
 //   6. The connection URL is never logged, stored or returned. A failed connection is told in a sentence of our own,
 //      never the driver's message, which can hold the user, the host and the database.
+//   7. A statement that failed on a value in the data is told by its code alone, never the server's message, which can
+//      quote the value.
 
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -38,6 +41,14 @@ export type Db = {
   close(): Promise<void>;
 };
 
+/** What connect returns: a Db, and what a session that keeps it across MCP tool calls needs. */
+export type Connection = Db & {
+  /** A new budget of this many seconds with nothing spent: one per MCP tool call. */
+  resetBudget(seconds: number): void;
+  /** Why the server or the network closed the connection, once one has; undefined while it is open. */
+  lost(): string | undefined;
+};
+
 export type SafetyOptions = {
   statementTimeoutSeconds: number;
   budgetSeconds: number;
@@ -49,8 +60,11 @@ const READ_ONLY_SQL_TRANSACTION = "25006";
 const QUERY_CANCELED = "57014";
 const INVALID_CATALOG_NAME = "3D000";
 const CONNECTION_EXCEPTION_CLASS = "08";
+const DATA_EXCEPTION_CLASS = "22";
 const INVALID_AUTHORIZATION_CLASS = "28";
 const OPERATOR_INTERVENTION_CLASS = "57";
+/** PL/pgSQL's errors, RAISE and ASSERT among them, in whatever words the function that raised them chose. */
+const PLPGSQL_ERROR_CLASS = "P0";
 /** The server function that refuses a connection pg_hba.conf does not admit: an unencrypted one where SSL is required. */
 const PG_HBA_REFUSAL = "ClientAuthentication";
 /** What pg's own connect timeout fails with: this message, and no code. */
@@ -158,13 +172,19 @@ export function resolveDatabaseUrl(flagUrl: string | undefined, env: Record<stri
   return flagUrl || env.DATABASE_URL || undefined;
 }
 
-export async function connect(url: string, opts: SafetyOptions): Promise<Db> {
+export async function connect(url: string, opts: SafetyOptions): Promise<Connection> {
   // pg sets no limit on connecting, and a host that drops packets would hold the run for the system's TCP timeout.
   const timeoutMs = Math.max(1, Math.round(opts.statementTimeoutSeconds * MS_PER_SECOND));
   let client: pg.Client;
+  let lost: string | undefined;
   try {
     // Inside the try: the driver parses the URL and reads the certificate files it names here, and its errors quote them.
     client = new pg.Client({ connectionString: url, application_name: "dbtruth", connectionTimeoutMillis: timeoutMs });
+    // pg reports a connection the server or the network closed as an 'error' event, and one no listener hears ends the
+    // process: a restart, pg_terminate_backend, idle_session_timeout or a serverless database suspending would kill an
+    // idle MCP server, and a full run waiting on the model would die with Node's stack trace. The first reason is kept,
+    // and the next statement throws it.
+    client.on("error", (e) => (lost ??= errorMessage(e)));
     await client.connect();
   } catch (e) {
     throw new Error(connectFailure(e, opts.statementTimeoutSeconds));
@@ -186,13 +206,14 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Db> {
     opts.warn?.(`the session asked for read-only mode but could not prove it: ${proof.detail}. dbtruth still issues only SELECT statements.`);
   }
 
-  const budgetMs = opts.budgetSeconds * MS_PER_SECOND;
+  let budgetMs = opts.budgetSeconds * MS_PER_SECOND;
   let spentMs = 0;
 
   async function run(sql: string, params: unknown[], budgeted: boolean): Promise<QueryResult> {
     if (!isReadStatement(sql)) {
       return { ok: false, reason: "refused", message: "dbtruth only issues SELECT statements" };
     }
+    if (lost !== undefined) throw new Error(`database connection lost: ${lost}`);
     if (budgeted && spentMs >= budgetMs) {
       return { ok: false, reason: "budget", message: "time budget exhausted" };
     }
@@ -204,7 +225,10 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Db> {
       const state = sqlState(e);
       if (isConnectionLoss(state)) throw new Error(`database connection lost: ${errorMessage(e)}`);
       if (state === QUERY_CANCELED) return { ok: false, reason: "timeout", message: errorMessage(e), sqlState: state };
-      return { ok: false, reason: "error", message: errorMessage(e), ...(state ? { sqlState: state } : {}) };
+      // The server's words for a value that does not fit its type, or that a function raised an error on, quote it.
+      const quotesData = state?.startsWith(DATA_EXCEPTION_CLASS) || state?.startsWith(PLPGSQL_ERROR_CLASS);
+      const message = quotesData ? `a value could not be read (SQLSTATE ${state})` : errorMessage(e);
+      return { ok: false, reason: "error", message, ...(state ? { sqlState: state } : {}) };
     } finally {
       if (budgeted) spentMs += performance.now() - started;
     }
@@ -218,6 +242,12 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Db> {
     budget() {
       return { budgetMs, spentMs, remainingMs: Math.max(0, budgetMs - spentMs), exhausted: spentMs >= budgetMs };
     },
+    resetBudget(seconds) {
+      budgetMs = seconds * MS_PER_SECOND;
+      spentMs = 0;
+    },
+    // A function, not a getter, so that a copy made with a spread still reads the connection.
+    lost: () => lost,
     async close() {
       await client.end();
     },

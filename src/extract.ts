@@ -369,7 +369,7 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
   const keysOnly = () => ({ ...table, columns: cols.map((c) => ({ ...c, visible: shownRegardless(c) })) });
 
   // A materialized view that was never refreshed cannot be read at all: schema only, nothing shown.
-  if (table.populated === false) return { ...keysOnly(), rowEstimate: 0 };
+  if (table.populated === false) return { ...keysOnly(), rowEstimate: 0, unmeasured: "a materialized view that has never been refreshed cannot be read" };
 
   // Null rate, distinct count, longest value, and for dates the year range: inside the database, over the bounded sample.
   const aggregates = cols
@@ -387,9 +387,12 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
     source = sampleSource(table, cfg, false);
     stats = await db.query(statsQuery(source));
   }
-  // Statistics unavailable: keep the schema, show only declared keys, sample nothing. The estimate stands, except a 0 that
-  // nothing confirmed, which becomes unknown and so has no source.
-  if (!stats.ok) return table.rowEstimate === 0 ? { ...keysOnly(), rowEstimate: -1, estimateSource: undefined } : keysOnly();
+  // Statistics unavailable: keep the schema, show only declared keys, sample nothing, and say why. The estimate stands,
+  // except a 0 that nothing confirmed, which becomes unknown and so has no source.
+  if (!stats.ok) {
+    const unread = { ...keysOnly(), unmeasured: stats.message };
+    return table.rowEstimate === 0 ? { ...unread, rowEstimate: -1, estimateSource: undefined } : unread;
+  }
 
   const row = stats.rows[0] as Row;
   const n = Number(row.n);

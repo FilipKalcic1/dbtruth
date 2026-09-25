@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// cli.ts: orchestrates one run, or one check, in order, writes the .env `init` starts a project with, and hands `doctor`
-// to doctor.ts. Nothing else.
+// cli.ts: orchestrates one run, or one check, in order, writes the .env and the skill `init` starts a project with,
+// hands `doctor` to doctor.ts, and `mcp` to mcp.ts with the settings it opens a connection with. Nothing else.
 
 import { Command, Option, type OptionValues } from "commander";
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { FAIL_ON, fails, remeasure, reportLines, reportMarkdown, type FailOn } from "./check.js";
@@ -14,6 +14,7 @@ import { EFFORT_ENV, EFFORT_FLAG, effortFor, resolveConfig, overridable, type Co
 import { contextualize } from "./contextualize.js";
 import { doctor } from "./doctor.js";
 import { extract, fitToContext, integerKeys, readCatalog } from "./extract.js";
+import { serve } from "./mcp.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
 import { connect, readSettings, repositoryRoot, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
@@ -25,6 +26,8 @@ import { OUTPUT_DIR, persist, SNAPSHOT_FILE, write } from "./write.js";
 // package.json is one level up from both src/ under tsx and dist/ once installed.
 const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 const SNAPSHOT = `${OUTPUT_DIR}/${SNAPSHOT_FILE}`;
+// The skill, beside package.json in the package, and in .claude/ at the repository root once init --skill installs it.
+const SKILL = "skills/dbtruth/SKILL.md";
 
 export type RunOptions = {
   url?: string;
@@ -168,6 +171,41 @@ export async function runCheck(opts: CheckOptions): Promise<number> {
   }
 }
 
+export type McpOptions = Pick<RunOptions, "url" | "dotenv" | "flags" | "cwd" | "env" | "err"> & {
+  /** The directory whose context/ the tools read and whose .env is looked for first, relative to cwd. */
+  project?: string;
+};
+
+/**
+ * Serves the MCP tools on stdin and stdout until the client closes stdin or the process is stopped: 0, or 1 when
+ * --project names no directory. The project is --project, else CLAUDE_PROJECT_DIR, which Claude Code sets for the
+ * servers it starts, else cwd. The settings are read, and the connection opened, when a tool first needs the database,
+ * and again after a call that failed.
+ */
+export async function runMcp(opts: McpOptions): Promise<number> {
+  const project = resolve(opts.cwd, opts.project ?? opts.env.CLAUDE_PROJECT_DIR ?? ".");
+  if (opts.project !== undefined && !statSync(project, { throwIfNoEntry: false })?.isDirectory()) {
+    opts.err(`--project ${opts.project}: no such directory`);
+    return EXIT_FAILURE;
+  }
+  const open = async () => {
+    // Printed as for any command, and when no settings are found, the failed call's answer too.
+    const lines: string[] = [];
+    const found = setup({
+      ...opts,
+      cwd: project,
+      err: (line) => {
+        lines.push(line);
+        opts.err(line);
+      },
+    });
+    if (!found) throw new Error(lines.join("\n"));
+    return { db: await connect(found.url, { ...found.cfg, warn: (message) => opts.err(`WARNING: ${message}`) }), cfg: found.cfg };
+  };
+  await serve({ project, version: VERSION, open, err: opts.err });
+  return EXIT_OK;
+}
+
 /**
  * The .env init writes: the quick start's two settings and the model, each commented out, so that nothing in it is read
  * until a line is filled in. Every comment is a line of its own, since a value runs to the end of its line.
@@ -188,16 +226,23 @@ const NEXT_STEPS = [
   "  run npx dbtruth doctor",
   "  run npx dbtruth",
   "  add this line to CLAUDE.md: Before writing SQL against this database, read `context/README.md` and the file in `context/tables/` for every table you touch.",
+  "  add the MCP server to Claude Code: claude mcp add --transport stdio dbtruth -- npx -y dbtruth mcp",
 ];
 
 export type InitOptions = {
   cwd: string;
+  /** Also install the skill. */
+  skill?: boolean;
+  /** Replace the skill if it is there; never the .env. */
+  force?: boolean;
   err: (line: string) => void;
 };
 
 /**
  * Writes DOTENV at the repository root, or in cwd outside a repository, unless a .env is there, then says whether
- * .gitignore ignores it and what to do next. It changes no file that exists. 0 when done, 1 when it could not write.
+ * .gitignore ignores it; with skill, installs the skill under .claude/ there, refusing one that is there unless force
+ * replaces it; last, says what to do next. It changes no existing file but a skill force replaces. 0 when done, 1 when
+ * it could not write or refused to.
  */
 export function runInit(opts: InitOptions): number {
   const here = realpathSync(opts.cwd);
@@ -206,27 +251,50 @@ export function runInit(opts: InitOptions): number {
   // Both named relative to cwd as given, as a run names the settings file it reads.
   const file = relative(opts.cwd, path);
   const gitignore = relative(opts.cwd, join(dir, ".gitignore"));
-  if (statSync(path, { throwIfNoEntry: false })?.isFile()) {
-    opts.err(`${file} already exists; left as it is`);
-  } else {
-    try {
-      // wx never opens what is there: a file that appeared since, or a directory of that name, fails instead.
-      writeFileSync(path, DOTENV, { flag: "wx" });
-    } catch (e) {
-      opts.err(`could not write ${file}: ${e instanceof Error ? e.message : String(e)}`);
+  // A .env that could not be written leaves git nothing to judge and no next steps to give, but the skill is installed
+  // all the same: a project whose .env is a directory, such as a virtualenv, reads its settings with --dotenv.
+  let hasEnv = true;
+  if (statSync(path, { throwIfNoEntry: false })?.isFile()) opts.err(`${file} already exists; left as it is`);
+  else hasEnv = create(path, DOTENV, opts);
+  if (hasEnv) {
+    // Git judges the patterns in .gitignore: 0 ignored, 1 not, anything else no answer (git not found, no repository,
+    // or one it refuses). The user's own ignore file is left out, since it covers no one else's clone, and --no-index
+    // judges the patterns alone, so a .env already tracked is not reported as missing a line .gitignore has. Git is
+    // started outside the repository and pointed at it with -C: Windows looks for a command in the working directory
+    // first.
+    const git = spawnSync("git", ["-C", dir, "-c", "core.excludesFile=", "check-ignore", "--quiet", "--no-index", ".env"], { cwd: tmpdir() });
+    if (git.status === 1) opts.err(`WARNING: ${gitignore} does not ignore ${file}; add this line to it: .env`);
+    else if (git.status !== 0) opts.err(`WARNING: git could not say whether ${gitignore} ignores ${file}; if it does not, add this line to it: .env`);
+  }
+  if (opts.skill) {
+    const skill = join(dir, ".claude", SKILL);
+    // A skill there may have been edited, so only --force replaces it.
+    if (!opts.force && statSync(skill, { throwIfNoEntry: false })?.isFile()) {
+      opts.err(`${relative(opts.cwd, skill)} already exists; pass --force to replace it`);
       return EXIT_FAILURE;
     }
-    opts.err(`wrote ${file}`);
+    if (!create(skill, readFileSync(new URL(`../${SKILL}`, import.meta.url)), opts, opts.force)) return EXIT_FAILURE;
   }
-  // Git judges the patterns in .gitignore: 0 ignored, 1 not, anything else no answer (git not found, no repository, or
-  // one it refuses). The user's own ignore file is left out, since it covers no one else's clone, and --no-index judges
-  // the patterns alone, so a .env already tracked is not reported as missing a line .gitignore has. Git is started
-  // outside the repository and pointed at it with -C: Windows looks for a command in the working directory first.
-  const git = spawnSync("git", ["-C", dir, "-c", "core.excludesFile=", "check-ignore", "--quiet", "--no-index", ".env"], { cwd: tmpdir() });
-  if (git.status === 1) opts.err(`WARNING: ${gitignore} does not ignore ${file}; add this line to it: .env`);
-  else if (git.status !== 0) opts.err(`WARNING: git could not say whether ${gitignore} ignores ${file}; if it does not, add this line to it: .env`);
+  if (!hasEnv) return EXIT_FAILURE;
   for (const line of NEXT_STEPS) opts.err(line);
   return EXIT_OK;
+}
+
+/** Writes a new file at path, or in place of the one there with replace, and says so; false once it has said why not. */
+function create(path: string, text: string | Buffer, opts: InitOptions, replace = false): boolean {
+  const file = relative(opts.cwd, path);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    // rm removes a link, never what it points at. wx never opens what is there: a file that appeared since, or a
+    // directory of that name, fails instead.
+    if (replace) rmSync(path, { force: true });
+    writeFileSync(path, text, { flag: "wx" });
+  } catch (e) {
+    opts.err(`could not write ${file}: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  }
+  opts.err(`wrote ${file}`);
+  return true;
 }
 
 /**
@@ -346,8 +414,10 @@ export async function main(argv: string[]): Promise<number> {
   program
     .command("init")
     .description("write a .env to fill in at the repository root, and print the next steps")
-    .action(() => {
-      code = runInit({ cwd: process.cwd(), err });
+    .option("--skill", "also install the skill that tells Claude Code when to read context/ and measure a join, at .claude/skills/dbtruth/SKILL.md")
+    .option("--force", "with --skill, replace a skill that is there; the .env is never replaced")
+    .action((own) => {
+      code = runInit({ cwd: process.cwd(), skill: own.skill, force: own.force, err });
     });
   const check = program
     .command("check")
@@ -375,6 +445,18 @@ export async function main(argv: string[]): Promise<number> {
       out,
       err,
     });
+  });
+  const mcp = program
+    .command("mcp")
+    .description("serve context/ and measurements to an agent over MCP on stdin and stdout, without a model or an API key")
+    .option("--project <dir>", "the directory whose context/ the tools read and whose .env is looked for first (default: CLAUDE_PROJECT_DIR, else the current directory)")
+    .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
+    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root, relative to the project directory");
+  for (const o of overridable) mcp.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
+  mcp.action(async (own) => {
+    // As for check: the program's options before `mcp`, and its own after the name, which win. stdout is the protocol's.
+    const o = { ...program.opts(), ...own };
+    code = await runMcp({ url: o.url, dotenv: o.dotenv, project: o.project, flags: overrides(o), cwd: process.cwd(), env: process.env, err });
   });
   try {
     await program.parseAsync(argv);

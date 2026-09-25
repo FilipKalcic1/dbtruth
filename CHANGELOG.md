@@ -3,6 +3,36 @@
 Releases from 0.2.0 on. What earlier releases changed, and why, is in
 `NOTES.md`.
 
+## 0.4.0 (unreleased)
+
+- `npx dbtruth mcp` serves an agent four tools over MCP, with no model and no
+  API key: `context` returns the files in `context/`, `describe_table` a table
+  as the database holds it now, `measure_join` measures a join as a full run
+  does, and `check` reports what `dbtruth check` reports. A name the database
+  does not have is refused with the closest names. `--project` names the
+  project; else Claude Code's `CLAUDE_PROJECT_DIR`, else the directory the
+  server starts in. Each call has 20 seconds (`--mcp-call-budget-seconds`).
+- `init`'s next steps end with the `claude mcp add` line.
+- `npx dbtruth init --skill` also installs the dbtruth skill for Claude Code,
+  `.claude/skills/dbtruth/SKILL.md` at the repository root, which tells the
+  agent to read `context/` and to call `measure_join` before a join `context/`
+  does not list as confirmed. A skill already there is left as it is and
+  `init` exits 1; `--force` replaces it, and never the `.env`. The package
+  ships the skill in `skills/`.
+- A connection the server closes while dbtruth waits, such as during the
+  model's answer, is now `database connection lost: <reason>` on the next
+  statement, not a crash with Node's stack trace.
+- `doctor`'s line for a missing key says that `mcp` needs none either.
+- A relation dbtruth could not sample, one the role may not read or a
+  materialized view never refreshed, now says why (`unmeasured`) in what the
+  model is sent, next to its null rates and distinct counts of 0, and
+  `describe_table` shows neither number for it.
+- A statement that fails on a value in the data, such as a view whose cast
+  fails on a row, is now reported as `a value could not be read (SQLSTATE
+  <code>)`, never in the server's words, which quote the value.
+- The line of a declared join that could not be measured no longer calls it
+  inferred.
+
 ## 0.3.0 (unreleased)
 
 - Every full run also writes `context/snapshot.json`: the claims, each

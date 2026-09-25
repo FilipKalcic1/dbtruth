@@ -4145,3 +4145,754 @@ of each lost point, in the format of section 4.7 of the plan.
   iterations 1 and 2. Cause: each is a run on GitHub, which needs the
   Action's repository pushed (the lead's list in iteration 2, the red run
   on a sabotage branch included).
+### Iteration 4: 100/100 (the lead)
+- The maintainer created FilipKalcic1/dbtruth-action and pushed it after
+  granting the gh token the `workflow` scope (creating a public repository
+  was not the agent's to do). The runs on GitHub:
+- A1: https://github.com/FilipKalcic1/dbtruth-action/actions/runs/36151534406 (main, 0cc5eb8): scripts, scenarios and log green. pass: "check fixture: 12 unchanged"; fail: "check fixture: 1 regression, 11 unchanged"; skipped: the notice; error: "dbtruth: could not connect to the database: authentication failed; check the user and password in the URL".
+  First run 36151307682 (81c91d4): scripts and scenarios green; log red because gh api refuses to print a log with terminal escape sequences (its --allow-escape-sequences flag is not in gh 2.95); fixed with curl in 0cc5eb8.
+- A2: https://github.com/FilipKalcic1/dbtruth-action/pull/1, pushed twice (runs 36151722873 and 36151846504, all green): one comment by github-actions[bot] after the first push (id 5834631459, "<!-- dbtruth-check --> / dbtruth: 1 regression, 11 unchanged"), still exactly one after the second. The second run found it by marker and author and sent PATCH (no warning in the log, and no second comment although the report had findings, which would have created one); the body was identical, so GitHub records no edit. The scripts job's fake-gh cases prove a changed body is updated in place (one POST and two PATCHes in all). The pull request was closed without merging and its branch deleted.
+- A3: the skipped scenario in run 36151534406: "##[notice]dbtruth check skipped: database-url is empty, as it is on a pull request from a fork, which gets no secrets", result skipped, step green.
+- A4: in run 36151534406 the log job fetched the scenarios job's real log (1,144 lines), found dbtruth's authentication line and not the password; a re-check of the whole run log found "canary-pii-wrong" 0 times; the error scenario found it in no file the Action wrote; the pull request's comment holds no URL.
+- Sabotage (GitHub): branch ci-sabotage (exit 2 reported as pass in scripts/check.sh), run https://github.com/FilipKalcic1/dbtruth-action/actions/runs/36152049336 red: scripts job failed 4 cases ("a regression and two stale items fail: got ... result=pass ..., expected ... result=fail"), scenarios failed. Branch deleted, locally and on GitHub.
+
+
+## T5.1 `dbtruth mcp`
+### Iteration 1: 80/100
+- Read first: sections 0 to 5 of the plan, T1.4, T3.1 to T3.3, T5.1, T5.2 and
+  T7.1, Appendices A to E; the design brief for T5.1 and T5.2 in full, the
+  lead's decisions in its section 12 binding; every module of `src/` at HEAD
+  a4de4de and the tests that touch what T5.1 changes (`structure`, `readme`,
+  `init`, `doctor`, `safety`, `config`, `write`, `extract`, `integration`,
+  `remeasure`, `joins`, `copies.ts`, `canned.ts`); README.md, NOTES.md (0.2.0,
+  0.3.0), CHANGELOG.md, the T3.3 and T4.1 iterations above and `acceptance/`;
+  the installed SDK's own types and source (`McpServer.registerTool`,
+  `serveStdio`, the tool call's validation and error handling, the client's
+  `StdioClientTransport`, which spawns through cross-spawn with a default
+  subset of the environment).
+- The code at HEAD differs from the brief where T2.2, T3.3 and T4.1 landed
+  after it, and the code won: `verify` takes `() => integerKeys(db, cfg,
+  catalog)`, as `remeasure` calls it; `check` now has T3.3's `CheckReport` with
+  a schema, so the `check` tool answers with `reportLines` and the report as
+  JSON, where the brief had the lines alone because the JSON did not exist.
+- Checked against the documentation on 2026-09-25: Claude Code's MCP page
+  (code.claude.com/docs/en/mcp) gives `claude mcp add [options] <name> --
+  <command> [args...]`, `.mcp.json` with `mcpServers` and `${VAR}` expansion,
+  and "Claude Code sets `CLAUDE_PROJECT_DIR` in the spawned server's
+  environment to the project root", and says nothing of Windows or `cmd /c`;
+  Cursor's page (cursor.com/docs/context/mcp) gives `.cursor/mcp.json`, a
+  stdio entry with `"type": "stdio"` and `${workspaceFolder}`, and does not
+  document the working directory. npm: `@modelcontextprotocol/server` and
+  `@modelcontextprotocol/client` 2.1.0 are `latest`; installed pinned exactly.
+- Probed in the scratchpad before building: a refined strict object lists as
+  `additionalProperties: false` with its required keys; a key it does not take
+  and the pairing refinement come back as `isError` with `Input validation
+  error: Invalid arguments for tool measure_join: ...`; a server whose client
+  ends stdin before any message exits, the factory never having run.
+- Tests first:
+  - `test/mcp.test.ts`, new, 22 tests (the brief's M1 to M22 with the flat
+    input of decision D2), in `test:db`. On the code as committed it did not
+    load: `Cannot find module 'src/mcp.js'`. Run against a stub `src/mcp.ts`
+    whose tools all refused with `not built`, and a CLI without `mcp`, each
+    test failed for its reason: the spawned ones with `SdkError: Connection
+    closed` (M1, M11, M16, M19) or, speaking JSON-RPC by hand, `the answer to
+    request 1 within 20000 ms` (M12, M18); the in-process ones on `not built`
+    where a refusal, a line or JSON was expected (M3 expected the BROKEN line
+    of the photo branch, M6 `unknown table ordrs; the closest: orders`, M8 and
+    M9 `no <abs>/context/...: run npx dbtruth first`, M14 `database
+    connection lost: lost on purpose`), `"not built" is not valid JSON` (M2,
+    M4, M5, M7, M17, M22), `never two statements at once` with 0 (M13),
+    `Cannot read properties of undefined (reading 'lost')` (M15), and `[]`
+    where `['orders']` (M21).
+  - Elsewhere: `config.test` "mcpCallBudgetSeconds is 20 by default, ..."
+    failed with `undefined` where 20; `extract.test` "a relation whose sample
+    could not be read says why, ..." with `undefined` where the timeout's
+    message; `init.test` "the next steps end with the command that adds dbtruth
+    mcp to Claude Code, ..." with the last next step being the CLAUDE.md line;
+    `readme.test`'s rows test with `refuse` missing from the ways found;
+    `structure.test` "only mcp.ts imports the MCP SDK, ..." with `false ==
+    true` and "mcp.ts never loads model.ts at run time" with `ENOENT` for
+    `src/mcp.ts`; `write.test` did not load (`joinLine`, `tableFileName` not
+    exported). `safety.test` "resetBudget starts a new budget ..." and "a
+    connection the server closes while idle is reported by the next statement,
+    and does not end the process" and `integration.test` "a connection the
+    server closes while the model answers stops the run with database
+    connection lost, ..." were written against `resetBudget` and `lost`, which
+    did not exist (typecheck); the last two exercise what, before the
+    listener, ended the test process.
+- Built, in the brief's order, with the lead's decisions:
+  - `safety.ts`: `Connection`, a `Db` with `resetBudget` and `lost`, which
+    `connect` returns; the pg `'error'` listener, which keeps the first reason;
+    the next statement throws `database connection lost: <reason>`.
+  - `config.ts`: `mcpCallBudgetSeconds`, 20, its comment, variable and flag,
+    minimum 0.001.
+  - `write.ts`: `tableFileName` and `joinLine` moved out of `write()` and
+    `tableFile`, which call them; `joinLine` gains the rejected wording.
+  - `schemas.ts`, `extract.ts`: `Table.unmeasured`, set when the statistics
+    statement fails and for a materialized view never refreshed; prompt A's
+    introduction says what it means.
+  - `mcp.ts`, new: the four handlers over one lazily opened connection, a
+    queue that never rejects, `lookUp` in the catalog of the call, `closest`
+    by edit distance, the `describe_table` projection, and `serve`.
+  - `cli.ts`: `runMcp` (the project, `setup()` reused for the settings) and
+    the `mcp` command with every tunable flag; `init`'s last next step.
+  - `doctor.ts`: the key line names `mcp`.
+  - `package.json`: the server as a dependency and the client as a dev
+    dependency, both exact; `test:db` gains `test/mcp.test.ts`.
+  - `scripts/pack-smoke.mjs`: starts the installed `dbtruth mcp` over the SDK's
+    client with only `DATABASE_URL` added to the SDK's default environment,
+    lists the four tools and measures orders.customer_id -> customers.id as
+    broken. On Windows cross-spawn ran the `.cmd` shim.
+- One fix after the first full run of `test/mcp.test.ts`: two tests that hold
+  a session on a copy of `fixture_template` (M15, M17) timed out in their
+  after-hooks with `database ... is being accessed by other users`, and the
+  file then hung on the open connection. `node --test` runs a test's
+  after-hooks in the order they are added, so the copy's drop, added first,
+  ran before the session's close. Those two tests close the session, and the
+  two that speak to a spawned server (M12, M18) end it, in a `finally` inside
+  the test. One regex of M6 wanted `unknown table` without its space.
+- Docs: README (the next steps; a subsection of "Giving it to your agent",
+  "Measuring while it writes: `dbtruth mcp`", with the four tools, the `claude
+  mcp add` line, `.mcp.json`, `.cursor/mcp.json`, the Windows fallback, where
+  the project and the settings come from, one connection and the budget; the
+  Commands line; five troubleshooting rows new and five changed, and the
+  table's introduction; the Team tier; "Agents (MCP)" under what it sends;
+  Tuning; Development), NOTES `## 0.4.0 (unreleased)` and a bullet under
+  "Where string matching", CHANGELOG `## 0.4.0 (unreleased)`, `--help` and
+  `mcp --help`.
+- Changes to earlier tests and checks, none to what an assertion means, each
+  named in NOTES (decision D6): `readme.test.ts` `WAYS`, `REPORT` and
+  `UNSEEN`; `doctor.test.ts` `NO_KEY`; `structure.test.ts` the map;
+  `acceptance/checks.json` T1.5 `readme-commands` and T1.4 `readme-team`.
+- `acceptance/checks.json`: 56 checks for T5.1, all on one test command (ten
+  files, run once) but the gate, `A4-installed` (the pack smoke line of `npm
+  run verify`), `--help`, `mcp --help` and the file checks. Acceptance A1 (M1,
+  M2, M3, M7, M8, M9), A2 (M5, M10, M11, M20, the runtime-import walk), A3
+  (M1, M4, M6), A4 (M12, and the installed server); a tests check for each new
+  test and doctor's key line; invariants: the structure tests, the canary
+  tests, stdout and the project, the troubleshooting rows; docs: README (six),
+  `--help` (two), `config.ts`, prompt A, NOTES (two), CHANGELOG.
+  `acceptance/manual.json`: the sabotage item, empty.
+- On other servers and systems: the task's ten test files with `remeasure` and
+  `joins` pass on Postgres 12.22 and 18.6, in throwaway containers loaded with
+  every fixture file in compose order (176 of 178, the 2 live tests skipped);
+  with `ci` and `acceptance` under Linux as uid 1000 in `node:20` (20.20.2)
+  and `node:22` (22.23.3), from a copy of the working tree with LF endings,
+  against the 18.6 server (192 of 194); on `node:22` also `npm run build` and
+  the package smoke test, the installed `dbtruth mcp` line included.
+  The first Linux Node 22 run failed one test of T3.1, "the fingerprint
+  changes when a column is added in a copy of fixture_template, ...", at its
+  60 s limit, where it takes about a second. Run three times more against a
+  server logging lock waits and every statement over 5 s: all passed, and one
+  took 97 s in all because T3.2's "a new table is stale" held about 60 s, while
+  the server logged no lock wait and no statement over 5 s. The time goes
+  outside Postgres, in the helper that makes and drops copies, which has no
+  timeout, on the way from the container through Docker Desktop's port
+  forwarding; it is not in T5.1's code, and neither Windows run nor CI's
+  service container goes that way. No container and no copy was left.
+- `npm run verify` exits 0: 293 tests, 291 pass, the 2 live tests skipped,
+  and the package smoke test passes, its `dbtruth mcp` line included. `npm run
+  acceptance -- --task T5.1` prints `T5.1: 80/100`, every check passing but
+  the sabotage item. `npm run acceptance` over every task: each other task
+  scores as before (T4.1 50/100, waiting on the Action's runs; T5.2, T6.2 and
+  T7.1 have no checks yet), and all 92 file checks match the final files.
+- Lost Tests (-20): `FAIL T5.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- Open for the lead:
+  - The `check` tool answers with the report's lines and the `CheckReport` as
+    JSON, not the lines alone as the brief has it (above).
+  - The README gives `cmd /c` as the Windows fallback; nothing here ran Claude
+    Code on native Windows with the server, which T5.2's manual A3 is to do.
+### Iteration 2: 80/100
+- Read first: the four reviews of iteration 1 (16 findings, from the plan,
+  rules, quality and bugs lenses), sections 3 and 4 of the plan and T5.1 again.
+  Each finding was checked against the code, the SDK's source and, where it
+  claimed a behavior, a run, before anything changed.
+- Real, and fixed at the cause:
+  - R3, found by two reviews: `run` in `safety.ts` passed the server's message
+    on, and a data exception quotes the value it failed on. Reproduced on the
+    fixture's server: `SELECT count(*), count(DISTINCT x::text) FROM (SELECT
+    v::int AS x FROM (VALUES ('1'),('canary-secret-123')) t(v)) q` fails with
+    `invalid input syntax for type integer: "canary-secret-123"`. So a view
+    that casts a column sent a row's hidden value to prompt A through
+    `unmeasured`, and through a verdict's `skipped` to the table files, the
+    snapshot, prompt B, `check` and the MCP answers. Fixed once, where the
+    error is caught: class `22`, and class `P0`, all of PL/pgSQL's (`ASSERT`
+    is P0004, not P0001), become `a value could not be read (SQLSTATE
+    <code>)`; every other error keeps the server's words. The wording is
+    neither review's: "a value in the data" is wrong for a condition's own
+    value, which the server refuses the same way (a NUL byte, 22021). So
+    T2.3's assertion in `joins.test.ts` that expected `/0x00/` now expects this
+    sentence with 22021, the same fact in other words, named in NOTES. README:
+    a troubleshooting row and a sentence under "What it sends"; NOTES;
+    CHANGELOG.
+  - The server stopped when the SDK closed its probe instance. Reproduced with
+    a client speaking JSON-RPC by hand: `server/discover` with the 2026-07-28
+    envelope, then `initialize`, then `tools/list` got two answers and `EXIT 0`.
+    `serve` now ends when stdin ends or closes, or when a signal's
+    `handle.close()` settles, not on an instance's `onclose`; the known limit
+    in NOTES is gone.
+  - A4, two findings: `A4-installed` could not fail for A4, since the SDK's
+    client passes over a stdout line that is not JSON (`ReadBuffer`'s
+    `readMessage`: `if (error instanceof SyntaxError) continue`), and the
+    stdout test took no path that logs. Taken as the finding's alternative:
+    the check is `installed`, under the tests, the package smoke test being
+    what the plan's Tests list asks of it. The stdout test now starts the
+    server in a project below its repository's root with no URL, fills the
+    root's `.env`, and sends `{"jsonrpc":"2.0","method":7}`, so that the no-URL
+    lines, `reading settings from ..\.env` and `mcp: <error>` are logged, and
+    checks that stderr has them. `raw()` takes the directory, starts the server
+    with the SDK's default environment as `started` does (the environment's
+    `DATABASE_URL`, which CI sets, would hide the no-URL path), keeps stderr,
+    and counts whole lines only, so a stray newline is a line that fails to
+    parse. Not done: a second exchange by hand in `pack-smoke.mjs`; the
+    installed `dist/` is `tsc`'s output of the same source.
+  - `joinLine` called a declared join that could not be measured inferred:
+    the last line hard-coded the word since 0.1.8, and `measure_join` now
+    answers with that line. A stated join's is `(not measured: <reason>)`, or
+    its status alone. Test in `write.test.ts`; NOTES; CHANGELOG.
+  - Docs: the `--dotenv` row gives the project directory for `mcp`; the
+    `unknown table` row says per tool how a table is found; the README's "runs
+    one call at a time" is now the calls that use the connection; the `<path>
+    is not a file` sentence, and NOTES' "above 0 as a millisecond" and "in
+    catalog order", are reworded; the CHANGELOG's `unmeasured` line says the
+    model still gets the 0s beside it.
+  - Code: `context` reads the directory once, with each entry's type, and
+    `lstat` is gone; `lookUp` passes over an undefined column, so the call
+    hands it `asked.when_column` as it is; `declares` in `schemas.ts` is the
+    one test for a declared key, asked by `verify` and `measure_join`; `admin`
+    in the tests takes a URL; a missing space in `write.test.ts`.
+- Taken in part:
+  - `declares` takes the relation `findTable` found as `to`, not the claim's
+    `r.to.table`: `check` hands the snapshot's claims to `verify` without
+    spelling them again, so after a rename that changes only case the two
+    differ, and the suggested form would change which joins `check` weighs.
+  - `context` still lists the `.md` names on its refusal path when no table
+    was asked: only a refusal builds the list, and skipping it there would
+    take a condition more.
+- Rejected: none.
+- New tests, each run against the code before its fix, put back in place and
+  then restored byte for byte from a copy outside the repository:
+  - mcp, "a value the server quotes in an error reaches no answer, no file and
+    no prompt": `'invalid input syntax for type bigint:
+    "person1@canary-pii.example"'` where the sentence was expected.
+  - safety, "a statement that fails on a value in the data is told by its code
+    alone, and any other error in the server's words": `'invalid input syntax
+    for type integer: "person1@canary-pii.example"'`; with class P0 alone
+    dropped, `'cannot take person1@canary-pii.example'`.
+  - mcp, "a client that probes with server/discover, then opens with
+    initialize, is served on": `the answer to request 3 within 20000 ms`.
+  - mcp, the stdout test, with `mcp`'s log lines written to stdout:
+    `SyntaxError: Unexpected token 'o', "no database"... is not valid JSON`.
+    The no-settings test, over the SDK's client, stayed green under the same
+    change, as the review said.
+  - write, "a declared join that could not be measured says why, and is not
+    called inferred": `'order_items.order_id -> orders.id (inferred, not
+    measured: no non-null rows to test)'`.
+  These show the tests fail for their reason; they are not the task's
+  sabotage record.
+- `acceptance/checks.json`: `A4-installed` is `installed` under the tests; A2
+  and the canary invariant gain the new canary test; four tests checks
+  (`probe`, `error-canary`, `data-error`, `declared-unmeasured`);
+  `readme-rows` gains the new row.
+- `npm run verify` exits 0: 297 tests, 295 pass, the 2 live tests skipped, and
+  the package smoke test passes, its `dbtruth mcp` line included. `npm run
+  acceptance -- --task T5.1` prints `T5.1: 80/100`, every check passing but
+  the sabotage item. `npm run acceptance` over every task: each other task
+  scores as before (T4.1 50/100, waiting on the Action's runs; T5.2, T6.2 and
+  T7.1 have no checks yet), overall 81/100 over 20 tasks, and all 92 file
+  checks match the final files.
+- Lost Tests (-20): `FAIL T5.1 sabotage tests: no evidence for: Sabotage
+  check (BUILD_PLAN.md 4.5): ...`. Cause: no sabotage record; the sabotage
+  check is done by a later stage.
+- The sabotage check of the task (section 4.5). `src/mcp.ts`,
+  `src/safety.ts`, `src/cli.ts` and `test/mcp.test.ts` were copied outside
+  the repository first. After each break `test/mcp.test.ts` was run (24
+  tests, all passing before), with `test/safety.test.ts` for the two breaks
+  in `src/safety.ts` (44 tests).
+- Sabotage: `lookUp` returned the relation before checking the columns
+  named (`return found;` once the table was found); "an unknown table or
+  column, or a name with quotes and semicolons, is refused with the closest
+  names, and no statement is built from it" failed with "orders.customer ->
+  customers.id (inferred, not measured: unknown column orders.customer)",
+  `isError` `undefined` where `true`: `verify`'s verdict on a column it
+  could not find, in place of the refusal and its closest names. Restored.
+- Sabotage: the queue never advanced (`turn = call` removed), so calls ran
+  at once; "calls made at once run one at a time on one connection, each
+  with a budget of its own, and answer as they would alone" failed with
+  "never two statements at once", `3 !== 1`, and "stdout carries JSON-RPC
+  and nothing else, and when stdin ends the server exits 0 and leaves no
+  session" with "describe_table opened the connection", `2 !== 1`: the
+  three calls sent together opened two. The file then did not exit, held
+  open by the two connections the racing calls opened and nothing closed,
+  and the run was stopped; its two processes, which hold two idle sessions
+  on `fixture` that no test counts, are left to end by hand. The later
+  runs passed `--test-force-exit`, which changes no result. Restored.
+- Sabotage: the call's own budget not set (`held.db.resetBudget(...)`
+  removed); "calls made at once run one at a time ..." failed with
+  "mcpCallBudgetSeconds for each call", `[]` where `[7, 7, 7]`. Restored.
+- Sabotage: a connection lost while idle kept (the `lost()` check
+  removed); "a connection the server closes while idle is replaced before
+  the next call" failed with "database connection lost: terminating
+  connection due to administrator command", `isError` `true` where
+  `undefined`. Restored.
+- Sabotage: every join called inferred, `basis: "inferred"` in place of
+  `declares(...)`; "measure_join gives each join the verdict, query and
+  numbers a full run gives it, and the line of its table's file" failed
+  with "relationship:order_items.order_id->orders.id:
+  "order_items.order_id -> orders.id: confirmed, 100.0% of 1200 sampled
+  rows match (inferred)." is not a line of order_items.md". The verdict
+  itself matched, since the basis changes only the line. Restored.
+- Sabotage: the condition left out of the claim (the `when` line removed),
+  so the whole join was measured; "measure_join measures one branch of a
+  polymorphic reference on its own rows" failed with "**BROKEN**
+  comments.commentable_id -> photos.id: 50.0% match (240 of 480 sampled),
+  240 orphans, ..." where "... when commentable_type = 'photo': 66.7% match
+  (120 of 180 sampled), 60 orphans, ..." was expected, "a when value
+  holding SQL is only ever $1: ..." with `'confirmed'` where `'empty'`, and
+  "a condition on a hidden column is not measured, whatever value is
+  guessed" with "person1@canary-pii.example", `broken` and its numbers
+  where `unverifiable` and none. Restored.
+- Sabotage: `JoinSchema` a plain `z.object`, which drops a key it does not
+  take; "the server lists exactly the four tools, each taking a closed
+  object, ..." failed, but only with assert's own "Expected values to be
+  strictly deep-equal" and a cut diff, `undefined` where `false`, naming
+  neither the tool nor the slot. That comparison was given a message
+  saying what it checks; repeated, the test failed with "per tool, the
+  keys it takes, those it requires, and false for any other key",
+  `measure_join`'s `undefined` where `false`. Restored.
+- Sabotage: the pairing refinement removed from `JoinSchema`, so half a
+  condition was taken; "the server lists exactly the four tools, ..."
+  failed with "{"when_column":"status"}", `isError` `undefined` where
+  `true`: measured, not refused. Restored.
+- Sabotage: `describe_table` answering the whole `Table`, `tables[0]` in
+  place of `described(tables[0])`; "describe_table gives a full run's key,
+  size and allowed values, and no other column's values" failed with the
+  bare key "schema", and "describe_table says why a relation it could not
+  read has no statistics" with "customer_id", `[0, 0]` where no null rate
+  or distinct count. The first test's two key checks were given a message
+  saying what they check; repeated, it failed with "schema: not a field
+  describe_table answers with". Restored.
+- Sabotage: a data exception told in the server's words again, `const
+  message = errorMessage(e)` in `run` in `src/safety.ts`; "a value the
+  server quotes in an error reaches no answer, no file and no prompt"
+  failed with `'invalid input syntax for type bigint:
+  "person1@canary-pii.example"'` where `'a value could not be read
+  (SQLSTATE 22P02)'`, from `describe_table` on the `phones` view, and
+  safety's "a statement that fails on a value in the data is told by its
+  code alone, and any other error in the server's words" with the same
+  for `integer`. Restored.
+- Sabotage: `runMcp` writing the settings lines to stdout,
+  `process.stdout.write` in place of `opts.err` in `open`; "stdout carries
+  JSON-RPC and nothing else, ..." failed with "Unexpected token 'o', "no
+  database"... is not valid JSON". Restored.
+- Sabotage: `context` reading whatever the listing holds under the name
+  (the `isFile()` check removed); "context returns the files the last run
+  wrote, says where to run dbtruth before there are any, and reads nothing
+  outside context/" failed with "EISDIR: illegal operation on a directory,
+  read", thrown by `context` on the directory put where `orders.md` was.
+  Restored.
+- Sabotage: `resetBudget` keeping what was spent (`spentMs = 0` removed in
+  `src/safety.ts`); "resetBudget starts a new budget with nothing spent"
+  failed with `spentMs: 11.91` where `0` and `remainingMs: 4988.09` where
+  `5000`. Restored.
+- `src/mcp.ts` (the first to ninth and the twelfth), `src/safety.ts` (the
+  tenth and thirteenth) and `src/cli.ts` (the eleventh) were restored each
+  time from the copy and matched it byte for byte (`cmp`); `git diff HEAD
+  -- src/safety.ts` and `-- src/cli.ts` printed the same diff as before,
+  and `src/mcp.ts`, untracked, matched its copy. No sabotage left every
+  test green. Two failed their tests only with assert's words or a bare
+  key; those three checks in `test/mcp.test.ts` were given messages, and
+  no assertion changed. With them the two files pass: 44 tests.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  297 tests, 295 pass, the 2 live tests skipped, and the package smoke test
+  passes, its `dbtruth mcp` line included; `npm run acceptance -- --task
+  T5.1` prints `T5.1: 100/100`, every check passing.
+### Iteration 3: 100/100 (the lead)
+- Rescoring every task after T5.1 timed out T1.4's `npm run verify` at 600 s
+  with only `TAP version 13` printed. The cause was a `test/mcp.test.ts`
+  process started at 18:53 by an earlier check that never exited, holding two
+  idle `dbtruth` sessions on `fixture` (a profile and a weighing statement).
+  Killed; the sessions went with it; every other task then scored 100/100.
+- The race: `close()` ended the connection it found, so a call still opening
+  its connection opened it afterwards and nothing closed it. Ten runs of the
+  file did not reproduce the hang; the new test "close waits for a call still
+  opening its connection, and closes the connection that call opened" does,
+  every time: before the fix it failed with `expected: 1, actual: 0`.
+  `close()` now waits in the calls' queue; a failing call still drops its
+  connection at once. All 25 tests of the file pass.
+- Sabotage: `close: drop` (the old immediate close); the new test failed
+  (not ok 1). Restored byte for byte.
+- The lead's answers: the `check` tool returning the lines and the
+  CheckReport JSON is approved; the `cmd /c` line stays in the README, and
+  T5.2's manual A3 run decides whether `init` prints it.
+
+### Iteration 4: 100/100 (the lead)
+- CI of the T5.1 and T4.1 commits (runs 36182081768 and 36182322447) failed
+  on all eight Postgres and Node pairs with one test: "SIGTERM during a call
+  ends the server and leaves no session behind", `error: 'ended promptly'`.
+  Missed at the time: the rescoring ran on Windows, where no signal handler
+  runs and the process is simply terminated.
+- Cause: iteration 3's fix queued `close()` behind the calls, and SIGTERM's
+  handler awaits `close()`, so it waited for the call held by the test's
+  lock. Reproduced in a node:22 container on the fixture's Docker network:
+  the same failure.
+- Fix: `close()` sets `closed`, ends the connection at once, so the call
+  waiting on the lock fails with the connection's error, then awaits the
+  calls' queue; a call that finds `closed` after opening its connection
+  throws "the server is closing" before using it, and its catch ends the
+  connection. The race test was renamed "close waits for a call still
+  opening its connection, and that call closes the connection it opened"
+  and now counts the close before awaiting the call; the new test "close
+  ends the connection a call is waiting on, and the call fails at once
+  instead of holding close" gives a catalog read that waits until its
+  connection is closed, with a 5 s timeout. Both have a tests check in
+  `acceptance/checks.json` (`close-waits`, `close-ends`); the fake connection
+  of both comes from `fakeConnection`.
+- Runs: the three close tests pass on Windows; all 26 tests of
+  `test/mcp.test.ts` pass in node:20 and node:22 containers on Linux.
+- Sabotage, each restored byte for byte from a copy outside the repository
+  (`cmp`): `close()` queued behind the calls as in iteration 3, and
+  `await drop()` left out of `close()`: "close ends the connection a call is
+  waiting on" failed, `Promise resolution is still pending but the event
+  loop has already resolved`; the `closed` check after opening left out, and
+  `await turn` left out of `close()`: "close waits for a call still opening
+  its connection" failed, "the connection the call opened was closed before
+  close returned, not left to keep the process alive", `0 !== 1`. The queued
+  `close()` also failed the SIGTERM test on Linux, in CI and in the
+  container.
+- The first rescore after the fix: T5.1 11/100 and T5.2 26/100, every test
+  check failing on one test, "every error the CLI can print has a row in the
+  README's troubleshooting table": `no troubleshooting row for "the server is
+  closing"`. It can be seen: a client that closes the server's input and
+  still reads its output gets it as the answer to a call in flight. The row
+  was added to the README (the call ran nothing, a connection it had just
+  opened was closed; start the server again and repeat the call), and
+  `test/readme.test.ts` passes.
+## T5.2 Skill
+### Iteration 1: 63/100
+- Read first: sections 0 to 5 of the plan, T1.4, T5.1, T5.2 and T7.1,
+  Appendices A, B, D and E; the design brief for T5.1 and T5.2 (sections 0,
+  1, 6, 7, 9 to 12, the lead's decisions binding) and the lead's guidance for
+  this task; `src/cli.ts`, `src/mcp.ts` and `src/write.ts` at HEAD 68f9bd7,
+  `scripts/pack-smoke.mjs`, `scripts/acceptance.mjs`, `test/init.test.ts`,
+  `test/readme.test.ts`, `test/structure.test.ts`, `test/acceptance.test.ts`
+  and `src/prompts/write.md`; README.md, NOTES.md (0.2.0's `init` entry and
+  0.4.0), CHANGELOG.md, the T1.4 and T5.1 iterations above and `acceptance/`.
+- Where the lead's guidance and the brief differ, the guidance won: a second
+  `init --skill` without `--force` refuses with a message and a row of its
+  own, where the brief printed the `.env`'s "left as it is" line and exited 0.
+  The code at HEAD agrees with the brief on the rest: `mcp.ts` registers
+  `context`, `describe_table`, `measure_join` and `check`.
+- Checked against the documentation on 2026-09-25, with the quotes in NOTES:
+  Claude Code's skills page (code.claude.com/docs/en/skills): a project skill
+  at `.claude/skills/<skill-name>/SKILL.md`, the command from the folder's
+  name, the frontmatter read only when `---` is the first line, every field
+  optional, `description` and `when_to_use` cut at 1,536 characters, under
+  500 lines advised, descriptions in context each session and the file loaded
+  when invoked, skill directories watched without a restart. The Agent Skills
+  specification (agentskills.io/specification): `name` and `description`
+  required, `name` 1 to 64 characters of `a-z`, `0-9` and `-` and equal to
+  the folder, `description` 1 to 1,024 characters, a body under 5,000 tokens
+  recommended.
+- Checked the earlier checks this touches: T1.5's `readme-commands` pins the
+  Commands list's lines as consecutive; T1.4's `readme-commands` pins the
+  `init` line word for word, and its `help` pins `init +write`, which
+  commander prints as `init [options]` once `init` has options; T0.1's A3
+  pins the smoke test's line of required files; T1.4's `readme-rows` pins
+  "From `init`, the path is the `.env` it would have written".
+- Tests first: `test/skill.test.ts`, new, four tests, in `test:unit`, and
+  three in `test/init.test.ts`.
+  - Before anything else was written, both files failed to load: `ENOENT: no
+    such file or directory, open '...\skills\dbtruth\SKILL.md'`.
+  - With the skill written and `src/cli.ts` as at HEAD, the four skill tests
+    passed, since they test the file, and each init test failed for its
+    reason: "init --skill installs the skill the package ships ..." with the
+    deep-equal missing `wrote ..\..\.claude\skills\dbtruth\SKILL.md` before
+    the next steps; "a skill path taken by a directory ..." with `expected: 1,
+    actual: 0`; "as a command, init --skill ..." with `error: unknown option
+    '--skill'` and `1 !== 0`.
+- Built:
+  - `skills/dbtruth/SKILL.md`, 2,728 characters: Appendix D, checked line by
+    line against what `write.ts` and prompt B put in `context/` today, and
+    rewritten where it no longer held (NOTES: "What changed from Appendix D,
+    and why"). The frontmatter is `name` and `description` alone; no
+    `allowed-tools`.
+  - `package.json`: `files` gains `skills`; `test:unit` gains
+    `test/skill.test.ts`. The build is unchanged: `init` reads the file one
+    level up from `cli.ts`, as `--version` reads `package.json`, so it is the
+    package root under tsx and once installed, and there is nothing to copy.
+  - `src/cli.ts`: `init --skill` and `--force`; `runInit` installs the skill
+    at `.claude/skills/dbtruth/SKILL.md` in the directory where it writes the
+    `.env`, refuses a file there without `--force` (`<path> already exists;
+    pass --force to replace it`, exit 1, after the `.env`'s line and before
+    the next steps), and with `--force` removes what is at that path and
+    writes with `wx`. `create`, one function, writes the `.env` and the skill
+    and prints `wrote` or `could not write` for both. The `init` description
+    is unchanged; the options have their help text.
+  - `scripts/pack-smoke.mjs`: last, runs the installed `dbtruth init --skill`
+    in its temporary project and compares the file with
+    `skills/dbtruth/SKILL.md` byte for byte, which also proves that the
+    tarball holds it.
+- Checked by hand under Linux (node:22, as the `node` user), since Windows
+  here refuses a file symlink without privileges (`EPERM`): with
+  `.claude/skills/dbtruth/SKILL.md` a link to a file outside the project,
+  `init --skill` refused it as a skill already there, and `init --skill
+  --force` wrote a regular file in the link's place, the skill as shipped,
+  and left the file the link pointed at as it was.
+- Docs: README (a subsection of "Giving it to your agent", "Telling it when to
+  measure: the skill"; a sentence in the quick start's paragraph on `init`;
+  the Commands list's `npx dbtruth init --skill` line; a row for the refusal;
+  the rows for `could not write <path>: <error>` and for an unknown option;
+  the Team tier no longer calls the skill coming; Development), NOTES (under
+  0.4.0: "`init --skill` installs the skill that tells an agent when to
+  measure", with the format as read, what changed from Appendix D, the tests,
+  why the build copies nothing, the refusal and `--force`, the check changes,
+  what is not done), CHANGELOG (0.4.0), `--help` (`init [options]`) and `init
+  --help` (`--skill`, `--force`).
+- Changes to earlier checks, none to what an assertion means, each named in
+  NOTES: T1.4's `help` expects `init [options]` (the lead's decision D6, left
+  to T5.2 by T5.1's NOTES); T1.5's `readme-commands` takes the new `init
+  --skill` line between `init` and `check`.
+- `acceptance/checks.json`: 22 checks for T5.2. A1 is `npm run verify` with
+  the two init tests' lines and the smoke test's skill line, one run shared
+  with the gate; A2 is the tool-name test; tests: the four skill tests, the
+  three init tests and the smoke test's line; the gate; docs: README (five),
+  `init --help`, NOTES, CHANGELOG; invariants: the structure tests, stdout
+  (the new command test and T1.4's), the troubleshooting rows.
+  `acceptance/manual.json`: A3 and the sabotage item, both empty.
+- `npm run verify` exits 0: 305 tests, 303 pass, the 2 live tests skipped,
+  and the package smoke test passes with its new line. `npm run acceptance --
+  --task T5.2` prints `T5.2: 63/100`; `--task T1.4` and `--task T1.5`, whose
+  checks changed, print 100/100; the 112 file and `--help` checks of every
+  task match the final files.
+- Under Linux as the non-root `node` user, from a copy of the working tree
+  with LF line ends: in `node:22` (22.23.3) and `node:20` (20.20.2), git
+  2.39.5, the skill, init, readme, structure and acceptance test files, 44 of
+  44 pass on each; in `node:22` also the typecheck, the build and the package
+  smoke test against the fixture, its skill line included.
+- Lost A3 (-16.7): `FAIL T5.2 A3 acceptance: no evidence for: Manual ...`.
+  Cause: the transcript of Claude Code with the server and the skill needs a
+  `claude` CLI, which this machine does not have; the lead produces it after
+  this workflow (brief section 7, the A3 procedure).
+- Lost Tests (-20): `FAIL T5.2 sabotage tests: no evidence for: Sabotage
+  check ...`. Cause: no sabotage record; the sabotage check is done by a
+  later stage.
+- Open for the lead: a refused second `--skill` exits 1 without the next
+  steps, read from the plan's contrast between the `.env` ("says so and
+  continues") and the skill ("refuses"); and the file ships with the line
+  ends of the checkout it is packed from, CRLF from a Windows one with
+  `core.autocrlf`, which A3's run on native Windows can confirm Claude Code
+  reads.
+### Iteration 2: 83/100
+- Read first: the four reviews of iteration 1 (7 findings, from the plan,
+  quality and bugs lenses), sections 3 and 4 of the plan, T1.4 and T5.2
+  again. Each finding was checked against the code, the plan and, where it
+  claimed a behavior, a run, before anything changed.
+- Real, and fixed at the cause:
+  - `init --skill` never installed the skill beside a directory named `.env`:
+    `runInit` returned 1 as soon as the `.env` could not be written.
+    Reproduced by the new test below, before the fix: in a repository holding
+    `.env/bin/python`, `could not write .env: EEXIST ...` alone, exit 1, no
+    skill. After it, the command run there prints that line and `wrote
+    .claude\skills\dbtruth\SKILL.md`, exits 1 and prints nothing on stdout.
+    The README supports that
+    setup (keep the settings in another file, `--dotenv`), so such a project
+    had no way to get the skill from `init`. Taken as the finding's first
+    fix, not its README-only alternative: the `.env`'s result is kept in
+    `hasEnv`; without a `.env`, git judges nothing and no next steps are
+    printed, as T1.4 has it, but the skill is installed first and `init`
+    then exits 1. T1.4's two tests of a `.env` directory pass unchanged.
+    NOTES: "A `.env` that cannot be written does not keep the skill out";
+    README: the `could not write <path>` row says `init --skill` still
+    installs the skill.
+  - The frontmatter test's regex took values YAML does not read as written.
+    Checked in node: `description: Use it before SQL:` (a mapping indicator
+    at the end), `description: Use it<tab># note` (a comment) and
+    `description: null` all matched. The value regex now refuses a `:`
+    before a blank or at the end, a `#` after a blank, and `null`, `true` or
+    `false` in any case; the comment and NOTES say so.
+  - `test/skill.test.ts` read the frontmatter through `lines`, `close`,
+    `field` and a key comparison. It now normalizes the line ends once and
+    matches the frontmatter once, `^---\nname: (.*)\ndescription: (.*)\n---\n`,
+    which also pins line 1, the two keys alone and their order; `FOLDER`
+    and its comment are gone. The four tests keep their names.
+  - The quick start said `init` "never changes a file that is already
+    there", which `--skill --force` breaks; so did the `.env`'s row. Both now
+    name the `.env` and `.gitignore`. The finding's wording, which appends
+    the `--force` clause to the `--skill` sentence, would break T5.2's
+    `readme-quickstart`, which pins that sentence's end; the skill's section
+    already says what `--force` does.
+  - The skill's section said Claude Code reads the rest of the skill "when
+    the agent is about to write, review or debug SQL", a trigger dbtruth
+    cannot promise, and "it reads the files", with the skill as "it". Now:
+    the agent loads the rest when it judges that a task fits the
+    description, and without the server the agent reads the files.
+  - `test/init.test.ts` had two `command` helpers, one per command test. One
+    now sits beside `init()`, taking the options; T1.4's command test calls
+    it with the same arguments, and no assertion changed (NOTES, "Test and
+    check changes").
+  - The build copies nothing, where the plan's Build and section 5.4 have it
+    copy the skill, and iteration 1 put that to no one. The code stays: a
+    copy under `dist/` would ship the same file twice, and `files` already
+    ships `skills/`. It is now open for the lead, below.
+- Taken in part: none. Rejected: none.
+- New test, run against the code before its fix: "init --skill installs the
+  skill beside a directory named .env, such as a virtualenv, and exits 1: it
+  could not write the .env" failed with `actual: []`, `expected: [ 'wrote
+  .claude\\skills\\dbtruth\\SKILL.md' ]`. The frontmatter test, with the
+  skill's description replaced in turn by each of the three values above,
+  failed with `not a plain value: null` and the like; with a third key, with
+  `the file does not open with a frontmatter of name and description alone`.
+  With the new code, dropping the final `if (!hasEnv) return EXIT_FAILURE`
+  failed T1.4's two `.env` directory tests and the new one (`0 !== 1`), and
+  running git's check without a `.env` failed T1.4's command test and the
+  new one (the `WARNING: .gitignore does not ignore .env` line). Each file
+  was restored byte for byte from a copy outside the repository (`cmp`).
+  These show the tests fail for their reason; they are not the task's
+  sabotage record.
+- `acceptance/checks.json`: one tests check, `env-directory`, for the new
+  test.
+- `npm run verify` exits 0: 306 tests, 304 pass, the 2 live tests skipped,
+  and the package smoke test passes, its `init --skill` line included. `npm
+  run acceptance -- --task T5.2` prints `T5.2: 63/100`, its 23 automated
+  checks passing; the 99 file checks of every task match the final files.
+- Lost A3 (-16.7): `FAIL T5.2 A3 acceptance: no evidence for: Manual ...`.
+  Cause: the transcript of Claude Code with the server and the skill needs a
+  `claude` CLI, which this machine does not have; the lead produces it.
+- Lost Tests (-20): `FAIL T5.2 sabotage tests: no evidence for: Sabotage
+  check ...`. Cause: no sabotage record; the sabotage check is done by a
+  later stage.
+- Open for the lead, with iteration 1's two: the build copies nothing, since
+  `init` reads `skills/dbtruth/SKILL.md` from the package root under tsx and
+  once installed, where the plan's Build says "copied by the build" and
+  section 5.4 "tsc + copy prompts (+ skills from T5.2)"; NOTES ("The file
+  ships from the package's root") gives the reason and will cite the
+  decision.
+- The sabotage check of the task (section 4.5). `src/cli.ts`, `src/mcp.ts`,
+  `skills/dbtruth/SKILL.md`, `package.json`, `test/skill.test.ts` and
+  `test/init.test.ts` were copied outside the repository first. After each
+  break `test/skill.test.ts` and `test/init.test.ts` were run (22 tests, all
+  passing before); after the break in `package.json`, `npm run build` and
+  the package smoke test, `npm run test:pack`.
+- Sabotage: the skill installed in the working directory, `join(here,
+  ".claude", SKILL)`, not where the `.env` goes; "init --skill installs the
+  skill the package ships at the repository root, beside the .env, and
+  nothing else" failed with "+ 'wrote .claude\\skills\\dbtruth\\SKILL.md', -
+  'wrote ..\\..\\.claude\\skills\\dbtruth\\SKILL.md'". Restored.
+- Sabotage: the refusal dropped and every skill replaced (`if (false && ...)`
+  and `create(..., true)`), so a skill the user edited is written over; "as
+  a command, init --skill installs the skill, refuses a second time without
+  --force, and --force replaces the skill alone" failed with the second
+  run's stderr, "wrote .claude\skills\dbtruth\SKILL.md" and the next steps,
+  and "0 !== 1". Restored.
+- Sabotage: `--force` without its `rm` (`if (replace) rmSync(...)` removed),
+  so it replaces nothing; the same test failed with "could not write
+  .claude\skills\dbtruth\SKILL.md: EEXIST: file already exists, open
+  '...'" and "1 !== 0". Restored.
+- Sabotage: `--force` removing a directory too, `rmSync(path, { force: true,
+  recursive: true })`; "a skill path taken by a directory is left alone,
+  with --force too, and init exits 1: it could not write the file" failed
+  with "wrote .claude\skills\dbtruth\SKILL.md" and the next steps, and "0
+  !== 1": the directory and the file in it were deleted. Restored.
+- Sabotage: iteration 2's fix reverted, `if (!hasEnv) return EXIT_FAILURE`
+  before the skill; "init --skill installs the skill beside a directory
+  named .env, such as a virtualenv, and exits 1: it could not write the
+  .env" failed with "the skill's line alone after the .env's: no warning
+  about a .env not written, and no next steps", `[]` where `[
+  'wrote .claude\\skills\\dbtruth\\SKILL.md' ]`. Restored.
+- Sabotage: the skill read beside `cli.ts`, `new URL(SKILL,
+  import.meta.url)` without `../`; the four init tests that run `--skill`
+  failed, the first with "ENOENT: no such file or directory, open
+  '...\dbtruth\src\skills\dbtruth\SKILL.md'". Restored.
+- Sabotage: the skill written with the `.env`'s text, `create(skill, DOTENV,
+  ...)`; "init --skill installs the skill the package ships ..." failed with
+  ".claude\skills\dbtruth\SKILL.md at the root is not the skill the package
+  ships", and the `.env` directory test and the command test with "... is
+  not the skill the package ships". Restored.
+- Sabotage: `--force` reaching the `.env` (`!opts.force &&` on its
+  existence check, `opts.force` passed to its `create`); "a skill path taken
+  by a directory ..." failed with "every file as it was, --force true",
+  `'.env': Buffer(267)` where `Buffer(0)`, and the command test with "+
+  'wrote .env\n' - '.env already exists; left as it is\n'". Restored.
+- Sabotage: the command not passing `--skill` on (`skill: own.skill` removed
+  from `runInit`'s options); the command test failed with its first run's
+  stderr lacking "- 'wrote .claude\\skills\\dbtruth\\SKILL.md\n'" after
+  ".env already exists; left as it is". Restored.
+- Sabotage: the server renaming `measure_join` to `measure_relationship` in
+  `src/mcp.ts`, the skill unchanged; "the skill names every tool the MCP
+  server registers, and no other" failed, but only with assert's "Expected
+  values to be strictly deep-equal" and the two lists, not saying which was
+  the skill's. The comparison was given a message; repeated, the test
+  failed with "the tools the skill names, against those mcp.ts registers",
+  `'measure_join'` where `'measure_relationship'`. Restored.
+- Sabotage: `skills` dropped from `files` in `package.json`; after `npm run
+  build`, the package smoke test failed with "pack-smoke: FAIL Command
+  failed: "node_modules\.bin\dbtruth" init --skill ... dbtruth: ENOENT: no
+  such file or directory, open
+  '...\node_modules\dbtruth\skills\dbtruth\SKILL.md'": the tarball without
+  the skill. Restored.
+- Sabotage: the `--reveal` rule taken out of the skill's Never section; "the
+  skill mentions --reveal only to forbid it" failed with "the Never section
+  does not forbid --reveal". Restored.
+- Sabotage: a blank line before the skill's frontmatter, which Claude Code
+  then does not read; "the skill's frontmatter opens on its first line and
+  holds a name and a description, each a plain value" failed with "the file
+  does not open with a frontmatter of name and description alone".
+  Restored.
+- Sabotage: the skill named `dbtruth-context` in its folder `dbtruth`; "the
+  skill's name is its folder's, its description under 1,024 characters, and
+  the whole file under 5,000" failed only with assert's "Expected values to
+  be strictly equal", `'dbtruth-context'` against `'dbtruth'`. The
+  comparison was given a message; repeated, the test failed with "a name
+  other than its folder's". Restored.
+- Sabotage: `rmSync(path)` without `force: true`. Every test stayed green:
+  no test ran `--force` where there was no skill, and there `init --skill
+  --force` printed "could not write .claude\skills\dbtruth\SKILL.md: ENOENT:
+  no such file or directory, lstat '...'" and exited 1. New test "init
+  --skill --force installs the skill where there is none yet"; it passes on
+  the code as built. Repeated; it failed with ".env already exists; left as
+  it is", "could not write .claude\skills\dbtruth\SKILL.md: ENOENT: no such
+  file or directory, lstat '...'" and "1 !== 0". Restored.
+- Sabotage: `--force` writing in place, `flag: replace ? "w" : "wx"` without
+  the `rm`, which writes through a link. Every test stayed green: no test
+  put a link at the skill's path, the case the code's comment and NOTES give
+  the `rm` for, checked only by hand under Linux in iteration 1. New test
+  "init --skill --force puts a file of its own where the skill is a link,
+  and leaves the linked file as it was", with a hard link, since Windows
+  makes a symbolic one only with privileges (`EPERM` here); it passes on
+  the code as built. Repeated; it failed with "shared.md was written through
+  the link", the skill's text where "shared\n". Restored.
+- Each file was restored from its copy and matched it byte for byte (`cmp`);
+  `git diff HEAD -- src/cli.ts` and `-- package.json` printed byte for byte
+  the diffs saved before, `src/mcp.ts` had none, and
+  `skills/dbtruth/SKILL.md`, untracked, matched its copy. The changes left:
+  two messages in `test/skill.test.ts`, no assertion changed; the two new
+  tests in `test/init.test.ts`, a tests check for each in
+  `acceptance/checks.json` (`force-new`, `force-link`), and two sentences
+  on them in NOTES, under "A second `--skill` refuses". With them the two
+  files pass: 24 tests.
+- With the record in `acceptance/manual.json`: `npm run verify` exits 0,
+  308 tests, 306 pass, the 2 live tests skipped, and the package smoke test
+  passes, its `init --skill` line included; `npm run acceptance -- --task
+  T5.2` prints `T5.2: 83/100`, its 25 automated checks and the sabotage item
+  passing; the 99 file checks of every task match the final files.
+- Lost A3 (-16.7): `FAIL T5.2 A3 acceptance: no evidence for: Manual ...`.
+  Cause: the transcript of Claude Code with the server and the skill needs a
+  `claude` CLI, which this machine does not have; the lead produces it.
+### Iteration 3: 100/100 (the lead)
+- A3, by an agent standing in for Claude Code (there is no claude CLI on this
+  machine): a fresh agent was given only the skill, the fixture project that
+  `scripts/make-fixture-snapshot.mjs` writes, and the four tools of the real
+  `dbtruth mcp` server started with `--project` on it, and asked "write a
+  query joining orders to customers". Its trace: it read `context/README.md`,
+  then `context/tables/orders.md` and `customers.md`, listed the tools, called
+  `measure_join` on orders.customer_id -> customers.id (broken: 440 of 500,
+  60 orphans, all above the highest customers.id) and `describe_table` on
+  both tables, and only then answered. The answer used a LEFT JOIN on purpose,
+  said 60 of 500 orders (12%) point to no customer and how to keep or drop
+  them on purpose, compared status with `lower(btrim(status))`, and left out
+  `api_token`. A person should repeat it in Claude Code with the server added;
+  that run also settles whether `init` prints the `cmd /c` form on native
+  Windows.

@@ -128,7 +128,7 @@ test("a discriminator value is always a bind parameter, and SQL in it matches no
   }
   assert.deepEqual([now(injected).class, now(injected).missing, now(injected).after.measurement.query], ["stale", `comments.${injected.when.column}`, ""], "a column is only looked up");
   assert.equal(now(nul).after.status, "unverifiable");
-  assert.match(now(nul).after.skipped ?? "", /0x00/, "the server refused the value");
+  assert.equal(now(nul).after.skipped, "a value could not be read (SQLSTATE 22021)", "the server refused the value");
 
   const db = await connect(POLYMORPH_URL, config);
   try {

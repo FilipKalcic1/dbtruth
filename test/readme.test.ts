@@ -17,19 +17,23 @@ const LITERAL = String.raw`(?:\x60((?:[^\x60\\]|\\.)*)\x60|"((?:[^"\\]|\\.)*)")`
 /**
  * The ways src/ hands a message to the user, each followed by the literal that holds its words: thrown (new Error),
  * printed (err), warned (warn), a connection failure's cause (because), a sentence a function returns for its
- * caller to throw or print (return), and the note on what was dropped to fit the model's input (reduced:).
+ * caller to throw or print (return), the note on what was dropped to fit the model's input (reduced:), and an MCP tool's
+ * answer that it could not do what it was asked (refuse).
  */
-const WAYS = ["Error", "err", "warn", "because", "return", "reduced"];
+const WAYS = ["Error", "err", "warn", "because", "return", "reduced", "refuse"];
 const MESSAGE = new RegExp(String.raw`\b(${WAYS.join("|")})(?:\?\.)?[(:\s]\s*${LITERAL}`, "g");
 
 /** A placeholder, or the start of one that a nested template cut short. */
 const PLACEHOLDER = /\$\{[^}]*\}?/;
 
-/** What a run that goes well prints: doctor's ok and note lines, and the full run's progress. Not errors, so no rows. */
-const REPORT = /^(ok |note |reading settings from |Sending to |contextualize: |verify: |write: |tokens: )/;
+/**
+ * What a run that goes well prints: doctor's ok and note lines, the full run's progress, and a join's line, which a
+ * table's file shows and measure_join answers. Not errors, so no rows.
+ */
+const REPORT = /^(ok |note |reading settings from |Sending to |contextualize: |verify: |write: |tokens: |(\*\*BROKEN\*\* )?\$\{edge\})/;
 
 /** Printed as part of a longer line, or as one of a list of lines, where MESSAGE cannot see them. */
-const UNSEEN = ["no database URL: DATABASE_URL is not in the environment or in", "not examined"];
+const UNSEEN = ["no database URL: DATABASE_URL is not in the environment or in", "not examined", "when_column and when_equals go together: give both, or neither"];
 
 test("every error the CLI can print has a row in the README's troubleshooting table", () => {
   const section = /^## Troubleshooting$([\s\S]*?)^## /m.exec(read("README.md"))?.[1] ?? "";

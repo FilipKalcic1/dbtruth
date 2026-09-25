@@ -71,3 +71,10 @@ test("checkHitRateTolerance is 0.01 by default, from 0 to 1, from DBTRUTH_CHECK_
   assert.throws(() => resolveConfig({}, { checkHitRateTolerance: "1.5" }), /^Error: DBTRUTH_CHECK_HIT_RATE_TOLERANCE \/ --check-hit-rate-tolerance: 1\.5 is above the maximum 1$/);
   assert.throws(() => resolveConfig({ DBTRUTH_CHECK_HIT_RATE_TOLERANCE: "-0.1" }), /is below the minimum 0/);
 });
+
+test("mcpCallBudgetSeconds is 20 by default, above 0, from DBTRUTH_MCP_CALL_BUDGET_SECONDS or --mcp-call-budget-seconds", () => {
+  assert.equal(config.mcpCallBudgetSeconds, 20);
+  assert.equal(resolveConfig({ DBTRUTH_MCP_CALL_BUDGET_SECONDS: "5" }).mcpCallBudgetSeconds, 5);
+  assert.equal(resolveConfig({ DBTRUTH_MCP_CALL_BUDGET_SECONDS: "5" }, { mcpCallBudgetSeconds: "0.001" }).mcpCallBudgetSeconds, 0.001, "the flag wins, and a millisecond is allowed");
+  assert.throws(() => resolveConfig({}, { mcpCallBudgetSeconds: "0" }), /^Error: DBTRUTH_MCP_CALL_BUDGET_SECONDS \/ --mcp-call-budget-seconds: 0 is below the minimum 0\.001$/, "a call with no time measures nothing");
+});

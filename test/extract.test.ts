@@ -84,6 +84,17 @@ test("the row estimate after the scan: a short plain scan counts, a full one pro
   assert.equal(await sized(500, failed), 500, "statistics unavailable: a positive estimate stands");
 });
 
+test("a relation whose sample could not be read says why, and one that was read says nothing of the kind", async () => {
+  const profiled = async (stats: QueryResult) => {
+    const db = oneTable(500, stats);
+    return (await extract(db, config, await readCatalog(db), { samples: false, reveal: new Set() })).tables[0]!;
+  };
+  const unread = await profiled(failed);
+  assert.equal(unread.unmeasured, "canceling statement due to statement timeout");
+  assert.deepEqual([unread.columns[0]!.nullRate, unread.columns[0]!.distinct], [0, 0], "nothing was measured");
+  assert.equal((await profiled(counted(7))).unmeasured, undefined);
+});
+
 test("fitToContext drops sample rows, then value lists, then tables, until the extract fits", () => {
   const wide = (name: string): Table => ({
     ...table(name, 100, [{ name: "id", type: "integer" }, { name: "kind", type: "text" }]),

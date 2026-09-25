@@ -14,6 +14,7 @@ export type Config = {
   sampleRows: number;
   sampleRowsShown: number;
   budgetSeconds: number;
+  mcpCallBudgetSeconds: number;
   extractBudgetShare: number;
   statementTimeoutSeconds: number;
   categoricalMaxDistinct: number;
@@ -47,6 +48,11 @@ export const config: Config = {
   // Wall-clock seconds for sampling tables and verifying claims together. Reading the catalog is outside it.
   // Too low: most tables are skipped and most claims end up unverifiable. Too high: a big database keeps you waiting.
   budgetSeconds: 90,
+
+  // Wall-clock seconds each MCP tool call may spend sampling and measuring, in place of budgetSeconds; reading the
+  // catalog is outside it. Too low: large tables are not examined and joins come back unverifiable. Too high: an agent,
+  // and every call queued behind this one, waits that long.
+  mcpCallBudgetSeconds: 20,
 
   // Share of the budget sampling may use before the rest is reserved for verifying claims.
   // Too high: a big database spends everything on sampling and every claim is unverifiable. Too low: tables are skipped for nothing.
@@ -149,6 +155,7 @@ export const overridable = [
   { path: "sampleRowsShown", env: "DBTRUTH_SAMPLE_ROWS_SHOWN", flag: "sample-rows-shown", min: 0, integer: true },
   { path: "pilotPages", env: "DBTRUTH_PILOT_PAGES", flag: "pilot-pages", min: 1, integer: true },
   { path: "budgetSeconds", env: "DBTRUTH_BUDGET_SECONDS", flag: "budget-seconds", min: 0 },
+  { path: "mcpCallBudgetSeconds", env: "DBTRUTH_MCP_CALL_BUDGET_SECONDS", flag: "mcp-call-budget-seconds", min: 0.001 },
   { path: "extractBudgetShare", env: "DBTRUTH_EXTRACT_BUDGET_SHARE", flag: "extract-budget-share", min: 0, max: 1 },
   { path: "statementTimeoutSeconds", env: "DBTRUTH_STATEMENT_TIMEOUT_SECONDS", flag: "statement-timeout-seconds", min: 0.001 },
   { path: "categoricalMaxDistinct", env: "DBTRUTH_CATEGORICAL_MAX_DISTINCT", flag: "categorical-max-distinct", min: 0, integer: true },
