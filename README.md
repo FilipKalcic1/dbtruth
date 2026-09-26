@@ -432,8 +432,10 @@ CI job. On a private repository it will also check a license key, sending
 the key and the repository's id and nothing else, and an outage of that
 check will never fail the job.
 
-The Team tier will cost PRICE_TBD per team per month.
-[Join the waitlist](WAITLIST_URL) to hear when it opens.
+The Team tier will cost $29 per team per month, or $290 per year (USD). A
+team is one license key, for up to 10 private repositories and any number
+of people. [Join the waitlist](https://github.com/FilipKalcic1/dbtruth/issues/14)
+to hear when it opens: subscribe to that issue.
 
 ## What it sends, and what it never does
 
