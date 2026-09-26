@@ -1,6 +1,6 @@
 {
   "name": "dbtruth",
-  "version": "0.1.8",
+  "version": "0.4.0",
   "description": "Verified database context for AI coding agents. Read-only, Postgres.",
   "license": "MIT",
   "keywords": [

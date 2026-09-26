@@ -1,9 +1,11 @@
 # Changelog
 
-Releases from 0.2.0 on. What earlier releases changed, and why, is in
+Changes since 0.1.8. What earlier releases changed, and why, is in
 `NOTES.md`.
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-09-26)
+
+0.4.0 also carries the two sections below: 0.3.0 and 0.2.0 were not published.
 
 - `npx dbtruth mcp` serves an agent four tools over MCP, with no model and no
   API key: `context` returns the files in `context/`, `describe_table` a table
@@ -72,7 +74,7 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   summary of the verdicts and can misstate what they summarize, and where
   the measured numbers are.
 
-## 0.3.0 (unreleased)
+## 0.3.0 (not published: shipped in 0.4.0)
 
 - Every full run also writes `context/snapshot.json`: the claims, each
   verdict with its query and numbers, the settings they were measured with,
@@ -115,7 +117,7 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   database content passes through a server of ours. The price and the
   waitlist link are placeholders for now.
 
-## 0.2.0 (unreleased)
+## 0.2.0 (not published: shipped in 0.4.0)
 
 - `npx dbtruth --version`, or `-v`, prints the version.
 - Runs from anywhere inside a repository: the `.env` nearest to the current

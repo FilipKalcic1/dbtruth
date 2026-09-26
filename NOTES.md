@@ -314,7 +314,7 @@ Deliberately not done, from the same review:
 - An external policy layer: `safety.ts` is the policy layer, and
   `structure.test.ts` pins that nothing else can reach the database.
 
-## 0.2.0 (unreleased)
+## 0.2.0 (not published: shipped in 0.4.0)
 
 Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
 `PROGRESS.md`.
@@ -1200,7 +1200,7 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   - Not done: trimming the claims or the tables' values as well, which would
     change what prompt B writes about; a ceiling of prompt B's own.
 
-## 0.3.0 (unreleased)
+## 0.3.0 (not published: shipped in 0.4.0)
 
 Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
 `PROGRESS.md`.
@@ -1814,7 +1814,9 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   always exhaust, so the claims run out by construction; its assertions are
   unchanged. A change to an earlier task's test, decided by the lead.
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-09-26)
+
+0.4.0 also carries the two sections above: 0.2.0 and 0.3.0 were not published.
 
 Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
 `PROGRESS.md`.
@@ -2569,30 +2571,37 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     as a `regclass`, so the pair is unverifiable with Postgres's message, as
     its rows were before; a lookup by schema and name would answer it, at
     twice the parameters, for a role that can read nothing in that schema.
-  - **Known limits (the lead's decision), rounds 1 to 3 in one list.** This
+  - **Known limits (the lead's decision), rounds 1 to 4 in one list.** This
     list replaces those of the two entries above. By cause, each with the
     runs it was seen in: r1 is the first run, then r2a to r2c, r3a to r3c
-    and Pagila.
+    and Pagila, then round 4, the release's runs, r4a to r4c and Pagila 2
+    (The release, below). Round 4's runs are marked where the final audit
+    found an item in them, and "every fixture run" includes r4a to r4c.
     - Prompt B leaves out "(inferred)", or the reason for it, most often in
       ENTITIES.md: the broken `orders.customer_id -> customers.id` without
       "no declared foreign key" (every fixture run) and the `audit_log`
       branches without the reason for their label (r1, r2b, r2c, r3a, r3b,
-      r3c). Recurs in every round.
+      r3c, r4a, r4b, r4c). Recurs in every round.
     - Prompt B puts an empty or unverifiable claim under a heading that says
       confirmed, or calls it confirmed: `customers.api_token` (r1), the
-      empty `cars.customer_id` join (r2b, r3b), the empty `cars`/`vehicles`
-      duplicate (r3b, r3c), the empty `rental_by_category` duplicate
-      (Pagila). Recurs. Pagila also listed its two empty claims one by one,
-      against the rule to give the count once (once).
+      empty `cars.customer_id` join (r2b, r3b, r4a, r4b), the empty
+      `cars`/`vehicles` duplicate (r3b, r3c), the empty
+      `rental_by_category` duplicate (Pagila), and the empty
+      `film.original_language_id` among "all examined relationships
+      resolved to confirmed matches" (Pagila 2). Recurs. Pagila also listed
+      its two empty claims one by one, against the rule to give the count
+      once (once).
     - Prompt B labels an unverifiable claim or an open question
       "(unverifiable)", "(unverifiable further)" in r1 or
       "(inferred/unverifiable)" in r2a and r3a, not "(inferred)": every
-      run's README, flagged in r1, r3a, r3b, r3c and Pagila. Recurs.
+      run's README, flagged in r1, r3a, r3b, r3c, Pagila, r4a, r4b and r4c,
+      and "(unverified — placeholder or bug)" in Pagila 2's ENTITIES.md.
+      Recurs.
     - ENTITIES.md places the views that read an entity's table
       inconsistently: `order_totals`, which carries the customers' key, is
-      under Order and not Customer in r1, r2c and r3c, and under both in the
-      other fixture runs; Pagila's Payment is "not referenced elsewhere"
-      though three views read it. Recurs.
+      under Order and not Customer in r1, r2c, r3c, r4a and r4c, and under
+      both in the other fixture runs; Pagila's Payment is "not referenced
+      elsewhere" though three views read it. Recurs.
     - Prompt A never claims `audit_log`'s missing primary key, so README.md
       and ENTITIES.md leave it out and only `tables/audit_log.md` says
       "primary key: none" (every fixture run). Recurs.
@@ -2601,31 +2610,37 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
       and date" (every fixture run). Recurs.
     - Prompt A marks a purpose "stated" where nothing is stated, and a
       table file prints a stated purpose with no "(inferred)": Pagila has
-      no comment at all, and all 15 of its table purposes are "stated".
-      Seen once (Pagila).
+      no comment at all, and all 15 of its table purposes are "stated"
+      (Pagila, Pagila 2); `customers`, which has no comment either,
+      "Stores customer accounts" (r4c). Recurs.
     - A table's notes print with no label, whatever prompt A based them
-      on: the empty `cars` "all columns unmeasured" (r2a), and Pagila's
-      notes on six tables, among them `customer`'s calling `activebool` and
-      `active` redundant. The round-1 entry left the unlabelled notes as
-      not done. Recurs.
-    - Seen once, prompt A: `events` "timestamped" though `happened_on` is a
-      date (r3b); `customer.active` a duplicate of `activebool`, which
-      disagree on 43 of 999 rows, an "other" suspicion nothing measures
-      (Pagila; a suspicion kind for redundant columns is outside this
-      round). Seen once, prompt B: "a view and a materialized view" for
-      `order_totals` and `shipped_orders`, the kinds in the reverse order of
-      the names (r2b).
+      on: the empty `cars` "all columns unmeasured" (r2a), `shipped_orders`
+      "implying known case/whitespace inconsistency" when no status holds
+      whitespace (r4a), and Pagila's notes on six tables, among them
+      `customer`'s calling `activebool` and `active` redundant (Pagila,
+      Pagila 2, which also calls `nicer_but_slower_film_list` a "duplicate
+      of film_list"). The round-1 entry left the unlabelled notes as not
+      done. Recurs.
+    - Prompt A: `events` "timestamped" though `happened_on` is a date (r3b,
+      r4a); `customer.active` a duplicate of `activebool`, which disagree on
+      43 of 999 rows, an "other" suspicion nothing measures (Pagila,
+      Pagila 2; a suspicion kind for redundant columns is outside this
+      round). Recurs. Seen once, prompt B: "a view and a materialized view"
+      for `order_totals` and `shipped_orders`, the kinds in the reverse
+      order of the names (r2b).
     - A view does not inherit its base table's relationships, so
       `shipped_orders` has no join line (every fixture run), nor Pagila's
-      `film_list` and `nicer_but_slower_film_list`. Recurs.
+      `film_list` and `nicer_but_slower_film_list`, nor Pagila 2's
+      `customer_list` and `actor_info`. Recurs.
     - Categorical values are shown quoted whatever the column's type, since
       `extract` reads them as text: `vehicles.model_year` (flagged in r3c,
-      in every run's output), Pagila's `release_year` and `store_id` among
-      others. Recurs.
+      r4a, r4b and r4c, in every run's output), Pagila's `release_year` and
+      `store_id` among others, and Pagila 2's `release_year` and `amount`.
+      Recurs.
     - The relations string "9 tables, 1 view, 1 materialized view, 1
       partitioned" counts the partitioned table among the tables, and
       prompt B repeats it so that it reads as one relation more (r2a, r3c,
-      Pagila). Recurs.
+      Pagila, r4b, r4c). Recurs.
     - `inconsistent_values` counts case and whitespace collisions together,
       so its numbers cannot say which caused them. Seen once (r1).
     - Two views or materialized views are decided by their definitions
@@ -2634,6 +2649,103 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
       that caches a view with `SELECT *` from it, or one query with other
       aliases, another order of joins or an ORDER BY. Found in review, not
       in a run.
+    - Prompt A gives a relation another's comment, and the files repeat
+      it: `cars` "replaced by vehicles per comment", in its purpose, marked
+      "stated", and in its dead-table detail, when the comment is on
+      `vehicles` and `cars` has none. `tables/cars.md` prints the detail
+      "(inferred)", and r4a's README states it as fact, although prompt B
+      is sent each relation's comment and told that a comment belongs to
+      the relation that carries it (r3b, r4a). Recurs.
+    - Prompt B gives a duplicate's overlap as a share of the other table's
+      rows, against `over` and its rule: "87.5% of products_legacy's 80
+      distinct rows (70/80)", when `products_legacy` has 70 rows, all of
+      them in `products` (r2c, r4b's README), and "products_legacy
+      overlaps 87.5% with products" (r1, r4b's ENTITIES.md). Recurs.
+    - Prompt B files a join under the wrong basis: Pagila 2's README lists
+      the inferred `payment.rental_id -> rental.rental_id` among "All
+      declared foreign keys", when `payment` declares none and 49 of its 55
+      partitions none either (Pagila's "payment is partitioned, which hides
+      FKs from tooling" was the same belief), and puts the declared, empty
+      `film.original_language_id` under a heading for joins with no
+      declared key or an ambiguous match (Pagila 2). Recurs.
+    - Prompt A makes an `other` suspicion of `payment`'s partitions, whose
+      detail says that the joins' consistency across them is unverified,
+      against its rule that a missing foreign key is a relationship to
+      propose. `tables/payment.md` prints it beside the three joins that
+      read all 51,061 rows of the 55 partitions, and the README repeats it
+      (Pagila 2). Seen once.
+    - Seen once, prompt B: `shipped_orders` "normalizes status to
+      'shipped'", when the view only filters on `lower(btrim(status))` and
+      has no `status` column (r4b's ENTITIES.md).
+- **The release.** 0.4.0 carries everything the plan split into 0.2.0,
+  0.3.0 and 0.4.0; the first two were not published (the maintainer's
+  decision). Every task scores 100 but T6.2, which waits for the paid tier,
+  and T7.1, whose steps for a person are open. T7.1's checklist, for the
+  steps that need no person and no API key:
+  - **Checks (steps 1 to 3).** `npm run verify` exits 0: 333 tests, 331
+    pass, the 2 live tests skipped, 0 fail, and the package smoke test
+    passes on `dbtruth-0.4.0.tgz`. CI runs on the release commit once it is
+    pushed. `npm run acceptance`: 100 for every task but T6.2, 0 with no
+    checks, and T7.1, 77; overall 93 over 20 tasks. Every task the release
+    carries scores 100, as step 2 asks: T6.2 is not in it, and T7.1 reaches
+    100 only when its steps for a person are done, the publish among them.
+    Section 4.2 of the plan releases only at an overall 100; this release
+    goes ahead at 93, by the maintainer's decision. `npm pack --dry-run`
+    lists 20 files: 14 in `dist/`, 2 in `dist/prompts/`,
+    `skills/dbtruth/SKILL.md`, `README.md`, `LICENSE` and `package.json`,
+    and nothing from `src/`, `test/` or `context/`.
+  - **Docs and version (steps 4 to 6).** `package.json` and
+    `package-lock.json` say 0.4.0. The 0.4.0 headings here and in
+    `CHANGELOG.md` carry the date, and the 0.2.0 and 0.3.0 headings say
+    that they were not published and shipped in 0.4.0; the 37 checks in
+    `acceptance/checks.json` that pinned the "(unreleased)" headings pin
+    these, with nothing else in them changed. The README's row on the
+    commands an older dbtruth lacks names 0.1.8 and 0.4.0, the versions on
+    npm. Its fixture output is r4c's stderr and `context/README.md`, whole:
+    r4c is the run of round 4 whose audit let no finding stand.
+    `docs/demo.gif` is rendered from r4c's lines too, 209 KB and 19.1 s;
+    its two queries gain `ORDER BY 1`, since psql printed the rows of the
+    `GROUP BY` in another order on the fixture (CZ, SK, DE, AT), and 440,
+    500 and 60 are as before. The Action's `dbtruth-version` defaults to
+    0.4.0.
+  - **The live runs.** Each with claude-sonnet-5 at effort low, two calls;
+    from its stderr, the model time, the database time and the tokens in
+    and out. r1, the first: 37.3s, 0.1s, 20,864 and 4,408. Round 2: r2a
+    34.6s, 0.1s, 21,237 and 4,014; r2b 36.1s, 0.1s, 21,440 and 4,291; r2c
+    36.9s, 0.1s, 21,454 and 4,185. Round 3: r3a 36.0s, 0.1s, 21,479 and
+    4,272; r3b 39.2s, 0.3s, 21,940 and 4,704; r3c 36.4s, 0.1s, 21,575 and
+    4,185; Pagila 69.3s, 6.4s, 50,585 and 8,370. Round 4, on `b20b201`, the
+    code this release ships: r4a 40.0s, 0.1s, 22,041 and 4,683; r4b 38.7s,
+    0.1s, 22,136 and 4,423; r4c 34.4s, 0.1s, 21,502 and 4,006; Pagila 2
+    60.6s, 6.5s, 50,702 and 7,382. The final audit checked 804 statements
+    of round 4, and nine findings stood, four false and five misleading:
+    two in r4a, three in r4b, none in r4c and four in Pagila 2. They are
+    in the known limits above, as the maintainer chose.
+  - **Manual acceptance (step 9, section 5.5).** Pagila 2, run with the
+    build the package is made from, not the published package: 23
+    relations (15 tables, `payment` among them partitioned 55 ways, 7 views
+    and 1 materialized view); 29 claims; relationships 21 confirmed (3 on
+    weak evidence) and 1 empty; suspicions 2 confirmed, 1 rejected and 4
+    unverifiable; 7 entities, 5 questions, 26 files. Of the 309 statements
+    the audit checked, four stood, and the false one is the inferred
+    `payment.rental_id -> rental.rental_id` listed among the declared
+    foreign keys. Section 5.5 makes anything false a blocker; the
+    maintainer releases with it as a known limit. No WordPress or
+    Discourse dump was run. T2.2 left its weak-evidence note to be judged
+    here: Pagila 2's README gives it for three of its four inferred joins,
+    `payment.customer_id` (4 other keys fit), `payment.staff_id` (10) and
+    `store.manager_staff_id` (1), and no standing finding concerns it; and
+    the README's fixture output shows it now, on `audit_log`'s branches
+    (alsoFits 3), as T2.2 expected of a regenerated run.
+  - **Left for a person.** `npm publish` (2FA); the smoke test of the
+    published package (step 8); the release commit green on CI, the tag
+    `v0.4.0` and the GitHub release notes; in `dbtruth-action`,
+    `DBTRUTH_REF` set to the release commit, a scenario in `test.yml` that
+    leaves `dbtruth-version` at its default and passes on the fixture,
+    which the T4.1 entry left to T7.1 and which can pass only once 0.4.0
+    is on npm, the `v1` tag and the Marketplace listing; the Team price
+    and the waitlist form (T6.1, T6.3). The first four are manual items of
+    T7.1 in `acceptance/manual.json`, with no evidence until they are done.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

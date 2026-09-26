@@ -5499,3 +5499,259 @@ of each lost point, in the format of section 4.7 of the plan.
   the `git diff` hash was the same before and after each run (logs in the
   scratchpad, `sabotage3-stage-*`). `npm run verify`: 333 tests, 331 pass,
   the 2 live tests skipped, 0 fail; the package smoke test passes.
+
+## T7.1 Releases
+### Iteration 1: 77/100
+- Scope, the maintainer's: one release, 0.4.0, carries what the plan split
+  into 0.2.0, 0.3.0 and 0.4.0; 0.2.0 and 0.3.0 are never published. This
+  iteration does the checklist's steps that need no person and no API key.
+  No model was called; nothing was published, tagged, pushed or committed.
+  Backups and scripts are in `sabotage-release-t71`, a new scratchpad
+  directory.
+- Step 1, done here; CI left for the lead: `npm run verify` exits 0, 333
+  tests, 331 pass, the 2 live tests skipped, 0 fail, and the package smoke
+  test passes on `dbtruth-0.4.0.tgz` (the installed `--version` prints
+  0.4.0, `doctor` 8 checks with none failing, `mcp` measures
+  orders.customer_id -> customers.id as broken, `init --skill` writes the
+  skill byte for byte). CI's matrix runs once the release commit is pushed:
+  manual item A6-tag.
+- Step 2, done: `npm run acceptance` gives 100 to every task but T6.2, 0
+  with no checks (it waits for the paid tier), and T7.1, 77 (below);
+  overall 93 over 20 tasks.
+- Step 3, done: `npm pack --dry-run` lists `dbtruth-0.4.0.tgz`, 20 files,
+  79,434 bytes: 14 in `dist/`, 2 in `dist/prompts/`,
+  `skills/dbtruth/SKILL.md`, `README.md`, `LICENSE` and `package.json`,
+  nothing from `src/`, `test/` or `context/`. The smoke test's lines in
+  `npm run verify` say the same of the tarball it installs.
+- Step 4, done: the 0.4.0 headings of CHANGELOG.md and NOTES.md carry
+  2026-09-26, the 0.3.0 and 0.2.0 headings read "(not published: shipped
+  in 0.4.0)", and each 0.4.0 section opens with the line that it carries
+  the other two. CHANGELOG.md's first line said "Releases from 0.2.0 on";
+  it says "Changes since 0.1.8". In `acceptance/checks.json`, 37 checks
+  pinned "(unreleased)" headings before and none after: 37 changed, 48
+  headings in them (28 of 0.2.0, 16 of 0.3.0, 4 of 0.4.0), each replaced
+  by the new heading escaped as the old one was, by a script over the file's
+  text; `git diff --word-diff` shows the headings alone, and all 99 file
+  checks pass. NOTES.md, 0.4.0: "The release", and round 4's nine standing
+  findings in the known limits of the round-3 entry, now rounds 1 to 4, in
+  five causes, each with its runs.
+- Step 5, done from the lead's run r4c: the README's fixture output is
+  r4c's `stderr.txt` and `context/README.md`, whole; both blocks, read
+  back from README.md with its CRLF folded, equal the files byte for byte.
+  `stderr.txt` begins with `reading settings from ..\.env`, not with the
+  Sending to line, and is pasted whole. The lead-in: 36 seconds
+  (`stdout.txt` created at 20:22:25.49, `stderr.txt` last written at
+  20:23:01.36), exit 2, 14 files, the fixture's list as it was, and that
+  the run is one of four made for this release, with NOTES recording what
+  the model got wrong in the others. The troubleshooting row on commands an
+  older dbtruth lacks names 0.1.8 and 0.4.0; no other 0.2.0 or 0.3.0 is in
+  README.md or `skills/dbtruth/SKILL.md`. `docs/demo.gif`: scenes 2 and 3
+  take r4c's lines (stderr lines 2 to 14, and `context/README.md` lines 1
+  to 6, long lines wrapped on screen). The psql part, checked read-only as
+  `reader` on the fixture: 440 with the inner join, 500 with the left
+  join, 60 in `unknown`, AT 108, CZ 110, DE 110, SK 112. Without ORDER BY,
+  psql printed the rows as CZ, SK, DE, AT (unknown second), not in the
+  GIF's order, so both queries gain `ORDER BY 1`, whose output is the
+  GIF's lines. `python scripts/render-demo.py`: 116 frames, 19.8 s, 209
+  KB (it was 190 KB); neither README nor NOTES promises a size. The
+  docstring names no version and is unchanged.
+- Step 6: the version is done, the tag and the release notes are the
+  lead's (A6-tag). `npm version 0.4.0 --no-git-tag-version` rewrote
+  `package.json` and `package-lock.json` with CRLF line ends, so both were
+  put back and their three version lines set to 0.4.0 by hand.
+- Step 7, left for a person: `npm publish` (A7).
+- Step 8, left for a person (A8). Rehearsed on the build: `node
+  dist/cli.js --version` prints 0.4.0, and `check --url` as `reader` on
+  the fixture, in an empty scratch directory holding r4c's
+  `snapshot.json`, with no API key, prints "check fixture: 12 unchanged",
+  nothing on stdout, and exits 0.
+- Step 9, evidence written (A9): pagila2 and the final audit, 309
+  statements, four standing, one of them false, a known limit by the
+  maintainer's decision.
+- dbtruth-action: `action.yml` defaults `dbtruth-version` to 0.4.0, and
+  the README's five mentions of 0.3.0 say 0.4.0 ("v1 runs dbtruth 0.4.0
+  unless ..."); `test/scripts.test.sh` passes `PACKAGE=dbtruth@0.4.0`,
+  as the step does with the default. `DBTRUTH_REF` in `test.yml` is the
+  lead's. jq is not on this machine, so `bash test/scripts.test.sh` ran in
+  the local `dbtruth-action-test` image (jq 1.6, ShellCheck 0.9.0) with
+  no network: 35 ok, exit 0; ShellCheck on the three scripts is clean.
+- New in `acceptance/checks.json` for T7.1: A3, the package's contents from
+  the smoke test's lines in `npm run verify`; A4, CHANGELOG.md's three
+  headings, the dated one first, and no "(unreleased)"; A5, the Sending to
+  and tokens lines of a live run in the README's fixture output; A6,
+  `package.json` at 0.4.0; `pack-smoke` (tests), the smoke test's seven
+  lines for 0.4.0; `verify` (gates); `notes` and `readme-versions`
+  (docs); `invariants`, the structure, canary and stdout tests in `npm run
+  verify`. In `acceptance/manual.json`: A6-tag, A7, A8 and action-v1,
+  with no evidence, A9 with it, and the sabotage record.
+- Sabotage: eleven breaks from `sabotage.mjs`, each made in place from a
+  copy, judged by T7.1's checks as `scripts/acceptance.mjs` judges them,
+  the pack checks on `npm run test:pack`'s stdout, the part of `npm run
+  verify`'s they match, restored and compared byte for byte; `git diff` hashed `31f42b2d...`
+  before and after. The version back to 0.1.8 failed A6, and A3 and
+  pack-smoke, since the smoke test then names `dbtruth-0.1.8.tgz`;
+  `skills` left out of `files` failed A3 and pack-smoke with "pack-smoke:
+  FAIL Command failed: ... init --skill"; `src` put in failed them with
+  "pack-smoke: FAIL dbtruth-0.4.0.tgz contains src/check.ts, ..."; the
+  CHANGELOG's 0.4.0 heading unreleased again failed A4 and two other
+  tasks' changelog checks, its 0.3.0 heading A4 and seven; the old run's
+  fixture output, or r4c's without its tokens line or its Sending to line,
+  failed A5; the version row of 0.2.0 and 0.3.0 failed readme-versions;
+  NOTES without The release failed notes, and with its 0.2.0 heading
+  unreleased again, notes and thirteen other tasks' notes checks. Each
+  file check fails with "<file> does not match <regex>", each command
+  check with "stdout does not match <regex>", and the smoke test with the
+  FAIL line quoted.
+- Score 77: acceptance 5 of 9 (A3 to A6 and A9 pass; A6-tag, A7, A8 and
+  action-v1 have no evidence, and `scripts/acceptance.mjs` fails a manual
+  item whose evidence is empty), 27.7 of 50; tests 20; gates 15; docs 10;
+  invariants 5. It reaches 100 when the four items get their evidence.
+### Iteration 2: three reviews of iteration 1, 77/100
+- Each finding was checked against the files it names, the live runs'
+  files under `dbtruth-live` (no `.env`), `final-audit.json`, the plan and
+  the fixture. No model was called; nothing was published, tagged, pushed
+  or committed.
+- Fixed:
+  - The Action's README gave "0.4.0 before its release" as a version npm
+    does not have (plan 2, honesty 4, correctness 1): false from the day
+    `v1` is tagged, since that waits for 0.4.0 on npm. It now names 0.3.0,
+    which was never published: four of the five mentions of 0.3.0 say
+    0.4.0, and this one names 0.3.0 as never published. In the
+    `dbtruth-action-test` image with no network: ShellCheck clean, `bash
+    test/scripts.test.sh` 35 ok and exit 0, and every message the scripts
+    print still has a row in the README.
+  - The README's lead-in said NOTES records what the model got wrong "in
+    the others" (plan 3, honesty 1), as if r4c got nothing wrong: no
+    finding stood in r4c, but the final audit matched eleven of its
+    statements to known limits, among them, in the pasted block, the
+    relations string, `api_token` "(unverifiable claim, ...)" and no word
+    of `audit_log`'s missing primary key. It now says "in each, this one
+    included", which the next fix makes true.
+  - The known limits of rounds 1 to 4 marked round 4 only where a finding
+    stood (honesty 2, plan 8), so four items said "Seen once" or gave run
+    lists that round 4 contradicts. Each of the audit's known-limit
+    matches was read in its file and put under its item: the `audit_log`
+    branches without their reason (r4a, r4b, r4c), the empty
+    `cars.customer_id` join under a confirmed heading (r4a, r4b) and
+    Pagila 2's empty `film.original_language_id` among "all examined
+    relationships resolved to confirmed matches", "(unverifiable)" (r4a,
+    r4b, r4c, and "(unverified ...)" in Pagila 2's ENTITIES.md),
+    `order_totals` under Order alone (r4a, r4c), stated purposes with
+    nothing stated (Pagila 2, and r4c's `customers`), unlabelled notes
+    (r4a's `shipped_orders`, Pagila 2's `customer` and
+    `nicer_but_slower_film_list`), `events` "timestamped" (r4a) and
+    `customer.active` (Pagila 2), now "Recurs", views without join lines
+    (Pagila 2's `customer_list` and `actor_info`), quoted values (r4a to
+    r4c, Pagila 2) and the relations string (r4b, r4c). The rest fall under
+    items marked "every fixture run", which the header now says includes
+    r4a to r4c, or name no fault: r4b's `vehicles` "Fleet vehicles owned by
+    customers" rests on its comment and its declared foreign key, and
+    Pagila 2's `film_list` grain, one row per film and category, is right
+    (the round-3 audit counted 2,360 rows and 2,367 in `film_category`).
+    The sentence plan 8 found hard to parse is gone.
+  - Step 2 and the plan's 4.2 (plan 4): NOTES' Checks now give the
+    overall 93, say that every task the release carries scores 100, that
+    T6.2 is not in it and T7.1 reaches 100 only after its steps for a
+    person, and that 4.2 releases only at 100 while this release goes
+    ahead at 93 by the maintainer's decision.
+  - A9's evidence put the first Pagila run before round 3 (plan 5,
+    honesty 3). It ran at 13:53, after r3a to r3c (13:38 to 13:40), and
+    NOTES counts it in round 3; the evidence now says so, and
+    that its findings and the fixture runs' led to `b20b201`.
+  - The T4.1 entry's "T7.1 adds a scenario on the published default"
+    (plan 1) was tracked nowhere. Such a scenario passes only once 0.4.0 is
+    on npm, so it is not written into `test.yml`, whose runs would fail
+    until then; it is now part of manual item action-v1 and of NOTES' Left
+    for a person.
+  - T2.2 left its weak-evidence note to be judged on Pagila at release, and
+    the README's fixture output to show it once regenerated (plan 6).
+    NOTES' step-9 bullet now closes both: Pagila 2's README gives the note
+    for three of its four inferred joins (`payment.customer_id` 4 other
+    keys, `payment.staff_id` 10, `store.manager_staff_id` 1) and no
+    standing finding concerns it; r4c's README gives it on `audit_log`'s
+    branches, alsoFits 3.
+  - The sabotage record said every break was judged as
+    `scripts/acceptance.mjs` judges it (plan 7); the three `package.json`
+    breaks were judged on `npm run test:pack`'s stdout, as `sabotage.mjs`
+    says. Iteration 1 and manual item sabotage now say so.
+  - The GIF's length (honesty 5). `render-demo.py` prints the sum of the
+    delays it asks for, 19.8 s over 116 frames; the file holds 101 frames
+    and plays 19.09 s, since a GIF's delays are whole hundredths, so the
+    28 ms typing frames are stored as 20 ms, and Pillow merges identical
+    frames. NOTES now says 19.1 s. The script is unchanged: its check
+    against 20 seconds reads the longer sum.
+- Rejected:
+  - Honesty 2's guess that r4a's `shipped_orders` note "implying known
+    case/whitespace inconsistency" belongs to the `inconsistent_values`
+    item: the note is prompt A's, written before anything is measured, so
+    it is an unlabelled note, and "Seen once (r1)" stays.
+  - The other examples offered for the Action's row: "such as 0.5.0"
+    (honesty 4) turns false once 0.5.0 is out, and "the next one"
+    (correctness 1) names nothing `npm view dbtruth versions` can show;
+    0.3.0 stays true.
+- Score 77, as in iteration 1: A6-tag, A7, A8 and action-v1 have no
+  evidence until the lead's steps are done.
+### Iteration 3: the sabotage check of T7.1's checks, 77/100
+- Scope, the lead's: no change to wording or design; break what each new
+  T7.1 check guards, run `npm run acceptance -- --task T7.1` on each break,
+  and break one changed docs pattern of three other tasks. A check or test
+  is added only where a break survives. No model was called; nothing was
+  published, tagged, pushed or committed.
+- Before: `npm run acceptance`, every task 100 but T6.2 (0, no checks) and
+  T7.1 (77, its four manual items for a person without evidence); overall
+  93 over 20 tasks, in 402 s. The 37 checks changed in iteration 1 differ
+  from `HEAD` in their headings alone: put back as "(unreleased)", each
+  equals its old text, and no check outside T7.1 pins "(unreleased)" now,
+  where 37 did.
+- `sabotage.mjs` in `sabotage-release-checks`, a new scratchpad directory,
+  made ten breaks. Each file was copied there just before its break and
+  compared with it, the break was made in place, the named task was scored
+  by `npm run acceptance -- --task <id>`, and the file was put back from
+  the copy and compared with `Buffer.equals` and `cmp`. The hash of `git
+  diff` and `git diff --binary` in dbtruth (`79fd840b...`, `6547117...`)
+  was the same after every restore, and in dbtruth-action (`f023e519...`)
+  at the end. The four manual items for a person failed in every T7.1 run,
+  as before; the lines below are the other failures.
+  - The version back to 0.1.8 in `package.json`: A6 failed with
+    "package.json does not match /(?<![\s\S])\{\s+"name": "dbtruth",...",
+    and A3 and pack-smoke with "stdout does not match ...", since the smoke
+    test then packs `dbtruth-0.1.8.tgz`. 46.
+  - CHANGELOG.md's 0.4.0 heading back to "(unreleased)": A4 failed with
+    "CHANGELOG.md does not match
+    /(?<![\s\S])(?![\s\S]*\(unreleased\))...". 72.
+  - `src/check.ts` added to `files` in `package.json`: A3, pack-smoke,
+    verify and invariants failed with "exit 1, expected 0"; the saved full
+    output has 333 tests, 0 failing, and "pack-smoke: FAIL
+    dbtruth-0.4.0.tgz contains src/check.ts". 32, the gate cap.
+  - The `tokens:` line removed from the README's fixture output: A5 failed
+    with "README.md does not match /^## Output on the fixture$...". 72.
+  - NOTES.md's "- **The release.**" made "- 0.4.0 carries ...": notes
+    failed with "NOTES.md does not match ...". 72.
+  - The README's row on older versions put back as `HEAD` has it, with
+    0.3.0 and 0.2.0: readme-versions failed with "README.md does not match
+    /(?<![\s\S])(?![\s\S]*\b0\.[23]\.0\b)...". 72.
+  - The title of "dependency direction matches the spec" in
+    `test/structure.test.ts` shortened, so the test still passes under
+    another name and `npm run verify` exits 0: invariants failed with
+    "stdout does not match /(?=[\s\S]*^ok \d+ - only safety\.ts imports
+    pg...", 40, the gate cap.
+  - T1.2's changelog check (the 0.2.0 heading), its line "- `npx dbtruth
+    --version`, or `-v`, prints the version." removed: `npm run acceptance
+    -- --task T1.2` failed that check alone, "CHANGELOG.md does not match
+    /^## 0\.2\.0 \(not published: shipped in 0\.4\.0\)$[\s\S]*`npx dbtruth
+    --version`/m", 97.
+  - T4.1's notes check (the 0.3.0 heading), "**One comment per pull
+    request.**" removed from its line: T4.1 failed that check alone, "NOTES.md
+    does not match /^## 0\.3\.0 \(not published: shipped in 0\.4\.0\)$...",
+    98.
+  - T5.2's changelog check (the dated 0.4.0 heading), the `init --skill`
+    bullet removed: T5.2 failed that check alone, "CHANGELOG.md does not
+    match /^## 0\.4\.0 \(2026-09-26\)$[\s\S]*^- `npx dbtruth init --skill`
+    also installs ...", 98.
+- Every break failed at least one check, so no check or test was added. The
+  `src/` break's message in the score is the exit code; the reason is the
+  smoke test's FAIL line in the full output that `scripts/acceptance.mjs`
+  saves and names.
+- `npm run verify` exits 0 after the restores, in 92 s: 333 tests, 331
+  pass, the 2 live tests skipped, 0 fail; the package smoke test passes on
+  `dbtruth-0.4.0.tgz`.

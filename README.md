@@ -149,7 +149,7 @@ in its own words.
 | `FAIL Node <version>: dbtruth needs Node 20 or newer` | Install Node 20 or newer. |
 | `FAIL Postgres <n>: dbtruth needs Postgres 12 or newer` | The server is older than dbtruth supports: its queries read catalog columns and use SQL that Postgres 12 added. Point it at Postgres 12 or newer. |
 | `error: option '--fail-on <when>' argument '<value>' is invalid. Allowed choices are regression, change, never.` | `check --fail-on` takes one of three values: `regression`, the default, fails the build on a regression or a stale item; `change` on any change; `never` reports and passes. |
-| `error: too many arguments. Expected 0 arguments but got 1: <word>.`<br>`error: unknown option '<option>'`<br>`error: option '<option>' argument missing` | A command or an option this dbtruth does not have, or an option given without its value. A dbtruth older than 0.4.0 has no `mcp` and no `init --skill`, one older than 0.3.0 has no `check`, and one older than 0.2.0 has no `doctor`, `init` or `--version`. `npx dbtruth --help` lists what there is. |
+| `error: too many arguments. Expected 0 arguments but got 1: <word>.`<br>`error: unknown option '<option>'`<br>`error: option '<option>' argument missing` | A command or an option this dbtruth does not have, or an option given without its value. A dbtruth older than 0.4.0, such as 0.1.8, has no `doctor`, no `init`, no `check`, no `--version`, no `mcp` and no `init --skill`. `npx dbtruth --help` lists what there is. |
 | `unknown table <name>; the closest: <names>`<br>`unknown column <table>.<column>; the closest: <names>` | From the `mcp` tools. `describe_table` and `measure_join` did not find the name in the catalog, read again at every call, so a table added since the server started is found; `context` found no file of that name in `context/tables/`. `describe_table` and `measure_join` find a table by its name, or as `schema.table` outside `public`, whatever the case, and a column only as spelled; `context` finds a table's file only by its name exactly as written. Nothing was measured. The closest names are those the fewest edits away, or `none` when there is nothing to compare with. |
 | `<table> was not examined within this call's time budget; raise DBTRUTH_MCP_CALL_BUDGET_SECONDS` | From `mcp`: sampling the table used up its share (`--extract-budget-share`) of the call's time budget, 20 seconds by default, so nothing was measured. Set `DBTRUTH_MCP_CALL_BUDGET_SECONDS` in the server's environment, or `--mcp-call-budget-seconds` after `mcp` in the command that starts it, and restart the server. |
 | `--project <dir>: no such directory` | `dbtruth mcp --project` names a directory that does not exist, relative to the one the server starts in. The server does not start, and exits `1`: correct the path in the agent's settings for the server. |
@@ -548,56 +548,64 @@ an empty `cars` beside a populated `vehicles`, a `status` column with `shipped`
 and `SHIPPED`, `audit_log` with no primary key, fake personal data and a
 constant secret in `customers`, `products_legacy` duplicating `products`, a
 view, a partitioned table and a materialized view that was never refreshed.
-The run took 51 seconds, exited 2 and printed this before writing thirteen files:
+It is one of four runs made for this release, three on the fixture and one on
+Pagila, and `NOTES.md` records what the model got wrong in each, this one
+included. This run took 36 seconds, exited 2, wrote 14 files and printed this
+on stderr:
 
 ```
-contextualize: 11 tables described, 13 claims to test, 20.3s
-verify: 13 measurements, 0.1s
-write: 13 files, 28.8s
+reading settings from ..\.env
+Sending to claude-sonnet-5 at effort low (by schema size, 1125 tokens): 11 relations (9 tables, 1 view, 1 materialized view, 1 partitioned), schema and per-column statistics, 15 sample rows per table with high-cardinality columns hidden (--no-samples off, --reveal: none). Nothing else leaves this machine.
+contextualize: 11 tables described, 12 claims to test, 19.3s
+verify: 12 measurements, 0.1s
+write: 13 files, 15.2s
 dbtruth: fixture
 relations: 9 tables, 1 view, 1 materialized view, 1 partitioned (fits in an agent's context)
-relationships: 3 confirmed, 1 broken, 0 rejected, 1 unverifiable
+relationships: 6 confirmed (3 on weak evidence), 1 broken, 0 rejected, 0 unverifiable, 0 empty
   orders.customer_id->customers.id  hit rate 88.0%
-suspicions: 5 confirmed, 0 rejected, 3 unverifiable
+suspicions: 4 confirmed, 0 rejected, 1 unverifiable, 0 empty
 entities: 4, questions for a human: 5
-files written: 13 under ./context/
-database time: 0.1s, model time: 49.1s (contextualize 20.3s, write 28.8s)
+files written: 14 under ./context/
+database time: 0.1s, model time: 34.4s (contextualize 19.3s, write 15.2s)
+tokens: 21502 in, 4006 out, 2 calls
 ```
 
 ```markdown
-# Database Reference (fixture)
+## Overview
+This database (relations: 9 tables, 1 view, 1 materialized view, 1 partitioned) tracks customers, orders, order items, products, a fleet of vehicles, and an audit log. Per-table detail lives in context/tables/<table>.md.
 
-Fleet/orders database: customers place orders (with line items against a product catalog) and own vehicles. An audit_log tracks actions polymorphically.
+## Broken relationships
 
-## Broken relationship — fix required
+**orders.customer_id -> customers.id** (inferred: no declared foreign key found): 500 sampled rows, 0 nulls, 440 hits, 60 orphans (hit rate 0.88). All 60 orphans fall above the highest customers.id, suggesting customers that were never loaded or ids from another sequence. LEFT JOIN customers from orders, or filter/handle unmatched customer_id.
 
-**orders.customer_id → customers.id is broken: 88% hit rate (440/500), 60 orphans.**
-Do not inner-join orders to customers without guarding. Use `LEFT JOIN` and expect nulls, or filter orphans explicitly. This is not a declared FK — treat with suspicion.
+## Confirmed suspicions
 
-## Confirmed suspicious findings
+- **Dead table: cars** — 0 rows. Comment on vehicles confirms it replaced cars. Do not join to cars; treat as removable.
+- **Dead table: order_totals** — a materialized view never refreshed (populated: false). Reading it, even in a join, raises an error until refreshed. Its row estimate of 0 is not a count.
+- **Duplicate entity: products vs products_legacy** — share 5 columns (id, sku, name, category, price_cents). Of 80 distinct sampled rows of products, 70 also appear in products_legacy: 0.875 overlap. products_legacy looks like an older duplicate of products; prefer products in new queries.
+- **Inconsistent values: orders.status** — 5 distinct values, 3 canonical forms once lowercased/trimmed (2 collisions): 'pending'/'Pending', 'shipped'/'SHIPPED' plus 'cancelled'. The view shipped_orders already normalizes this via lower(btrim(status)); use that view or apply the same normalization rather than matching status literally.
 
-- **cars is a dead table**: rowEstimate 0, superseded by `vehicles` (per table comment). Do not query it for current data.
-- **order_totals (materialized view) is dead**: never refreshed (`populated:false`). Treat as unreadable/stale; do not rely on it — compute totals from `orders`/`order_items` directly.
-- **products_legacy duplicates products**: 87.5% of rows (70/80) match products exactly on sku/name/category/price_cents. Likely an old copy; prefer `products` unless explicitly asked for legacy data.
-- **orders.status has inconsistent casing**: 5 distinct raw values, only 3 canonical (`pending`/`Pending`, `shipped`/`SHIPPED`, `cancelled`). Always normalize with `lower(btrim(status))`, or use the `shipped_orders` view which already does this.
-- **audit_log has no primary key** and `entity_id` is polymorphic (points to customers/orders/vehicles depending on `entity` column) — cannot be joined with a single FK; join conditionally on `entity`.
-- **customers.api_token has only 1 distinct value across 250 rows** (inferred, unverifiable) — looks like placeholder/test data, don't treat as a real per-row secret.
+## Confirmed relationships (facts)
 
-## Entities
+- order_items.order_id -> orders.id: hit rate 1.0, 0 nulls, 0 orphans.
+- order_items.product_id -> products.id: hit rate 1.0, 0 nulls, 0 orphans.
+- vehicles.customer_id -> customers.id: hit rate 1.0, 0 nulls, 0 orphans.
 
-- **customer** — table `customers`. Referenced by `vehicles.customer_id` (confirmed) and `orders.customer_id` (broken, see above).
-- **vehicle** — table `vehicles`, replaces dead `cars` table (confirmed duplicate/dead).
-- **order** — table `orders`, with `order_items` (line items) and view `shipped_orders`. `order_totals` materialized view is dead.
-- **product** — table `products`; `products_legacy` is a confirmed duplicate/stale copy.
+### Polymorphic audit_log.entity_id (inferred, each branch has alsoFits=3: 3 other integer keys with ranges that would also fit, so match alone does not prove it)
+
+- when entity='customer' -> customers.id: 100 rows, hit rate 1.0, 0 nulls, 0 orphans.
+- when entity='order' -> orders.id: 100 rows, hit rate 1.0, 0 nulls, 0 orphans.
+- when entity='vehicle' -> vehicles.id: 100 rows, hit rate 1.0, 0 nulls, 0 orphans.
+
+Treat these as likely but not certain; entity_id is polymorphic and only the entity column disambiguates branches (never merge across branches).
 
 ## Open questions for a human
 
-- Is `cars` safe to drop now that `vehicles` fully replaced it?
-- Should `products_legacy` be archived/dropped, or is something still reading it?
-- Why is `order_totals` never refreshed — still needed?
-- What entity does `events` relate to? No FKs declared (inferred: unclear, possibly customers or products).
-- Should `orders.status` get an enum/check constraint to stop future case drift?
-- Why do 60 orders (12%) reference nonexistent customers — bad data or soft-deleted customers?
+- Is products_legacy still used anywhere, or can it be dropped in favor of products?
+- Should cars be dropped now that vehicles fully replaces it?
+- customers.api_token showed only 1 distinct value across the sample (unverifiable claim, no measurement possible) — check whether it's meant to be unique per customer.
+- Should order_totals be scheduled for refresh, and why has it never been populated?
+- Should orders.status be normalized in storage rather than in the shipped_orders view?
 ```
 
 ## Tuning
