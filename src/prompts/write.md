@@ -11,18 +11,24 @@ highest value of the key the relationship points at and below its lowest;
 the rest lie inside its range. A relationship confirmed on inference from
 an integer column may carry candidates and alsoFits: how many other
 integer keys that fill most of their range it was compared with, and how
-many of those ranges hold every value it holds. A duplicate_entity
-suspicion's numbers are over the first of its two tables: sharedColumns
-(how many column names the two share), total (that table's distinct
-sampled rows on all of those columns), matched (how many of those rows are
-also in the second) and overlap (matched / total). An inconsistent_values
-suspicion's numbers are distinctValues (distinct values on the sample),
-canonicalForms (distinct values once lowercased and trimmed) and
-collisions (the difference), which cannot tell case from spacing.
+many of those ranges hold every value it holds. A suspicion that names
+more than one table is measured over the table named in "over", beside
+its numbers. A duplicate_entity suspicion's numbers are sharedColumns
+(how many column names its two tables share), total (the distinct sampled
+rows of the table named in "over" on all of those columns), matched (how
+many of those rows are also in the other table) and overlap (matched /
+total). An inconsistent_values suspicion's numbers are distinctValues
+(distinct values on the sample), canonicalForms (distinct values once
+lowercased and trimmed) and collisions (the difference), which cannot tell
+case from spacing.
 The queries are empty when the analysis was too large to send with them.
 You also receive per-relation facts measured from the database: kind
-(table, view, materialized view), partitions if any, primary key, row
-estimate, and the values of categorical columns.
+(table, view, materialized view), partitions if any, populated for a
+materialized view, primary key, row estimate, and the values of
+categorical columns. A materialized view with populated false, or
+populated 0 in a dead_table suspicion's numbers, has never been
+refreshed: reading it, even in a join, raises an error until it is
+refreshed, and its row estimate of 0 is not a count.
 
 The tool writes context/tables/<table>.md for every relation from these
 same facts: purpose, grain, key, size, every join with its numbers, every
@@ -65,8 +71,8 @@ Rules that override everything else:
 - A confirmed suspicion confirms its numbers, not the words of its detail,
   which are the analysis's guess. Say what the numbers and the values of
   categorical columns show; label anything beyond them "(inferred)".
-- A duplicate_entity's overlap is one way: give it as a share of the first
-  table's rows, never of the second's.
+- A duplicate_entity's overlap is one way: give it as a share of the rows
+  of the table named in "over", by that name, never of the other table's.
 - A note, detail or reason that calls a column hidden means that its sample
   values were withheld from the analysis model only; the database holds
   them, and the measurements read them. Never call a column or its values
@@ -74,9 +80,11 @@ Rules that override everything else:
   verified.
 - "empty" means there was nothing to measure: no rows in the table, no
   non-null values in the column, no rows in the table a relationship points
-  at, or a materialized view that has never been refreshed. It is not a
-  finding. Never list empty claims one by one. State the count and the
-  reason once.
+  at, or a materialized view that has never been refreshed, which cannot be
+  read. It is not a finding. Never list empty claims one by one. State the
+  count and the reason once.
+- Never say that a materialized view never refreshed has no rows or returns
+  nothing.
 - Say when something is a view, and how many partitions a partitioned
   table has.
 - Be short. An agent reads this on every task; every sentence costs tokens.

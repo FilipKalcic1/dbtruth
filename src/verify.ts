@@ -25,7 +25,12 @@ export async function verify(db: Db, cfg: Config, extract: Extract, claims: Clai
   const out: Measurement[] = [];
   const byConfidence = [...claims.relationships].sort((a, b) => b.confidence - a.confidence);
   for (const r of byConfidence) out.push(await measureRelationship(db, cfg, extract, relationshipId(r), r));
-  for (const s of claims.suspicions) out.push(await measureSuspicion(db, cfg, extract, suspicionId(s), s));
+  // A suspicion is measured over the first table it names. One that names more says which beside its numbers, so that no
+  // reader has to tell it from the order of the names.
+  for (const s of claims.suspicions) {
+    const m = await measureSuspicion(db, cfg, extract, suspicionId(s), s);
+    out.push(s.tables.length > 1 && Object.keys(m.numbers).length > 0 ? { ...m, over: s.tables[0]! } : m);
+  }
   // The joins come first, in the order measured, so out[i] is the measurement of byConfidence[i].
   let dense: IntegerKey[] | undefined;
   for (const [i, r] of byConfidence.entries()) {
@@ -191,7 +196,10 @@ export function deadTableQuery(table: Table, cfg: Pick<Config, "sampleRows">): {
   return { query: `SELECT ${count} AS count, ${age ?? "NULL::float8"} AS age_days FROM ${qualified(table)}`, exact };
 }
 
-/** count (exact when the table is small) and the age in days of the newest timestamp. */
+/**
+ * count (exact when the table is small) and the age in days of the newest timestamp; for a materialized view never
+ * refreshed, which raises an error when read, populated 0 from the schema and nothing counted.
+ */
 async function measureDeadTable(db: Db, cfg: Config, extract: Extract, claimId: string, s: Suspicion): Promise<Measurement> {
   const kind = s.kind;
   const table = findTable(extract.tables, s.tables[0]);
@@ -201,7 +209,7 @@ async function measureDeadTable(db: Db, cfg: Config, extract: Extract, claimId: 
       claimId,
       kind,
       query: `-- from the schema: pg_class.relispopulated is false for ${table.name}, the materialized view has never been refreshed`,
-      numbers: { count: 0, exact: 1, populated: 0 },
+      numbers: { populated: 0 },
     };
   }
   const { query, exact, fromSchema } = deadTableQuery(table, cfg);

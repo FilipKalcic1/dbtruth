@@ -7,7 +7,7 @@ import type { Config } from "./config.js";
 import type { Claims, Extract, Measurement, Verdict, Verified } from "./schemas.js";
 
 export function decide(m: Measurement, cfg: Config): Verdict {
-  const measurement = { query: m.query, numbers: m.numbers };
+  const measurement = { query: m.query, numbers: m.numbers, ...(m.over ? { over: m.over } : {}) };
   const n = m.numbers;
   const verdict = (status: Verdict["status"], skipped?: string): Verdict => ({ status, measurement, ...(skipped ? { skipped } : {}) });
 
@@ -22,6 +22,8 @@ export function decide(m: Measurement, cfg: Config): Verdict {
       return verdict("rejected");
     }
     case "dead_table": {
+      // A materialized view never refreshed cannot be read, so nothing is counted: the schema alone proves it dead.
+      if (n.populated === 0) return verdict("confirmed");
       // Either number alone can prove death; with neither there is nothing to decide on.
       if (n.count === undefined && n.ageDays === undefined) return verdict("unverifiable");
       const dead = n.count === 0 || (n.ageDays !== undefined && n.ageDays > cfg.staleAfterDays);
@@ -75,6 +77,7 @@ export function assemble(extract: Extract, claims: Claims, measurements: Measure
       name: t.name,
       kind: t.kind,
       ...(t.partitions ? { partitions: t.partitions } : {}),
+      ...(t.populated !== undefined ? { populated: t.populated } : {}),
       rowEstimate: t.rowEstimate,
       ...(t.estimateSource ? { estimateSource: t.estimateSource } : {}),
       primaryKey: t.primaryKey,

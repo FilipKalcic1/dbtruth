@@ -501,9 +501,11 @@ Every relationship the model proposes is measured: the share of rows in the
 from-column that find a match in the to-column. At or above 95% it is stated
 as fact with its hit rate. Between 50% and 95% it is **broken**, and the
 output leads with it and the numbers. Below 50% it is dropped. The same goes
-for suspected dead tables (count, newest timestamp), duplicate tables (row
-overlap), inconsistent values (case and whitespace collisions) and missing
-keys. Every verdict carries the query and the numbers so you can rerun it.
+for suspected dead tables (count, newest timestamp, or whether a materialized
+view was ever refreshed), duplicate tables (the share of one table's sampled
+rows also in the other; the verdict names that table in `over`), inconsistent
+values (case and whitespace collisions) and missing keys. Every verdict
+carries the query and the numbers so you can rerun it.
 When a column points at different tables depending on another column that is
 categorical, each value of that other column is a claim of its own, measured
 on the rows that hold it, with its own verdict; the value is sent as a

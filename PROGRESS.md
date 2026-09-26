@@ -5082,3 +5082,250 @@ of each lost point, in the format of section 4.7 of the plan.
 - All 99 file checks in `acceptance/checks.json` pass.
 - `npm run verify` exits 0: 312 tests, 310 pass, the 2 live tests skipped,
   0 fail; the package smoke test passes.
+### Iteration 4: what the three runs after iteration 3 got wrong
+- Scope, the lead's: after iteration 3 (committed as `48acbe2`) the lead ran
+  three live runs, r2a, r2b and r2c, and audited them. Two statements were
+  false, both in r2c's README, and they are this iteration. F1: "87.5% of
+  products_legacy's sampled rows (70/80... actually measured as matched 70
+  of total 80 on products) also appear in products_legacy", the share of
+  `products`' rows given as `products_legacy`'s. F2: "order_totals is dead:
+  ... reading it returns nothing", where reading it raises an error. The
+  rest of the re-audit is recorded as known limits in NOTES. No paid run
+  here; the lead runs the live one.
+- F1, the design: the table is named in the data, beside the numbers, not
+  left to the order of the suspicion's `tables`. `verify` gives a
+  measurement `over`, the first table the suspicion names, when it names
+  more than one and a measurement was taken; `decide` copies it into the
+  verdict's `measurement`; `SnapshotSchema` keeps it, optional, so a
+  snapshot without it parses, and `check` reads only a verdict's status and
+  hit rate; `tableFile`'s "(measured over <table>)" reads it, the one
+  source; prompt B is told that such numbers are over the table named in
+  "over" and to give the overlap as a share of that table's rows, by name.
+  Every kind gets it, not `duplicate_entity` alone: r2b's `missing_key` over
+  `order_totals` and `shipped_orders` was looked up on `order_totals` only.
+- F2, the design: `measureDeadTable` gives a materialized view never
+  refreshed `{ populated: 0 }`, no count; `decide` confirms `populated` 0 as
+  dead in its own right; `TableFacts` carries `populated`, so its file says
+  "never refreshed (reading it raises an error)" where it said "no rows",
+  which came from the row estimate of 0 `extract` gives it; prompt B is told
+  what `populated` false and 0 mean, and never to say such a view has no
+  rows or returns nothing.
+- Tests first. With iteration 3's code and prompts: in `verdict.test.ts`,
+  "dead_table: a materialized view never refreshed is dead on the schema's
+  word alone, ..." failed with "populated 0 proves it dead: ..." (actual
+  `unverifiable`), and "a verdict names the table its numbers were measured
+  over ..." with "the writer is told by name whose rows the overlap is a
+  share of"; in `verify.test.ts`, "a dead materialized view that was never
+  refreshed is not counted: ..." with "no count of 0 and no exact: no row
+  was counted" (actual `{ count: 0, exact: 1, populated: 0 }`), and "a
+  suspicion measured over one of the tables it names says which, ..." with
+  "the overlap is a share of products' rows, and the measurement says so by
+  name"; in `write.test.ts`, "a materialized view never refreshed says that
+  reading it raises an error, ..." with "its size is what the schema says,
+  ..." (actual `materialized view, no rows`), the prompt test with
+  "write.md no longer says that a suspicion over more than one table is
+  measured over the table named in over: ...", and "prompt B says that a
+  materialized view never refreshed raises an error when read, ..." with
+  "write.md names populated among the per-relation facts"; in
+  `snapshot.test.ts`, "the table a verdict's numbers were measured over
+  survives serialize and parse, ..." with "the snapshot keeps whose rows
+  the overlap is a share of"; in `integration.test.ts`, "the whole loop on
+  the fixture, ..." with "what the catalog says, and no count: reading it
+  raises an error". The new test in `remeasure.test.ts`, a snapshot with the
+  old numbers and no `over` checked "12 unchanged", passed before too: it
+  guards compatibility and changes no behavior.
+- Changed tests, each named in NOTES: the duplicate test of `write.test.ts`
+  gives its verdict `over: "products"`, since the file now reads it there,
+  with its assertions unchanged; the prompt test's two sentences on a
+  `duplicate_entity` are replaced by three; `integration.test.ts` asserts
+  `order_totals`' numbers whole and its file's line as it now reads.
+- Sabotage: sixteen breaks in seventeen runs, since the `SnapshotSchema`
+  break ran against the unit tests and again against `remeasure.test.ts`.
+  Each file was copied into `sabotage2-over-populated` in the scratchpad, a
+  new directory, compared byte for byte before the break and after its
+  restore, and the hash of `git diff` was the same before and after. The
+  output of the first two scrolled off, so they were run again with the
+  copies in a second new directory, `sabotage2-over-first-two`. Each
+  failed:
+  - F1 in `verify`: no `over`, "a suspicion measured over one of the tables
+    it names ..." with "the overlap is a share of products' rows, and the
+    measurement says so by name"; `over` on an unmeasured suspicion too, the
+    same test with "nothing was measured, so over no table"; `over` on a
+    suspicion over one table too, the same test with "a suspicion that
+    names one table needs no name beside its numbers".
+  - F1 in `decide`, `over` not copied: "a verdict names the table ..." with
+    "the writer is told by name whose rows the overlap is a share of".
+  - F1 in `SnapshotSchema`, `over` dropped on parse: "the table a verdict's
+    numbers were measured over survives ..." with "the snapshot keeps whose
+    rows the overlap is a share of"; run against `remeasure.test.ts`, "an
+    unchanged database passes ..." and "check --json prints the report
+    alone ..." failed their deep equality.
+  - F1 in `tableFile`, `over` ignored: "a problem over two tables names the
+    one ..." with "products_legacy's file says the numbers count products'
+    rows, not its own".
+  - F2 in `verify`, the old count back: "a dead materialized view that was
+    never refreshed is not counted: ..." with "no count of 0 and no exact:
+    no row was counted".
+  - F2 in `decide`, no rule for `populated` 0: "dead_table: a materialized
+    view never refreshed is dead ..." with "populated 0 proves it dead:
+    ...", and the verify test's status assertion.
+  - F2 in `tableFile`, "no rows" back: "a materialized view never refreshed
+    says that reading it raises an error, ..." with "its size is what the
+    schema says, and no count of rows that were never read".
+  - F2 in `assemble`, `populated` not copied: "the whole loop on the
+    fixture, ..." with "and that the materialized view was never
+    refreshed".
+  - Prompt B, six edits (the `over` sentence, `total`'s words, the overlap
+    rule, what `populated` means, "Never say it has no rows", `populated`
+    among the facts): each failed a prompt test with the message naming
+    that rule.
+- Checked by hand: the canned fixture run renders `order_totals.md` as
+  "materialized view, never refreshed (reading it raises an error), primary
+  key: none" and "**dead_table**: populated 0.", both product files end
+  their duplicate line "(measured over products)", and the snapshot's
+  duplicate verdict holds `"over": "products"`. r2c's own snapshot, copied
+  into a new scratch directory with no `.env`, checks "13 unchanged"
+  against the fixture with this code.
+- `npm run acceptance`: every task with checks 100/100, T6.2 and T7.1 0/100
+  with no checks, overall 90, as before; no check fails, and all 99 file
+  checks pass against the final text.
+- `npm run verify` exits 0: 320 tests (eight new), 318 pass, the 2 live
+  tests skipped, 0 fail; the package smoke test passes.
+### Iteration 5: four reviews of iteration 4
+- Each finding was checked against the code, the plan, the sabotage script
+  and, where it claimed a behavior, the tests. No sabotage in this
+  iteration, at the lead's instruction.
+- Fixed:
+  - `over` was left off a suspicion skipped with numbers (correctness 1,
+    design 2, plan 6, quality 4): a duplicate whose first table's sample
+    held no rows keeps `{ total: 0, matched: 0, sharedColumns }`, and an
+    `inconsistent_values` that is not categorical keeps its counts, so
+    prompt B was sent numbers over two tables with no name beside them.
+    `verify` now sets `over` when the suspicion names more than one table
+    and there are numbers, which is what its comment already said; the
+    type's comment and NOTES follow.
+  - Prompt B (design 1, plan 2 and 3, quality 2): the sentence on
+    `populated` came before the facts that carry it, and its "Never" sat in
+    the description, not the rules. The sentence now follows the
+    per-relation facts and says that such a view's row estimate of 0 is not
+    a count, since prompt B is still sent that 0; the ban is a rule of its
+    own; the rule on "empty", which the audit named as a likely source of
+    "returns nothing", says such a view cannot be read; "the table in
+    "over"" reads "the table named in "over"", as elsewhere.
+  - The table file's one source was not guarded (correctness 3): the
+    duplicate test also gives a verdict whose `over` is the other table and
+    asserts that the file names that one. Iteration 3's `s.tables[0]` would
+    print `products` there; not run, since this iteration breaks nothing.
+  - CHANGELOG (plan 4, quality 1, design 3): the round-1 line gave the
+    overlap as a share of the first table's rows, and the new line said it
+    again by name. The `over` line is folded into the round-1 line, by
+    name, and the F2 line says that `--json` gives every materialized
+    view's `populated` in `tables`.
+  - README "How it works" (plan 4, quality 3, design 4): the overlap is "the
+    share of one table's sampled rows also in the other; the verdict names
+    that table in `over`", and a dead table is judged by "count, newest
+    timestamp, or whether a materialized view was ever refreshed".
+  - NOTES: the runs are named r2a, r2b and r2c (plan 5); a line cut short
+    mid-paragraph is rewrapped (quality 6); the prompt text, the tests and
+    the three-table case below are recorded.
+  - The write test's verdict is one literal, from a function of its `over`
+    (quality 5), since the guard above needs a second one.
+  - Iteration 4 said "seventeen breaks" and listed sixteen (plan 1): the
+    `SnapshotSchema` break ran twice, against the unit tests and against
+    `remeasure.test.ts`, as `sabotage2-over-populated.mjs` shows. It now
+    says sixteen breaks in seventeen runs.
+- Rejected:
+  - Correctness 2, a `duplicate_entity` that names three tables: it is
+    measured over its first two, as before this round, and prompt A is told
+    that a duplicate is two tables. Skipping it changes a verdict outside
+    the lead's scope, and naming the second table by position in prompt B
+    brings back the wording F1 removed. Recorded under Not done in NOTES.
+- Tests first. With iteration 4's code and prompts, "a suspicion that names
+  more than one table says which one its numbers are over, even from a
+  sample that held no rows, ..." failed with "an empty sample still has
+  numbers, total 0 of drafts' rows, and they say whose" (actual
+  `undefined`); the prompt tests failed with "write.md no longer says that
+  a duplicate_entity's total counts the rows of the table named in over:
+  ..." and "write.md says what populated false and populated 0 mean, and
+  what the row estimate of such a view is, once it has named populated
+  among the facts". The new assertion in the duplicate test passed before,
+  since it guards what iteration 4 already did.
+- `npm run acceptance`: every task with checks 100/100, T6.2 and T7.1 0/100
+  with no checks, overall 90, as before; no check fails.
+- `npm run verify` exits 0: 320 tests, 318 pass, the 2 live tests skipped,
+  0 fail; the package smoke test passes.
+### Iteration 6: the sabotage check of iterations 4 and 5
+- Scope, the lead's: no change to the design or to the prompts' wording;
+  break each part of F1 and F2 in place, and add a test only where a break
+  survives.
+- `sabotage2-final.mjs` copied the five changed files into
+  `sabotage2-final`, a new directory in the scratchpad, applied each break,
+  ran the tests named below, put the file back from its copy and compared
+  it byte for byte, and `cmp` compared all five at the end; the hash of
+  `git diff` was the same before and after. One run's output overflowed
+  the buffer of `spawnSync` and three messages were missed by its TAP
+  parser, so those breaks and one probe ran again from copies in a second
+  new directory, `sabotage2-final-rerun`, with the raw TAP kept. Before its
+  dry-run guard worked, the script wrote its first break into
+  `src/verify.ts` and stopped before any test ran; the line was put back by
+  hand, and the hash of `git diff` matched the one before.
+- Each break failed at least one test (the unit files `verdict`, `verify`,
+  `write` and `snapshot`, with `integration` and `remeasure` for every code
+  break but three of `verify`'s):
+  - F1 in `verify`: no `over`, and `over` naming the second table, both "a
+    suspicion that names more than one table says which one ..." with "the
+    overlap is a share of products' rows, and the measurement says so by
+    name", and "the whole loop on the fixture, ..." with "the writer is
+    told by name whose rows the overlap is a share of"; `over` on a
+    suspicion over one table, "a suspicion that names one table needs no
+    name beside its numbers"; on one with no numbers, "nothing was measured,
+    so over no table"; iteration 4's `m.skipped === undefined` back, "an
+    empty sample still has numbers, total 0 of drafts' rows, and they say
+    whose".
+  - F1 in `decide`, `over` not copied: "a verdict names the table ..." and
+    the whole loop, both with "the writer is told by name whose rows the
+    overlap is a share of".
+  - F1 in `SnapshotSchema`, `over` dropped on parse: "the table a verdict's
+    numbers were measured over survives ..." with "the snapshot keeps whose
+    rows the overlap is a share of"; "an unchanged database passes ..." and
+    "check --json prints the report alone ..." failed their deep equality.
+  - F1 in `tableFile`: no table named, "a problem over two tables names the
+    one ..." with "products_legacy's file says the numbers count products'
+    rows, not its own"; the table taken from the order of the names again,
+    the same test with "the table comes from the verdict, as prompt B is
+    sent it, and not from the order of the suspicion's names".
+  - F2 in `verify`: the count back beside `populated`, and a count in its
+    place, both "a dead materialized view that was never refreshed is not
+    counted: ..." with "no count of 0 and no exact: no row was counted",
+    and the whole loop with "what the catalog says, and no count: reading
+    it raises an error".
+  - F2 in `decide`, `populated` ignored: "dead_table: a materialized view
+    never refreshed is dead ..." with "populated 0 proves it dead: ...",
+    the verify test's status assertion, the whole loop with "an
+    unpopulated materialized view is dead, from the catalog", and "claims
+    the budget leaves unmeasured never fail" (10 claims not measured where
+    it expects 11, since the view's verdict was unverifiable both times).
+  - F2 in `assemble`, `populated` not copied: the whole loop with "and that
+    the materialized view was never refreshed".
+  - F2 in `tableFile`, "no rows" back: "a materialized view never refreshed
+    says that reading it raises an error, ..." with "its size is what the
+    schema says, and no count of rows that were never read", and the whole
+    loop with "not "no rows": a read raises an error".
+  - Prompt B, seven deletions (the `over` sentence, the `duplicate_entity`
+    numbers, the overlap rule, `populated` among the facts, what
+    `populated` false and 0 mean, "which cannot be read" in the rule on
+    "empty", the rule never to say such a view has no rows): each failed a
+    prompt test with the message naming that sentence.
+- Survived, a probe outside the lines this round changed: `fitForWriter`
+  rebuilding a verdict's measurement as `{ query: "", numbers }` when it
+  leaves the queries out drops `over`, so prompt B over its input limit
+  would get the numbers with no name beside them; `write.test.ts` and the
+  whole loop stayed green. New test in `write.test.ts`, "prompt B sent the
+  verdicts without their queries is still told the table a verdict's
+  numbers were measured over": it passes on this code and failed under that
+  probe with "only the query goes: the overlap still names whose rows it is
+  a share of", from a copy in a third new directory,
+  `sabotage2-final-probe`, put back and compared the same way. NOTES lists
+  it with the round's tests.
+- `npm run verify` exits 0: 321 tests (one new), 319 pass, the 2 live tests
+  skipped, 0 fail; the package smoke test passes.

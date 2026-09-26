@@ -78,16 +78,25 @@ export function tableFile(v: Verified, t: TableFacts): string {
     const subject = [...s.tables.filter((name) => !mine(name)), ...(s.column ? [s.column] : [])].join(", ");
     const head = `${s.kind}${subject ? ` ${subject}` : ""}`;
     if (verdict.status !== "confirmed") return [`- ${head} (inferred${verdict.skipped ? `, not measured: ${verdict.skipped}` : ""}): ${s.detail}`];
-    // A verdict confirms the numbers, measured over the first table the suspicion names, and not the detail's words.
+    // A verdict confirms the numbers, and not the detail's words. Of a suspicion that names more than one table, it names
+    // the table they were measured over.
     const numbers = Object.entries(verdict.measurement.numbers).map(([k, x]) => `${k} ${x}`).join(", ");
-    const over = s.tables.length > 1 ? ` (measured over ${s.tables[0]})` : "";
+    const over = verdict.measurement.over ? ` (measured over ${verdict.measurement.over})` : "";
     const hint = s.kind === "inconsistent_values" && s.column ? ` Compare with lower(btrim(${s.column})).` : "";
     return [`- **${head}**: ${numbers}${over}.${hint} ${s.detail} (inferred)`];
   });
 
   const values = Object.entries(t.categorical).map(([column, list]) => `- ${column}: ${list.map((x) => JSON.stringify(x)).join(", ")}`);
   const sampled = t.estimateSource === "pilot" ? " (estimated from a sample)" : "";
-  const size = t.rowEstimate < 0 ? "size unknown" : t.rowEstimate === 0 ? "no rows" : `~${Math.round(t.rowEstimate)} rows${sampled}`;
+  // A materialized view never refreshed has a size of 0 that nothing counted: reading it raises an error.
+  const size =
+    t.populated === false
+      ? "never refreshed (reading it raises an error)"
+      : t.rowEstimate < 0
+        ? "size unknown"
+        : t.rowEstimate === 0
+          ? "no rows"
+          : `~${Math.round(t.rowEstimate)} rows${sampled}`;
   const facts = `${t.kind}${t.partitions ? `, ${t.partitions.count} partitions` : ""}, ${size}, primary key: ${t.primaryKey?.join(", ") ?? "none"}`;
   const section = (title: string, lines: string[]) => (lines.length ? ["", `## ${title}`, "", ...lines] : []);
   return [

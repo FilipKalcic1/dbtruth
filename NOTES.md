@@ -2311,6 +2311,128 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     matching `customers.id` on 160 of its 200 rows, has no claim and no join
     line; and `inconsistent_values` counts case and whitespace collisions
     together, so its numbers cannot say which one caused them.
+- **What the three live runs after those fixes still got wrong (the lead's
+  scope).** Three more runs on the fixture, r2a, r2b and r2c, were audited
+  the same way. Two statements were false, both in r2c's README, and the
+  lead chose to fix those two; the rest are known limits, listed at the end.
+  - **A suspicion's numbers name the table they were measured over.** The
+    README said "87.5% of products_legacy's sampled rows (70/80... actually
+    measured as matched 70 of total 80 on products) also appear in
+    products_legacy". The 87.5% is the share of `products`' 80 rows found in
+    `products_legacy`; all 70 rows of `products_legacy` are in `products`.
+    Prompt B had been told that the numbers are over "the first of its two
+    tables", and still read the order of the names wrongly, so the table is
+    now named in the data, beside the numbers. `verify` gives a measurement
+    `over`, the first table the suspicion names, which is the table every
+    kind is measured over, when the suspicion names more than one and the
+    measurement has numbers, as one left empty by a sample that held no
+    rows still does; `decide` copies it into the verdict's `measurement`.
+    Prompt B is told that such numbers are over the table named in "over",
+    what a `duplicate_entity`'s `total` and `matched` count in those words,
+    and to give the overlap as a share of that table's rows, by its name.
+    `tableFile`'s "(measured over <table>)" reads the same field, so the
+    table files and prompt B have one source for it. Every kind gets it,
+    not `duplicate_entity` alone: r2b's `missing_key` over `order_totals`
+    and `shipped_orders` was looked up on `order_totals` only. A suspicion
+    over one table, one with no numbers, and a relationship, whose numbers
+    are named by its from and to, carry none.
+  - **The snapshot keeps it, and one without it checks as before.** The
+    verdict's `measurement` in `SnapshotSchema` takes an optional `over`, so
+    the snapshot keeps it, and `check --json` and the MCP server's `check`
+    give it in each verdict measured again. A table's name is what `Verified`
+    already carries (R3). A snapshot written before it existed has none and
+    parses as it did; `check` reads only a verdict's status and hit rate,
+    so its claims are classed as before. r2c's own snapshot, which has
+    neither this change nor the next, checks "13 unchanged" against the
+    fixture. No snapshot has been published, since 0.4.0 is the first
+    release with one, and the format stays 1.
+  - **A materialized view never refreshed is not counted.** The same README
+    said that `order_totals` is dead because "reading it returns nothing";
+    reading it raises `materialized view "order_totals" has not been
+    populated`, with the hint to refresh it. `measureDeadTable` gave such a
+    view `{ count: 0, exact: 1, populated: 0 }` without running anything, a
+    count of rows no one read, and `decide` found it dead by that count. Its
+    numbers are now `{ populated: 0 }`, what the schema says, and `decide`
+    confirms a dead table on `populated` 0 in its own right, before it looks
+    for a count or an age. Prompt B is told, after the per-relation facts
+    that carry `populated`, that a materialized view with `populated`
+    false, or `populated` 0 in a `dead_table` suspicion's numbers, has
+    never been refreshed, that reading it, even in a join, raises an error
+    until it is, and that its row estimate of 0 is not a count. A rule says
+    never to say that such a view has no rows or returns nothing, and the
+    rule on "empty", which listed such a view beside a table with no rows
+    and which the audit named as a likely source of "returns nothing", now
+    says that it cannot be read. The entry above left a `dead_table`'s
+    numbers unexplained, since nothing false had come from them; this is
+    what did.
+  - **Its table file no longer says "no rows".** `tables/order_totals.md`
+    read "materialized view, no rows", from the row estimate of 0 that
+    `extract` gives such a view without reading it. `TableFacts` now carries
+    `populated`, which `assemble` copies from the extract, and the line reads
+    "materialized view, never refreshed (reading it raises an error)". The
+    problem line reads "**dead_table**: populated 0." before the analysis's
+    detail. A materialized view that was refreshed and holds nothing still
+    has "no rows". Prompt B receives `populated` with the other per-relation
+    facts.
+  - **Every other reader of these numbers is unaffected.** `check` classes a
+    claim by its status and hit rate, so a snapshot holding the old numbers,
+    or no `over`, checks unchanged against the new ones; the pull request
+    comment in the README shows a join only; `measure_join` measures joins,
+    which carry no `over`; no check in `acceptance/checks.json` pins these
+    numbers or the prompt sentences that changed. The README's "How it
+    works" now says that a dead table's measurement includes whether a
+    materialized view was ever refreshed, and that a duplicate's overlap is
+    a share of one table's sampled rows, the table the verdict names in
+    `over`. Its pasted fixture output predates both rounds and is
+    regenerated from the lead's next run.
+  - **Tests.** New: in `verdict.test.ts`, a dead table on `populated` 0
+    alone, and a verdict that names the table its measurement names; in
+    `verify.test.ts`, a never-refreshed view's numbers without a count, and
+    `over` on a suspicion over two tables that has numbers, one from a
+    sample that held no rows among them, and on no other; in
+    `write.test.ts`, the file of a never-refreshed view, `over` still sent
+    to prompt B when the verdicts' queries are left out, and prompt B's
+    sentences on `populated`, on "empty" and the rule that such a view is
+    never said to have no rows; in `snapshot.test.ts`, `over` through
+    serialize and parse, and a verdict without it; in `remeasure.test.ts`, a
+    snapshot with the old numbers and no `over` checked unchanged against
+    the fixture, a guard that passed before the change too. Changed, since
+    this entry changes that behavior (section 4.4 of the plan): the
+    duplicate test of `write.test.ts` gives its verdict `over`, its
+    assertions as they were, and gains one that a verdict naming the other
+    table puts that one in the file, so the file cannot take the table
+    from the order of the names; the prompt test's two sentences on a
+    `duplicate_entity` are replaced by the three that say it now;
+    `integration.test.ts` asserts
+    `order_totals`' numbers whole, `{ populated: 0 }`, where it asserted
+    `populated` alone, and its file's line "never refreshed (reading it
+    raises an error)" where it asserted "no rows", and it gains two
+    assertions on what prompt B is sent.
+  - **Not done:** `extract` still gives a never-refreshed materialized view
+    a row estimate of 0, which prompt A and `describe_table` show beside
+    `populated` false and the reason it was not sampled; changing it reaches
+    prompt A and the MCP server, outside this scope, and prompt B is told
+    that the 0 is not a count. A `duplicate_entity` that names three tables
+    or more is measured over its first two, as before, and prompt B's "the
+    other table" takes it to name two, as prompt A is told a duplicate
+    does. Measuring the overlap both ways, or giving prompt B a sentence to
+    copy, both of which the audit offered: naming the table is the smaller
+    change, and whether the model now names the right one is for the lead's
+    live run to show.
+  - **Known limits (the lead's decision, not fixed):** in some runs prompt B
+    left out "(inferred)", or that the analysis found no declared foreign
+    key, most often in ENTITIES.md (the broken `orders.customer_id ->
+    customers.id` in r2a's README and in r2b's and r2c's ENTITIES.md, and
+    the `audit_log` branches without the reason for their label); r2b's
+    README put the empty `cars.customer_id -> customers.id` under
+    "Confirmed suspicions"; the same README wrote "order_totals and
+    shipped_orders (a view and a materialized view)", kinds in the reverse
+    order of the names; in r2a prompt A called the empty `cars` "all
+    columns unmeasured", the word for a relation that could not be sampled,
+    and its file prints that note as written; and the relations string "9
+    tables, 1 view, 1 materialized view, 1 partitioned" counts the
+    partitioned table among the nine, so r2a's README, which wrote "1
+    partitioned table", reads as twelve relations where there are eleven.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

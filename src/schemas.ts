@@ -202,6 +202,8 @@ export type Measurement = {
   kind: "relationship" | Suspicion["kind"];
   query: string;
   numbers: Record<string, number>;
+  /** the table the numbers were measured over, when there are numbers and the claim names more than one table */
+  over?: string;
   /** set when the measurement could not be taken: timeout, budget, error, or no way to measure */
   skipped?: string;
   /** a relation the claim names held no rows to measure. Only ever set alongside `skipped`. */
@@ -210,13 +212,14 @@ export type Measurement = {
 
 const VerdictSchema = z.object({
   status: z.enum(["confirmed", "broken", "rejected", "unverifiable", "empty"]),
-  measurement: z.object({ query: z.string(), numbers: z.record(z.string(), z.number()) }),
+  // A snapshot written before "over" existed has none, and is checked alike: check reads only status and hit rate.
+  measurement: z.object({ query: z.string(), numbers: z.record(z.string(), z.number()), over: z.string().optional() }),
   skipped: z.string().optional(),
 });
 export type Verdict = z.infer<typeof VerdictSchema>;
 
 /** Per-relation facts the writer needs that claims do not carry: kind, key, size, categorical values. */
-export type TableFacts = Pick<Table, "name" | "kind" | "partitions" | "rowEstimate" | "estimateSource" | "primaryKey"> & {
+export type TableFacts = Pick<Table, "name" | "kind" | "partitions" | "populated" | "rowEstimate" | "estimateSource" | "primaryKey"> & {
   categorical: Record<string, unknown[]>;
 };
 

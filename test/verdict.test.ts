@@ -64,6 +64,16 @@ test("dead_table: empty or stale is confirmed, otherwise rejected", () => {
   assert.equal(decide(m("dead_table", { exact: 0 }), config).status, "unverifiable", "neither count nor age: nothing to decide on");
 });
 
+test("dead_table: a materialized view never refreshed is dead on the schema's word alone, with no count", () => {
+  assert.equal(decide(m("dead_table", { populated: 0 }), config).status, "confirmed", "populated 0 proves it dead: reading it raises an error, so there is no count to decide on");
+});
+
+test("a verdict names the table its numbers were measured over when its measurement does, and none otherwise", () => {
+  const duplicate = decide({ ...m("duplicate_entity", { total: 80, matched: 70, sharedColumns: 5, overlap: 0.875 }), over: "products" }, config);
+  assert.equal(duplicate.measurement.over, "products", "the writer is told by name whose rows the overlap is a share of");
+  assert.ok(!("over" in decide(m("dead_table", { count: 0 }), config).measurement), "a measurement that names no table gives the verdict none");
+});
+
 test("inconsistent_values: any canonical-form collision confirms", () => {
   assert.equal(decide(m("inconsistent_values", { distinctValues: 5, canonicalForms: 3, collisions: 2 }), config).status, "confirmed");
   assert.equal(decide(m("inconsistent_values", { distinctValues: 3, canonicalForms: 3, collisions: 0 }), config).status, "rejected");

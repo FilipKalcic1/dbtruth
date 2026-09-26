@@ -89,6 +89,17 @@ test("a materialized view that was never refreshed cannot be read from either si
   }
 });
 
+test("a dead materialized view that was never refreshed is not counted: its numbers are what the schema says", async () => {
+  const db = fakeDb();
+  const never = table("order_totals", 0, { kind: "materialized view", populated: false });
+  const dead = claims({ suspicions: [{ kind: "dead_table", tables: ["order_totals"], detail: "never refreshed" }] });
+  const [m] = await verify(db, config, extractOf(never), dead, noKeys);
+  assert.deepEqual(db.queries, [], "reading it raises an error, so nothing runs");
+  assert.deepEqual(m?.numbers, { populated: 0 }, "no count of 0 and no exact: no row was counted");
+  assert.match(m?.query ?? "", /relispopulated is false for order_totals/);
+  assert.equal(decide(m!, config).status, "confirmed");
+});
+
 test("inconsistent_values and duplicate_entity over an empty relation never query", async () => {
   const db = fakeDb();
   const suspicions: Claims["suspicions"] = [
@@ -144,6 +155,25 @@ test("duplicate rows are counted as distinct tuples on the shared columns, inter
   const [asText] = await verify(fakeDb(mismatch, answer({ total: "80", matched: "70" })), config, pair, claims({ suspicions: [suspicion] }), noKeys);
   assert.match(asText?.query ?? "", /SELECT DISTINCT a\."id"::text, a\."customer_id"::text, a\."make"::text FROM/, "a datatype mismatch casts every shared column, on both sides");
   assert.match(asText?.query ?? "", /INTERSECT SELECT b\."id"::text, b\."customer_id"::text, b\."make"::text FROM/);
+});
+
+test("a suspicion that names more than one table says which one its numbers are over, even from a sample that held no rows, and one over its only table, or with no numbers, names none", async () => {
+  const suspicions: Claims["suspicions"] = [
+    { kind: "duplicate_entity", tables: ["products", "products_legacy"], detail: "same rows" },
+    { kind: "missing_key", tables: ["products", "products_legacy"], detail: "no keys" },
+    { kind: "missing_key", tables: ["products"], detail: "no key" },
+    { kind: "other", tables: ["products", "products_legacy"], detail: "cannot be measured" },
+    { kind: "duplicate_entity", tables: ["drafts", "products"], detail: "same rows" },
+  ];
+  // drafts has no row estimate, so it is sampled, and the sample holds no rows.
+  const tables = extractOf(table("products", 80), table("products_legacy", 70), table("drafts", -1));
+  const db = fakeDb(answer({ total: "80", matched: "70" }), answer({ total: "0", matched: "0" }));
+  const [duplicate, keys, key, other, drafts] = await verify(db, config, tables, claims({ suspicions }), noKeys);
+  assert.equal(duplicate?.over, "products", "the overlap is a share of products' rows, and the measurement says so by name");
+  assert.equal(keys?.over, "products", "the key is looked up on the first table alone");
+  assert.equal(key?.over, undefined, "a suspicion that names one table needs no name beside its numbers");
+  assert.equal(other?.over, undefined, "nothing was measured, so over no table");
+  assert.deepEqual([drafts?.skipped, drafts?.over], ["no non-null rows to test", "drafts"], "an empty sample still has numbers, total 0 of drafts' rows, and they say whose");
 });
 
 test("a reference that is null on every sampled row is empty, and says how many rows it looked at", async () => {
