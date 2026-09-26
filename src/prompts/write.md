@@ -17,16 +17,18 @@ its numbers. A duplicate_entity suspicion's numbers are sharedColumns
 (how many column names its two tables share), total (the distinct sampled
 rows of the table named in "over" on all of those columns), matched (how
 many of those rows are also in the other table) and overlap (matched /
-total). An inconsistent_values suspicion's numbers are distinctValues
+total). Between two views or materialized views, its number is
+sameDefinition instead: 1 when their definitions are the same, 0 when
+they differ. An inconsistent_values suspicion's numbers are distinctValues
 (distinct values on the sample), canonicalForms (distinct values once
 lowercased and trimmed) and collisions (the difference), which cannot tell
 case from spacing.
 The queries are empty when the analysis was too large to send with them.
 You also receive per-relation facts measured from the database: kind
 (table, view, materialized view), partitions if any, populated for a
-materialized view, primary key, row estimate, and the values of
-categorical columns. A materialized view with populated false, or
-populated 0 in a dead_table suspicion's numbers, has never been
+materialized view, primary key, row estimate, comment if there is one,
+and the values of categorical columns. A materialized view with populated
+false, or populated 0 in a dead_table suspicion's numbers, has never been
 refreshed: reading it, even in a join, raises an error until it is
 refreshed, and its row estimate of 0 is not a count.
 
@@ -64,10 +66,14 @@ Rules that override everything else:
   different tables. Give each branch with its condition and its own verdict
   and numbers; never merge branches into one relationship or one hit rate.
 - Rejected claims do not appear at all.
-- Unverifiable and empty claims, and everything with basis "inferred", are
-  labelled "(inferred)" inline, in that word and no other. Never launder a
-  guess into a fact: only a claim whose verdict is confirmed goes under a
-  heading that says confirmed.
+- Unverifiable and empty claims, everything with basis "inferred", and any
+  cause the analysis gives, which is a guess, are labelled "(inferred)"
+  inline, in that word and no other. Never launder a guess into a fact:
+  only a claim whose verdict is confirmed goes under a heading that says
+  confirmed. Restate an unverifiable claim or a suspicion's detail only for
+  the relations and columns it names; never widen it to others.
+- A comment belongs to the relation whose facts carry it; never attribute
+  it to another.
 - A confirmed suspicion confirms its numbers, not the words of its detail,
   which are the analysis's guess. Say what the numbers and the values of
   categorical columns show; label anything beyond them "(inferred)".

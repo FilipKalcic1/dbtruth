@@ -85,6 +85,11 @@ test("duplicate_entity: overlap at or above config confirms", () => {
   assert.equal(decide(m("duplicate_entity", { overlap: 0.1 }), config).status, "rejected");
 });
 
+test("duplicate_entity: two views with the same definition are confirmed, and with different ones rejected", () => {
+  assert.equal(decide(m("duplicate_entity", { sameDefinition: 1 }), config).status, "confirmed", "the same query holds the same rows, read or not");
+  assert.equal(decide(m("duplicate_entity", { sameDefinition: 0 }), config).status, "rejected", "a different query is another relation, whatever rows the two share");
+});
+
 test("missing_key: from the schema", () => {
   assert.equal(decide(m("missing_key", { hasPrimaryKey: 0 }), config).status, "confirmed");
   assert.equal(decide(m("missing_key", { hasPrimaryKey: 1 }), config).status, "rejected");
@@ -164,4 +169,18 @@ test("assemble carries where each row estimate came from to the writer, and noth
   assert.equal(pilot!.estimateSource, "pilot");
   assert.equal(partitions!.estimateSource, "partitions");
   assert.ok(!("estimateSource" in counted!), "a count, or an unknown size, has none");
+});
+
+test("assemble gives the writer a relation's comment with that relation's facts, and no comment to one without", () => {
+  const claims: Claims = { entities: [], tables: [], relationships: [], suspicions: [], questions: [] };
+  const extract: Extract = {
+    database: "shop",
+    tables: [{ ...relation("vehicles", "table"), comment: "Replaced the old cars table." }, relation("cars", "table")],
+    skipped: [],
+    schemaTokens: 10,
+    unmatchedReveal: [],
+  };
+  const [vehicles, cars] = assemble(extract, claims, [], config).tables;
+  assert.equal(vehicles!.comment, "Replaced the old cars table.", "the comment is on vehicles, so it goes with vehicles' facts");
+  assert.ok(!("comment" in cars!), "cars has none, and its facts carry no comment key");
 });

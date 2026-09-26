@@ -33,6 +33,8 @@ export function decide(m: Measurement, cfg: Config): Verdict {
       if (n.collisions === undefined) return verdict("unverifiable");
       return verdict(n.collisions > 0 ? "confirmed" : "rejected");
     case "duplicate_entity":
+      // Two views are one relation when they are one query, whatever rows either holds and whether it can be read.
+      if (n.sameDefinition !== undefined) return verdict(n.sameDefinition === 1 ? "confirmed" : "rejected");
       if (n.overlap === undefined) return verdict("unverifiable");
       return verdict(n.overlap >= cfg.duplicateOverlap ? "confirmed" : "rejected");
     case "missing_key":
@@ -76,6 +78,7 @@ export function assemble(extract: Extract, claims: Claims, measurements: Measure
     tables: extract.tables.map((t) => ({
       name: t.name,
       kind: t.kind,
+      ...(t.comment ? { comment: t.comment } : {}),
       ...(t.partitions ? { partitions: t.partitions } : {}),
       ...(t.populated !== undefined ? { populated: t.populated } : {}),
       rowEstimate: t.rowEstimate,

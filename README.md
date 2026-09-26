@@ -66,6 +66,11 @@ something an agent must know before writing SQL, `1` means it could not run,
 `0` means nothing found. The database URL can also be passed as `--url`, and
 both settings can come from the environment instead of `.env`.
 
+`context/README.md` and `context/ENTITIES.md` are the model's summary of the
+verdicts, and can misstate what they summarize. What was measured is in the
+numbers of the files in `context/tables/` and in each verdict's numbers and
+query in `context/snapshot.json`: check a surprising statement there.
+
 `doctor` checks, one line each, Node, where the settings came from, the
 database URL, the connection, the Postgres version, the read-only proof, how
 many relations the role can read, and the API key. It spends no tokens: the
@@ -503,8 +508,10 @@ as fact with its hit rate. Between 50% and 95% it is **broken**, and the
 output leads with it and the numbers. Below 50% it is dropped. The same goes
 for suspected dead tables (count, newest timestamp, or whether a materialized
 view was ever refreshed), duplicate tables (the share of one table's sampled
-rows also in the other; the verdict names that table in `over`), inconsistent
-values (case and whitespace collisions) and missing keys. Every verdict
+rows also in the other, the verdict naming that table in `over`; of two
+views or materialized views, whether the catalog gives them the same
+definition), inconsistent values (case and whitespace collisions) and
+missing keys. Every verdict
 carries the query and the numbers so you can rerun it.
 When a column points at different tables depending on another column that is
 categorical, each value of that other column is a claim of its own, measured

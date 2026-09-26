@@ -35,23 +35,24 @@ const mismatch: QueryResult = { ok: false, reason: "error", message: "operator d
 /** No integer key to weigh a join against, for the tests of what comes before the weighing. */
 const noKeys = async (): Promise<IntegerKey[]> => [];
 
-/** A database that answers statements from a script, one each, and refuses any statement beyond it. */
+/** A database that answers statements from a script, one each, inside the budget or outside it, and refuses any statement beyond it. */
 function fakeDb(...replies: QueryResult[]): Db & { queries: string[]; params: unknown[][] } {
   const queries: string[] = [];
   const params: unknown[][] = [];
+  async function query(sql: string, values: unknown[] = []): Promise<QueryResult> {
+    queries.push(sql);
+    params.push(values);
+    const reply = replies.shift();
+    if (!reply) throw new Error("nothing here should be queried");
+    return reply;
+  }
   return {
     database: "fixture",
     readOnlyProven: true,
     queries,
     params,
-    async query(sql, values = []) {
-      queries.push(sql);
-      params.push(values);
-      const reply = replies.shift();
-      if (!reply) throw new Error("nothing here should be queried");
-      return reply;
-    },
-    catalog: async () => ({ ok: true, rows: [] }),
+    query,
+    catalog: query,
     budget: () => ({ budgetMs: 1000, spentMs: 0, remainingMs: 1000, exhausted: false }),
     close: async () => {},
   };
@@ -155,6 +156,50 @@ test("duplicate rows are counted as distinct tuples on the shared columns, inter
   const [asText] = await verify(fakeDb(mismatch, answer({ total: "80", matched: "70" })), config, pair, claims({ suspicions: [suspicion] }), noKeys);
   assert.match(asText?.query ?? "", /SELECT DISTINCT a\."id"::text, a\."customer_id"::text, a\."make"::text FROM/, "a datatype mismatch casts every shared column, on both sides");
   assert.match(asText?.query ?? "", /INTERSECT SELECT b\."id"::text, b\."customer_id"::text, b\."make"::text FROM/);
+});
+
+test("a duplicate between two views is measured by comparing their definitions in the catalog, a materialized view never refreshed among them, with the names bound", async () => {
+  const never = table("rental_by_category", 0, { kind: "materialized view", populated: false });
+  const views = extractOf(never, table("sales_by_film_category", -1, { kind: "view" }), table("sales_by_store", -1, { kind: "view" }));
+  const suspicions: Claims["suspicions"] = [
+    { kind: "duplicate_entity", tables: ["rental_by_category", "sales_by_film_category"], detail: "identical SQL" },
+    { kind: "duplicate_entity", tables: ["rental_by_category", "sales_by_store"], detail: "identical SQL" },
+  ];
+  const db = fakeDb(answer({ same_definition: 1 }), answer({ same_definition: 0 }));
+  const [same, other] = await verify(db, config, views, claims({ suspicions }), noKeys);
+  assert.deepEqual([same?.numbers, other?.numbers], [{ sameDefinition: 1 }, { sameDefinition: 0 }], "the definitions, which the catalog holds even for a materialized view no one can read, and no rows");
+  assert.deepEqual([decide(same!, config).status, decide(other!, config).status], ["confirmed", "rejected"], "the same definition confirms the pair, and a different one rejects it, so a wrong pair never appears");
+  assert.equal(same?.over, "rental_by_category", "the numbers name the first table, as those of every suspicion over two tables do");
+  const statement = "SELECT (pg_get_viewdef($1::regclass, true) = pg_get_viewdef($2::regclass, true))::int AS same_definition";
+  assert.deepEqual(db.queries, [statement, statement], "the statement run holds no name");
+  assert.deepEqual(db.params, [['"public"."rental_by_category"', '"public"."sales_by_film_category"'], ['"public"."rental_by_category"', '"public"."sales_by_store"']], "each name is bound, quoted as an identifier");
+  assert.equal(same?.query, `${statement}\n-- $1 = '"public"."rental_by_category"', $2 = '"public"."sales_by_film_category"'`, "the query kept ends with the note that gives $1 and $2, so that a person can rerun it");
+});
+
+test("two views are compared by their definitions whatever would stop a comparison of rows: no column name in common, or a budget the joins spent", async () => {
+  const staff = table("staff_list", -1, { kind: "view", columns: [{ name: "staff", type: "text", nullable: true, nullRate: 0, distinct: 0, maxLength: 0, visible: true }] });
+  const views = extractOf(table("sales_by_store", -1, { kind: "view" }), staff);
+  const suspicions: Claims["suspicions"] = [{ kind: "duplicate_entity", tables: ["sales_by_store", "staff_list"], detail: "same rows" }];
+
+  const [apart] = await verify(fakeDb(answer({ same_definition: 0 })), config, views, claims({ suspicions }), noKeys);
+  assert.deepEqual(apart?.numbers, { sameDefinition: 0 }, "asked before the shared columns, so a wrong pair is rejected, not left unverifiable for want of one");
+
+  const spent: QueryResult = { ok: false, reason: "budget", message: "time budget exhausted" };
+  const [late] = await verify({ ...fakeDb(answer({ same_definition: 0 })), query: async () => spent }, config, views, claims({ suspicions }), noKeys);
+  assert.deepEqual(late?.numbers, { sameDefinition: 0 }, "read from the catalog outside the budget, as the extract is, since it reads no rows");
+});
+
+test("a duplicate between a table and a view is still measured by its rows, and one beside a materialized view never refreshed is still empty", async () => {
+  const suspicions: Claims["suspicions"] = [
+    { kind: "duplicate_entity", tables: ["orders", "shipped_orders"], detail: "same rows" },
+    { kind: "duplicate_entity", tables: ["orders", "order_totals"], detail: "same rows" },
+  ];
+  const tables = extractOf(table("orders", 500), table("shipped_orders", -1, { kind: "view" }), table("order_totals", 0, { kind: "materialized view", populated: false }));
+  const db = fakeDb(answer({ total: "500", matched: "200" }));
+  const [view, never] = await verify(db, config, tables, claims({ suspicions }), noKeys);
+  assert.deepEqual(view?.numbers, { total: 500, matched: 200, sharedColumns: 3, overlap: 0.4 }, "the table's sampled rows, intersected with the view's");
+  assert.match(db.queries[0] ?? "", /INTERSECT SELECT b\."id", b\."customer_id", b\."make" FROM "public"\."shipped_orders" b/);
+  assert.deepEqual([never?.empty, never?.skipped], [true, "a materialized view that has never been refreshed cannot be read"], "no rows can be read on one side, and a table has no definition to compare");
 });
 
 test("a suspicion that names more than one table says which one its numbers are over, even from a sample that held no rows, and one over its only table, or with no numbers, names none", async () => {

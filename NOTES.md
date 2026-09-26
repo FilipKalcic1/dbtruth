@@ -2433,6 +2433,207 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     tables, 1 view, 1 materialized view, 1 partitioned" counts the
     partitioned table among the nine, so r2a's README, which wrote "1
     partitioned table", reads as twelve relations where there are eleven.
+- **What a run on a real database and three more fixture runs still got
+  wrong (round 3, the lead's scope).** After round 2 the lead ran the
+  fixture three more times, r3a, r3b and r3c, and dbtruth once on Pagila, a
+  real database of 23 relations (15 tables, `payment` among them partitioned
+  55 ways, 7 views and 1 materialized view never refreshed), and audited
+  them the same way. The Pagila run sent 3,842 schema tokens at effort low;
+  prompt A took 41.8s and made 29 claims, `verify` took 0.8s, prompt B
+  27.4s; 50,585 tokens in and 8,370 out in 2 calls; database time 6.4s,
+  model time 69.3s. Its verdicts: 22 relationships, 21 confirmed (3 on weak
+  evidence) and 1 empty; 7 suspicions, 1 confirmed, 5 unverifiable and 1
+  empty; 13 entities, 5 questions, 26 files. Its audit checked 244
+  statements and six findings stood, the fixture runs' three. The maintainer
+  chose one last round that removes the systematic causes, then the release,
+  with what remains recorded as known limits, merged at the end of this
+  entry.
+  - **A duplicate between two views is decided by their definitions.** On
+    Pagila prompt A claimed that `rental_by_category`, a materialized view
+    never refreshed, duplicates `sales_by_store`, while its own detail named
+    `sales_by_film_category`, whose definition is the same as
+    `rental_by_category`'s; `sales_by_store` is another query, one row per
+    store and manager. `nothingToMeasure` found `rental_by_category`
+    unpopulated and left the claim empty, so nothing met the wrong pair:
+    both table files printed it, and prompt B made it the advice to use
+    `sales_by_store` instead. Rows cannot decide such a pair, since one side
+    cannot be read, and two views are the same relation when they are the
+    same query. So `measureDuplicateEntity`, when both relations are views
+    or materialized views, asks the catalog first, before the shared columns
+    and before `nothingToMeasure`: `SELECT (pg_get_viewdef($1::regclass,
+    true) = pg_get_viewdef($2::regclass, true))::int AS same_definition`,
+    which Postgres answers for a materialized view never refreshed, with
+    `true` as `extract` reads the definition prompt A is shown. It runs
+    through `db.catalog`, outside the budget, as the extract's catalog reads
+    do: it reads no rows, and suspicions are measured after every join, so
+    joins that spent the budget would leave the pair unverifiable, printed
+    in both table files and sent to prompt B. The names are those
+    `qualified()` gives the relations found in the extract, bound and never
+    SQL text (R8): as a `regclass` literal a name would be a string in the
+    statement, and with `standard_conforming_strings` off a backslash in it
+    could end the string early. The query kept is the statement and a note
+    that gives `$1` and `$2`, as a branch's note gives its value, so that a
+    person can rerun it (R7). Its number is `sameDefinition`, 1 or 0, and
+    `verify` gives it `over`, the first table, as it does every suspicion
+    over two tables that has numbers. `decide` confirms on 1 and rejects on
+    0 before it looks for an overlap: a wrong pair is rejected, so it is in
+    no table file, and prompt B leaves rejected claims out. On Pagila,
+    read-only in psql, the statement gives 1 for `rental_by_category` and
+    `sales_by_film_category` and 0 for `rental_by_category` and
+    `sales_by_store`. Prompt B is told what `sameDefinition` means where it
+    is told a duplicate's other numbers. A pair with a table in it is
+    measured by its rows, as before, and one beside a materialized view
+    never refreshed is still empty. Two plain views, which were measured by
+    their rows, are now compared by definition too, as the lead chose, and
+    their rows are not read: two queries written differently are two
+    relations even when they always return the same rows, such as a
+    materialized view that caches a view with `SELECT *` from it, or one
+    query with other aliases, another order of joins or an ORDER BY. Review
+    offered to read the rows when the definitions differ and both sides can
+    be read; the lead's scope is definitions, not rows, so it is a known
+    limit below. A snapshot written before holds such a pair as empty, or by
+    its overlap; `check` measures it by definition, so it may report it
+    changed or improved. No snapshot has been published, since 0.4.0 is the
+    first release with one.
+  - **Prompt B is sent each relation's comment.** r3b's README said that
+    the comment on `cars` says it was replaced by `vehicles`; the comment is
+    on `vehicles`, and `cars` has none. Prompt B had never seen a comment:
+    `TableFacts` had none, and it reworded prompt A's detail. `TableFacts`
+    now carries `comment`, which `assemble` copies from the extract only
+    when the relation has one; prompt B is told it among the per-relation
+    facts, and a rule says that a comment belongs to the relation whose
+    facts carry it. R3 holds: a comment is schema text, not a value, and
+    `Verified.tables` is assembled from the extract prompt A was sent, the
+    one `fitToContext` returns, so every comment in it had already gone to
+    the model, and a relation dropped to fit is in neither. It now also
+    appears in `--json`'s `tables`, which prints `Verified`. The snapshot
+    takes nothing from `Verified.tables`, and `check`, the pull request
+    comment and `describe_table` do not read it, so none of them changes.
+    Table files do not print the comment: the lead's scope is what prompt B
+    is sent.
+  - **Two rules for prompt B, one for prompt A.** Pagila's ENTITIES.md said
+    "Only store_id values 1 and 2 are actually used" right after listing
+    `staff.store_id`, which holds 475 values; the unverifiable suspicion
+    behind it named `customer.store_id` and `inventory.store_id` alone. Its
+    README gave "payment is partitioned, which hides FKs from tooling" as
+    fact; the relationship's reason was prompt A's "no declared FK likely
+    due to partitioning", and 49 of the 55 partitions, 73% of the rows,
+    declare no foreign key at all. Both go into the rule on "(inferred)",
+    not new bullets: a cause the analysis gives is a guess and is labelled
+    "(inferred)", and an unverifiable claim or a suspicion's detail is
+    restated only for the relations and columns it names. The lead's words
+    were "a cause or reason"; review found that every relationship and
+    entity prompt B receives carries a reason, and a stated one is a fact:
+    each of Pagila's 18 stated relationships gives "Declared foreign key".
+    Every reason labelled "(inferred)" would set the rule against the one
+    that states a confirmed relationship as fact, so it names the cause
+    alone. Prompt A is told that a duplicate_entity's "tables" are exactly
+    the two relations its detail says duplicate each other, which is where
+    the Pagila pair went wrong; the check of definitions rejects such a pair
+    if it comes again, but cannot supply the pair the detail meant. These
+    are words, and whether the model keeps them is for the lead's live runs
+    to show.
+  - **The README says what the model's files are.** Under what a run
+    writes: `context/README.md` and `context/ENTITIES.md` are the model's
+    summary of the verdicts and can misstate them; what was measured is in
+    the numbers of the files in `context/tables/` and each verdict's numbers
+    and query in `context/snapshot.json`. "How it works" says that two views
+    are compared by definition.
+  - **Tests.** New: in `verify.test.ts`, a duplicate between two views, one
+    a materialized view never refreshed, measured by their definitions, with
+    the names bound and the note, confirmed for the same definition and
+    rejected for another; two views compared by definition whatever would
+    stop a comparison of rows, no column name in common or a budget the
+    joins spent; and a duplicate between a table and a view still measured
+    by its rows, one beside a materialized view never refreshed still empty,
+    a guard that passed before. The fake database there now answers a
+    statement sent outside the budget from its script, as it answers any
+    other, where it used to return no rows. In `verdict.test.ts`,
+    `sameDefinition` 1 and 0, and `assemble` carrying a comment only for the
+    relation that has one; in `write.test.ts`, the prompt sentences on
+    `sameDefinition`, the comment, the two rules, and prompt A's; in
+    `integration.test.ts`, on a copy of `fixture_template` with a view of
+    `order_totals`' own query under a name that needs quoting, the pair
+    confirmed with `sameDefinition 1` and `order_totals` beside
+    `shipped_orders` rejected and in neither file. The whole loop gains one
+    assertion: prompt B is sent the comment on `vehicles`, and none for
+    `cars`. No existing assertion changed.
+  - **Not done:** a check in code that a suspicion's detail names only the
+    relations in its `tables`, which the audit offered: that reads meaning
+    from free text (R4). Printing the comment in a table's file. Comparing a
+    view with a table by definition: a table has none, and its rows are what
+    the overlap measures. Deciding the pair from the definitions the extract
+    already holds, which review offered: the verdict would carry a statement
+    dbtruth never ran, and prompt B is told that each query is the one that
+    was run. A role without USAGE on a view's schema cannot resolve its name
+    as a `regclass`, so the pair is unverifiable with Postgres's message, as
+    its rows were before; a lookup by schema and name would answer it, at
+    twice the parameters, for a role that can read nothing in that schema.
+  - **Known limits (the lead's decision), rounds 1 to 3 in one list.** This
+    list replaces those of the two entries above. By cause, each with the
+    runs it was seen in: r1 is the first run, then r2a to r2c, r3a to r3c
+    and Pagila.
+    - Prompt B leaves out "(inferred)", or the reason for it, most often in
+      ENTITIES.md: the broken `orders.customer_id -> customers.id` without
+      "no declared foreign key" (every fixture run) and the `audit_log`
+      branches without the reason for their label (r1, r2b, r2c, r3a, r3b,
+      r3c). Recurs in every round.
+    - Prompt B puts an empty or unverifiable claim under a heading that says
+      confirmed, or calls it confirmed: `customers.api_token` (r1), the
+      empty `cars.customer_id` join (r2b, r3b), the empty `cars`/`vehicles`
+      duplicate (r3b, r3c), the empty `rental_by_category` duplicate
+      (Pagila). Recurs. Pagila also listed its two empty claims one by one,
+      against the rule to give the count once (once).
+    - Prompt B labels an unverifiable claim or an open question
+      "(unverifiable)", "(unverifiable further)" in r1 or
+      "(inferred/unverifiable)" in r2a and r3a, not "(inferred)": every
+      run's README, flagged in r1, r3a, r3b, r3c and Pagila. Recurs.
+    - ENTITIES.md places the views that read an entity's table
+      inconsistently: `order_totals`, which carries the customers' key, is
+      under Order and not Customer in r1, r2c and r3c, and under both in the
+      other fixture runs; Pagila's Payment is "not referenced elsewhere"
+      though three views read it. Recurs.
+    - Prompt A never claims `audit_log`'s missing primary key, so README.md
+      and ENTITIES.md leave it out and only `tables/audit_log.md` says
+      "primary key: none" (every fixture run). Recurs.
+    - Prompt A's grain wording, printed as written: `order_totals` "one row
+      per customer", `events` "one row per event per day" or "per event id
+      and date" (every fixture run). Recurs.
+    - Prompt A marks a purpose "stated" where nothing is stated, and a
+      table file prints a stated purpose with no "(inferred)": Pagila has
+      no comment at all, and all 15 of its table purposes are "stated".
+      Seen once (Pagila).
+    - A table's notes print with no label, whatever prompt A based them
+      on: the empty `cars` "all columns unmeasured" (r2a), and Pagila's
+      notes on six tables, among them `customer`'s calling `activebool` and
+      `active` redundant. The round-1 entry left the unlabelled notes as
+      not done. Recurs.
+    - Seen once, prompt A: `events` "timestamped" though `happened_on` is a
+      date (r3b); `customer.active` a duplicate of `activebool`, which
+      disagree on 43 of 999 rows, an "other" suspicion nothing measures
+      (Pagila; a suspicion kind for redundant columns is outside this
+      round). Seen once, prompt B: "a view and a materialized view" for
+      `order_totals` and `shipped_orders`, the kinds in the reverse order of
+      the names (r2b).
+    - A view does not inherit its base table's relationships, so
+      `shipped_orders` has no join line (every fixture run), nor Pagila's
+      `film_list` and `nicer_but_slower_film_list`. Recurs.
+    - Categorical values are shown quoted whatever the column's type, since
+      `extract` reads them as text: `vehicles.model_year` (flagged in r3c,
+      in every run's output), Pagila's `release_year` and `store_id` among
+      others. Recurs.
+    - The relations string "9 tables, 1 view, 1 materialized view, 1
+      partitioned" counts the partitioned table among the tables, and
+      prompt B repeats it so that it reads as one relation more (r2a, r3c,
+      Pagila). Recurs.
+    - `inconsistent_values` counts case and whitespace collisions together,
+      so its numbers cannot say which caused them. Seen once (r1).
+    - Two views or materialized views are decided by their definitions
+      alone, so a pair whose queries are written differently but always
+      return the same rows is rejected and left out: a materialized view
+      that caches a view with `SELECT *` from it, or one query with other
+      aliases, another order of joins or an ORDER BY. Found in review, not
+      in a run.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

@@ -218,8 +218,8 @@ const VerdictSchema = z.object({
 });
 export type Verdict = z.infer<typeof VerdictSchema>;
 
-/** Per-relation facts the writer needs that claims do not carry: kind, key, size, categorical values. */
-export type TableFacts = Pick<Table, "name" | "kind" | "partitions" | "populated" | "rowEstimate" | "estimateSource" | "primaryKey"> & {
+/** Per-relation facts the writer needs that claims do not carry: kind, comment, key, size, categorical values. */
+export type TableFacts = Pick<Table, "name" | "kind" | "comment" | "partitions" | "populated" | "rowEstimate" | "estimateSource" | "primaryKey"> & {
   categorical: Record<string, unknown[]>;
 };
 

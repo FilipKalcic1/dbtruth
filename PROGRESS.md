@@ -5329,3 +5329,173 @@ of each lost point, in the format of section 4.7 of the plan.
   it with the round's tests.
 - `npm run verify` exits 0: 321 tests (one new), 319 pass, the 2 live tests
   skipped, 0 fail; the package smoke test passes.
+### Iteration 7: what a run on Pagila and three more fixture runs got wrong
+- Scope, the lead's: after `b14edf9` the lead ran the fixture three times
+  more, r3a, r3b and r3c, and dbtruth once on Pagila, and audited all four.
+  One last round removes the systematic causes, then the release: R1 a
+  duplicate between two views decided by their definitions, R2 each
+  relation's comment sent to prompt B, R3 two prompt B rules, R4 one prompt
+  A sentence, R5 a README paragraph, R6 NOTES, CHANGELOG and this
+  iteration. Out of scope: a suspicion kind for redundant columns, grain
+  wording, the quoting of integer categorical values, the relations string
+  and ENTITIES placement. The rest is recorded as known limits in NOTES,
+  in one list for the three rounds. No paid run here; the lead runs them.
+- R1, the design: in `measureDuplicateEntity`, when both relations are views
+  or materialized views, and before the shared columns and
+  `nothingToMeasure`, one statement asks the catalog whether
+  `pg_get_viewdef` gives both the same definition, which it answers for a
+  materialized view never refreshed. The names are `qualified()`'s, bound
+  as `$1` and `$2`, never SQL text (R8); the query kept ends with a note
+  that gives them, as a branch's does (R7). The number is `sameDefinition`,
+  1 or 0, with `over` as every suspicion over two tables that has numbers;
+  `decide` confirms on 1 and rejects on 0, so no table file lists a wrong
+  pair, and prompt B is told to leave it out. A pair with a table in it is
+  measured by its rows, as before. Prompt B is told what `sameDefinition`
+  means.
+- R2, the design: `TableFacts` carries `comment`, which `assemble` copies
+  only when the relation has one; prompt B is told it among the
+  per-relation facts, and a rule gives a comment to the relation whose
+  facts carry it. R3 of the plan holds: prompt A was sent every comment
+  `Verified.tables` holds, since both come from the extract `fitToContext`
+  returns; the comment reaches `--json` too, and no other output.
+- Tests first. With `b14edf9`'s code and prompts: in `verdict.test.ts`,
+  "duplicate_entity: two views with the same definition are confirmed, and
+  with different ones rejected" failed with "the same query holds the same
+  rows, read or not" (actual `unverifiable`), and "assemble gives the writer
+  a relation's comment with that relation's facts, ..." with "the comment is
+  on vehicles, so it goes with vehicles' facts" (actual `undefined`); in
+  `verify.test.ts`, "a duplicate between two views is measured by comparing
+  their definitions in the catalog, ..." with "the definitions, which the
+  catalog holds even for a materialized view no one can read, and no rows"
+  (actual `[{}, {}]`); in `write.test.ts`, the four prompt tests with
+  "write.md says what sameDefinition means, right after a duplicate_entity's
+  other numbers", "write.md names the comment among the per-relation
+  facts", "write.md labels the analysis's causes and reasons (inferred)"
+  and "contextualize.md ties a duplicate's tables to its detail"; in
+  `integration.test.ts`, "the whole loop on the fixture, ..." with "and the
+  comment on vehicles, with vehicles' facts, where cars has none", and "two
+  views are one relation when the catalog gives them the same definition,
+  ..." with "compared in the catalog, which Postgres answers although
+  order_totals cannot be read" (actual `['empty', {}]`). "A duplicate
+  between a table and a view is still measured by its rows, ..." passed
+  before, since it guards what this round leaves as it was.
+- Sabotage: fifteen breaks, from `sabotage3-round3.mjs` in the scratchpad.
+  It copied the four changed files into `sabotage3-round3`, a new
+  directory, applied each break, ran the unit files `verdict`, `verify` and
+  `write`, and for five breaks the whole loop and the new integration test
+  as well, put the file back from its copy and compared it byte for byte;
+  `cmp` compared all four at the end, and the hash of `git diff` was
+  `7a5814a5...` before and after. The raw TAP of each run is in
+  `sabotage3-round3/tap`. Then `measureDuplicateEntity`'s `sql` was renamed
+  `statement`, as `measureRelationship` names the statement run, and two
+  comments were reworded, so `sabotage3-final.mjs` ran the same fifteen
+  breaks on the final text from copies in `sabotage3-final`, another new
+  directory; `git diff` hashed `ce4eb2d0...` before and after, and every
+  break failed the same tests with the same messages. Each break failed at
+  least one test:
+  - R1 in `verify`: no comparison, and the comparison after the empty
+    check, both "a duplicate between two views ..." with "the definitions,
+    which the catalog holds even for a materialized view no one can read,
+    and no rows", and the integration test with "compared in the catalog,
+    which Postgres answers although order_totals cannot be read"; a table
+    beside a view compared by definition too, "a duplicate between a table
+    and a view is still measured by its rows, ..." with the fake database's
+    "nothing here should be queried", since the pair beside the materialized
+    view then ran a statement; the names written into the SQL text, "the
+    statement run holds no name" (the integration test passed, as it
+    should: Postgres reads either form); no note, "the query kept ends with
+    the note that gives $1 and $2, so that a person can rerun it".
+  - R1 in `decide`: `sameDefinition` ignored, "duplicate_entity: two views
+    with the same definition ..." with "the same query holds the same rows,
+    read or not", the verify test with "the same definition confirms the
+    pair, and a different one rejects it, so a wrong pair never appears",
+    and the integration test; read the wrong way round, the first two.
+  - R2 in `assemble`: no comment, "assemble gives the writer a relation's
+    comment ..." with "the comment is on vehicles, so it goes with
+    vehicles' facts", and the whole loop with "and the comment on vehicles,
+    with vehicles' facts, where cars has none"; a comment key on every
+    relation, "cars has none, and its facts carry no comment key".
+  - The prompts, six deletions (what `sameDefinition` means, the comment
+    among the facts, the comment rule, the cause or reason, the claim's
+    scope, prompt A's duplicate sentence): each failed a prompt test with
+    the message naming that sentence.
+- Checked by hand, read-only in psql on Pagila: the statement gives 1 for
+  `rental_by_category` and `sales_by_film_category`, 0 for
+  `rental_by_category` and `sales_by_store`.
+- All 99 file checks in `acceptance/checks.json` pass against the final
+  text; none was changed.
+- `npm run verify` exits 0: 330 tests (nine new), 328 pass, the 2 live tests
+  skipped, 0 fail; the package smoke test passes.
+- Four reviews of the working tree (plan, quality, correctness, design).
+  Each finding was checked against the code, the scope and, where it
+  claimed behavior, a run; no sabotage in this stage. Fixed:
+  - The rule on "(inferred)" said "any cause or reason the analysis
+    gives". Every relationship and entity prompt B receives carries a
+    `reason`, and Pagila's 18 stated relationships all give "Declared
+    foreign key", so it told prompt B to label declared joins "(inferred)",
+    against the rule that states a confirmed one as fact (all four
+    reviews). It now names the cause alone. The pinned sentence in
+    `write.test.ts` changed first, with the message "write.md labels a
+    cause the analysis gives (inferred), and not every reason, since a
+    declared foreign key's is a fact", and failed on the old prompt.
+  - No test held the comparison before the shared columns: moved after
+    them, every test passed, and two views with no column name in common
+    were left unverifiable (quality, correctness). And it ran through
+    `db.query`, inside the budget, so joins that spent it left the pair
+    unverifiable, printed in both table files (design). The new test in
+    `verify.test.ts`, "two views are compared by their definitions
+    whatever would stop a comparison of rows: ...", fails on `b14edf9`'s
+    code, run from a copy in `review3-head-check`, a new scratchpad
+    directory, with "asked before the shared columns, so a wrong pair is
+    rejected, not left unverifiable for want of one", and on this round's
+    code before the change with "read from the catalog outside the budget,
+    as the extract is, since it reads no rows". The statement now runs
+    through `db.catalog`, which the `Db` type keeps for catalog reads that
+    describe the schema; the fake database answers one from its script.
+  - The integration test's "a rejected pair appears in neither table's
+    file" read only `shipped_orders.md`. It reads `order_totals.md` too,
+    through a `tableFile` helper shaped as the whole loop's is.
+  - Wording. CHANGELOG and the R1 bullet above said "a wrong pair appears
+    in no file", but the rejected verdict is in the snapshot and in
+    `--json`; CHANGELOG's "restate a suspicion" and "can misstate it";
+    README's "of two views" without materialized views. In NOTES: "six
+    such tables", where all 15 of Pagila's purposes are "stated" and six
+    tables have notes; the unlabelled notes, now marked as recurring; the
+    runs with "(unverifiable)", which is every run's README, flagged in
+    r1, r3a, r3b, r3c and Pagila; "Seen once" on two items; and Pagila's
+    relations, which read as four kinds.
+- Rejected, with the reason:
+  - Reading the rows when two readable views' definitions differ
+    (correctness, design): the scope says definitions, not rows, and
+    rejected when they differ. NOTES records it as a known limit, with the
+    cases: a materialized view that caches a view, and one query written
+    differently.
+  - Deciding from the definitions the extract holds (design): the verdict
+    would carry a statement dbtruth never ran, and prompt B is told that
+    each query is the one run. `db.catalog` removes the budget's cost.
+  - Looking the definitions up by schema and name, for a role without
+    USAGE on the view's schema (correctness): not a regression, since
+    that role could not read the rows either, and the verdict is
+    unverifiable with Postgres's message. NOTES names it under not done.
+  - "measured over" beside `sameDefinition` (correctness): the scope asks
+    for `over` as round 2 gives it.
+  - An assertion that the table-and-view test runs one statement (plan):
+    under the break it would guard, the fake database throws "nothing here
+    should be queried" before the assertion is reached.
+  - The previous stage's scripts and logs in the scratchpad root
+    (quality): they are not backups, which are in new directories, and
+    moving them would break the paths this iteration cites.
+- All 99 file checks in `acceptance/checks.json` pass. `npm run verify`
+  exits 0: 331 tests (one new), 329 pass, the 2 live tests skipped, 0
+  fail; the package smoke test passes.
+- Sabotage (the sabotage stage, after the reviews' fixes): 18 breaks of R1
+  to R5, each failing a named test with its message: R1 compared by rows
+  again, different definitions confirmed, a never-refreshed view left to
+  short-circuit to empty, "over" dropped; R2's comment dropped from prompt
+  B's facts; every new prompt sentence deleted; the README paragraph
+  deleted. The README paragraph and its "How it works" clause first left
+  every test green; two tests were added to `test/readme.test.ts`, and the
+  repeated breaks failed them. Every file was restored byte for byte, and
+  the `git diff` hash was the same before and after each run (logs in the
+  scratchpad, `sabotage3-stage-*`). `npm run verify`: 333 tests, 331 pass,
+  the 2 live tests skipped, 0 fail; the package smoke test passes.

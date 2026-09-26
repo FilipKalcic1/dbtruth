@@ -236,6 +236,35 @@ test("prompt B says that a materialized view never refreshed raises an error whe
   assert.ok(b.includes("- Never say that a materialized view never refreshed has no rows or returns nothing."), "write.md has a rule that forbids calling such a view empty");
 });
 
+test("prompt B is told what a duplicate between two views measures: whether their definitions are the same", () => {
+  assert.ok(
+    prompt("write").includes("overlap (matched / total). Between two views or materialized views, its number is sameDefinition instead: 1 when their definitions are the same, 0 when they differ."),
+    "write.md says what sameDefinition means, right after a duplicate_entity's other numbers",
+  );
+});
+
+test("prompt B is sent each relation's comment, and gives a comment only to the relation whose facts carry it", () => {
+  const b = prompt("write");
+  assert.ok(b.includes("primary key, row estimate, comment if there is one, and the values of categorical columns."), "write.md names the comment among the per-relation facts");
+  assert.ok(b.includes("- A comment belongs to the relation whose facts carry it; never attribute it to another."), "write.md has a rule that a comment is said of the relation that carries it");
+});
+
+test("prompt B restates a claim only of what it names, and labels a cause the analysis gives as its guess", () => {
+  const b = prompt("write");
+  assert.ok(
+    b.includes('everything with basis "inferred", and any cause the analysis gives, which is a guess, are labelled "(inferred)" inline'),
+    "write.md labels a cause the analysis gives (inferred), and not every reason, since a declared foreign key's is a fact",
+  );
+  assert.ok(b.includes("Restate an unverifiable claim or a suspicion's detail only for the relations and columns it names; never widen it to others."), "write.md forbids saying a claim of relations or columns it does not name");
+});
+
+test("prompt A gives a duplicate_entity exactly the two relations its detail says duplicate each other", () => {
+  assert.ok(
+    prompt("contextualize").includes('"duplicate_entity": two tables holding the same rows; its "tables" are exactly the two relations its detail says duplicate each other.'),
+    "contextualize.md ties a duplicate's tables to its detail",
+  );
+});
+
 test("neither prompt lets the model call a column hidden, or say it cannot be inspected, tested or verified: the values are withheld from the analysis only", () => {
   const a = prompt("contextualize");
   const b = prompt("write");

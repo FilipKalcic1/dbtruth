@@ -248,12 +248,26 @@ async function measureInconsistentValues(db: Db, cfg: Config, extract: Extract, 
   return { claimId, kind, query, numbers };
 }
 
-/** share of A's distinct sampled tuples on the shared columns that exist in B. */
+/**
+ * share of A's distinct sampled tuples on the shared columns that exist in B; of two views or materialized views,
+ * whether the catalog gives them the same definition.
+ */
 async function measureDuplicateEntity(db: Db, cfg: Config, extract: Extract, claimId: string, s: Suspicion): Promise<Measurement> {
   const kind = s.kind;
   const a = findTable(extract.tables, s.tables[0]);
   const b = findTable(extract.tables, s.tables[1]);
   if (!a || !b) return skip(claimId, kind, `needs two known tables, got ${s.tables.join(", ")}`);
+  // Two views are the same relation when they are the same query. The catalog answers that even of a materialized view
+  // never refreshed, which cannot be read, so it is asked first, and outside the budget like the extract's catalog
+  // reads, since it reads no rows. The names are bound, and the note gives them.
+  if (a.kind !== "table" && b.kind !== "table") {
+    const names = [qualified(a), qualified(b)];
+    const statement = "SELECT (pg_get_viewdef($1::regclass, true) = pg_get_viewdef($2::regclass, true))::int AS same_definition";
+    const query = `${statement}\n-- $1 = ${sqlString(names[0]!)}, $2 = ${sqlString(names[1]!)}`;
+    const result = await db.catalog(statement, names);
+    if (!result.ok) return skip(claimId, kind, result.message, query);
+    return { claimId, kind, query, numbers: { sameDefinition: Number(result.rows[0]?.same_definition) } };
+  }
   const shared = a.columns.map((c) => c.name).filter((name) => hasColumn(b, name));
   if (shared.length === 0) return skip(claimId, kind, "no shared column names");
   const empty = nothingToMeasure(claimId, kind, a, b);

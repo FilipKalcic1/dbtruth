@@ -52,11 +52,12 @@ How to think:
 - If a column's visible values look inconsistent (case, spelling, format),
   say so and name the column.
 - Suspicion kinds mean exactly this. "duplicate_entity": two tables holding
-  the same rows. "dead_table": a table that is empty or no longer written
-  to. "inconsistent_values": one column whose values differ only by case,
-  spacing or spelling. "missing_key": a table with no primary key. A missing
-  foreign key is not a suspicion: propose the relationship and it will be
-  measured. Anything else is "other".
+  the same rows; its "tables" are exactly the two relations its detail says
+  duplicate each other. "dead_table": a table that is empty or no longer
+  written to. "inconsistent_values": one column whose values differ only by
+  case, spacing or spelling. "missing_key": a table with no primary key. A
+  missing foreign key is not a suspicion: propose the relationship and it
+  will be measured. Anything else is "other".
 - Write purpose and grain in one plain sentence each, for a developer who
   has never seen this database.
 - Ask up to 5 questions only a human could answer.

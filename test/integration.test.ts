@@ -91,6 +91,11 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   const told = JSON.parse((JSON.parse(model.requests[1]!) as { messages: { content: string }[] }).messages[0]!.content) as Verified;
   assert.equal(told.verdicts["suspicion:duplicate_entity:products+products_legacy"]!.measurement.over, "products", "the writer is told by name whose rows the overlap is a share of");
   assert.equal(told.tables.find((t) => t.name === "order_totals")!.populated, false, "and that the materialized view was never refreshed");
+  assert.deepEqual(
+    ["vehicles", "cars"].map((name) => told.tables.find((t) => t.name === name)!.comment),
+    ["Fleet vehicles currently managed. Replaced the old cars table.", undefined],
+    "and the comment on vehicles, with vehicles' facts, where cars has none",
+  );
 
   assert.deepEqual(verified.tables.find((t) => t.name === "orders")!.categorical.status!.slice().sort(), ["Pending", "SHIPPED", "cancelled", "pending", "shipped"]);
 
@@ -504,6 +509,26 @@ test("a relation whose name needs quoting is listed as the catalog names it", { 
   const snapshot = readSnapshot(cwd, SNAPSHOT);
   if (typeof snapshot === "string") assert.fail(snapshot);
   assert.deepEqual(snapshot.schema.relations.find((r) => r.schema === "odd schema"), { name: "odd schema.Mixed; Case", schema: "odd schema", kind: "table", columns: [['a"b', "integer"]] });
+});
+
+test("two views are one relation when the catalog gives them the same definition, even beside a materialized view never refreshed", { timeout: 60_000 }, async (t) => {
+  const copy = await copyOfFixture(t);
+  // order_totals' own query, as a view whose name needs quoting.
+  await copy.sql(`CREATE VIEW "order ""totals"" now" AS SELECT customer_id, count(*) AS orders, sum(total_cents) AS total_cents FROM orders GROUP BY customer_id`);
+  const twin = { kind: "duplicate_entity" as const, tables: ["order_totals", 'order "totals" now'], detail: "the same query" };
+  const other = { kind: "duplicate_entity" as const, tables: ["order_totals", "shipped_orders"], detail: "both read orders" };
+  const { cwd, out } = await offline({ suspicions: [twin, other] }, { url: copy.url, json: true });
+  const { verdicts } = JSON.parse(out.join("\n")) as Verified;
+  const [same, different] = [verdicts[suspicionId(twin)]!, verdicts[suspicionId(other)]!];
+  assert.deepEqual([same.status, same.measurement.numbers], ["confirmed", { sameDefinition: 1 }], "compared in the catalog, which Postgres answers although order_totals cannot be read");
+  assert.deepEqual([different.status, different.measurement.numbers], ["rejected", { sameDefinition: 0 }], "a view with another query is not a duplicate, whatever the analysis said");
+  const tableFile = (name: string) => readFileSync(join(cwd, "context", "tables", `${name}.md`), "utf8");
+  assert.match(tableFile("order_totals"), /\n- \*\*duplicate_entity order "totals" now\*\*: sameDefinition 1 \(measured over order_totals\)\. the same query \(inferred\)\n/, "the confirmed pair is a problem in the materialized view's file, by its number");
+  assert.deepEqual(
+    [tableFile("order_totals").includes("duplicate_entity shipped_orders"), tableFile("shipped_orders").includes("duplicate_entity")],
+    [false, false],
+    "a rejected pair appears in neither table's file",
+  );
 });
 
 const liveKey = process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN;
