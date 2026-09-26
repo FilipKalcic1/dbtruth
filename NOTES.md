@@ -2747,6 +2747,21 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     and the waitlist form (T6.1, T6.3). The first four are manual items of
     T7.1 in `acceptance/manual.json`, with no evidence until they are done.
 
+- **The Team tier's price and waitlist, set after 0.4.0 was published.** The
+  maintainer asked the lead to set the price (T6.1's HUMAN part). $29 per
+  team per month, or $290 a year, from the published prices of comparable
+  tools read on 2026-09-26: single-purpose PR checks at $25 to $34 a month
+  (Snyk Team, RelativeCI, SonarQube Cloud), flat per-organization database
+  linters at $499 and $649 a year (MigrationPilot, Skeema), Atlas Pro at
+  about $104 a month for five developers, Recce Team at $250 to $300. What
+  the tier sells is thin, since `check` and its exit code stay free, and
+  there are no users yet, so the price is one a team lead can pay on a card.
+  A team is one license key for up to 10 private repositories and any
+  number of people: T6.2 sends only the key and the repository id, so
+  repositories can be counted and people cannot. The waitlist is a pinned
+  GitHub issue (#14) rather than a form: subscribing to it is how to hear
+  when the tier opens, and no email address is collected. The README on npm
+  keeps the placeholders until the next publish.
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values
