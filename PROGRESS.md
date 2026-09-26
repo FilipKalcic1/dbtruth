@@ -5755,3 +5755,18 @@ of each lost point, in the format of section 4.7 of the plan.
 - `npm run verify` exits 0 after the restores, in 92 s: 333 tests, 331
   pass, the 2 live tests skipped, 0 fail; the package smoke test passes on
   `dbtruth-0.4.0.tgz`.
+### Iteration 4: 100/100 (the lead, after the human steps)
+- Step 7: the maintainer ran npm publish from main at 1f1ced3 (merge of pull
+  request 12) after npm login; the log shows PUT 401 (one-time password) then
+  202, and npm view gives 0.4.0 as the version and as dist-tags.latest.
+- Step 8: in empty directories, the published package printed 0.4.0 for
+  --version, passed doctor on the fixture with no FAIL (exit 0), and check on
+  the fixture snapshot printed "check fixture: 12 unchanged" (exit 0).
+- Step 6: tag v0.4.0 on 1f1ced3, CI green on it (run 36271489513), release
+  notes from the CHANGELOG at
+  https://github.com/FilipKalcic1/dbtruth/releases/tag/v0.4.0.
+- The Action: a scenario with the default dbtruth-version, installing 0.4.0
+  from npm, passes (run 36273512996); tags v1.0.0 and v1 on 8d09bcc; the
+  maintainer published release v1.0.0 to the Marketplace:
+  https://github.com/marketplace/actions/dbtruth-check.
+- `npm run acceptance -- --task T7.1`: 100/100.
