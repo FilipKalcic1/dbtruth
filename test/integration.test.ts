@@ -70,7 +70,7 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   assert.equal(v["suspicion:duplicate_entity:products+products_legacy"]!.measurement.numbers.overlap, 0.875);
   assert.equal(v["suspicion:missing_key:audit_log"]!.status, "confirmed");
   assert.equal(v["suspicion:dead_table:order_totals"]!.status, "confirmed", "an unpopulated materialized view is dead, from the catalog");
-  assert.equal(v["suspicion:dead_table:order_totals"]!.measurement.numbers.populated, 0);
+  assert.deepEqual(v["suspicion:dead_table:order_totals"]!.measurement.numbers, { populated: 0 }, "what the catalog says, and no count: reading it raises an error");
   assert.equal(v["suspicion:other:customers"]!.status, "unverifiable", "a claim no measurement exists for is still open");
   assert.equal(verified.fitsInContext, true);
 
@@ -88,6 +88,14 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   assert.equal(verified.relations, "9 tables, 1 view, 1 materialized view, 1 partitioned");
   assert.ok(err.some((l) => l === `relations: ${verified.relations} (fits in an agent's context)`), "the summary reads the same count");
   assert.match(model.requests[1]!, /9 tables, 1 view, 1 materialized view, 1 partitioned/, "the writer is handed the count rather than deriving one");
+  const told = JSON.parse((JSON.parse(model.requests[1]!) as { messages: { content: string }[] }).messages[0]!.content) as Verified;
+  assert.equal(told.verdicts["suspicion:duplicate_entity:products+products_legacy"]!.measurement.over, "products", "the writer is told by name whose rows the overlap is a share of");
+  assert.equal(told.tables.find((t) => t.name === "order_totals")!.populated, false, "and that the materialized view was never refreshed");
+  assert.deepEqual(
+    ["vehicles", "cars"].map((name) => told.tables.find((t) => t.name === name)!.comment),
+    ["Fleet vehicles currently managed. Replaced the old cars table.", undefined],
+    "and the comment on vehicles, with vehicles' facts, where cars has none",
+  );
 
   assert.deepEqual(verified.tables.find((t) => t.name === "orders")!.categorical.status!.slice().sort(), ["Pending", "SHIPPED", "cancelled", "pending", "shipped"]);
 
@@ -97,7 +105,7 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   assert.match(tableFile("orders"), /\*\*BROKEN\*\* orders\.customer_id -> customers\.id: 88\.0% match \(440 of 500 sampled\), 60 orphans, all above the highest customers\.id \(inferred\)/, "rendered from the measurement, not the model's canned file");
   assert.deepEqual((/- status: (.*)\n/.exec(tableFile("orders"))?.[1] ?? "").split(", ").sort(), ['"Pending"', '"SHIPPED"', '"cancelled"', '"pending"', '"shipped"'], "every value, quoted");
   assert.match(tableFile("customers"), /orders\.customer_id -> customers\.id/, "a table the model wrote no file for has one, with its incoming join");
-  assert.match(tableFile("order_totals"), /^# order_totals\n\nmaterialized view, no rows, primary key: none\n/);
+  assert.match(tableFile("order_totals"), /^# order_totals\n\nmaterialized view, never refreshed \(reading it raises an error\), primary key: none\n/, "not \"no rows\": a read raises an error");
   assert.ok(!existsSync(join(cwd, "escape.md")), "paths outside context/ are dropped");
 
   assert.equal(model.requests.length, 2, "one call per prompt when replies validate");
@@ -501,6 +509,26 @@ test("a relation whose name needs quoting is listed as the catalog names it", { 
   const snapshot = readSnapshot(cwd, SNAPSHOT);
   if (typeof snapshot === "string") assert.fail(snapshot);
   assert.deepEqual(snapshot.schema.relations.find((r) => r.schema === "odd schema"), { name: "odd schema.Mixed; Case", schema: "odd schema", kind: "table", columns: [['a"b', "integer"]] });
+});
+
+test("two views are one relation when the catalog gives them the same definition, even beside a materialized view never refreshed", { timeout: 60_000 }, async (t) => {
+  const copy = await copyOfFixture(t);
+  // order_totals' own query, as a view whose name needs quoting.
+  await copy.sql(`CREATE VIEW "order ""totals"" now" AS SELECT customer_id, count(*) AS orders, sum(total_cents) AS total_cents FROM orders GROUP BY customer_id`);
+  const twin = { kind: "duplicate_entity" as const, tables: ["order_totals", 'order "totals" now'], detail: "the same query" };
+  const other = { kind: "duplicate_entity" as const, tables: ["order_totals", "shipped_orders"], detail: "both read orders" };
+  const { cwd, out } = await offline({ suspicions: [twin, other] }, { url: copy.url, json: true });
+  const { verdicts } = JSON.parse(out.join("\n")) as Verified;
+  const [same, different] = [verdicts[suspicionId(twin)]!, verdicts[suspicionId(other)]!];
+  assert.deepEqual([same.status, same.measurement.numbers], ["confirmed", { sameDefinition: 1 }], "compared in the catalog, which Postgres answers although order_totals cannot be read");
+  assert.deepEqual([different.status, different.measurement.numbers], ["rejected", { sameDefinition: 0 }], "a view with another query is not a duplicate, whatever the analysis said");
+  const tableFile = (name: string) => readFileSync(join(cwd, "context", "tables", `${name}.md`), "utf8");
+  assert.match(tableFile("order_totals"), /\n- \*\*duplicate_entity order "totals" now\*\*: sameDefinition 1 \(measured over order_totals\)\. the same query \(inferred\)\n/, "the confirmed pair is a problem in the materialized view's file, by its number");
+  assert.deepEqual(
+    [tableFile("order_totals").includes("duplicate_entity shipped_orders"), tableFile("shipped_orders").includes("duplicate_entity")],
+    [false, false],
+    "a rejected pair appears in neither table's file",
+  );
 });
 
 const liveKey = process.env.ANTHROPIC_API_KEY ?? process.env.ANTHROPIC_AUTH_TOKEN;

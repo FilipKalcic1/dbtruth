@@ -110,7 +110,8 @@ s.output([
     ("SELECT c.country, count(*) AS orders", "text"),
     ("FROM orders o", "text"),
     ("JOIN customers c ON c.id = o.customer_id", "text"),
-    ("GROUP BY 1;", "text"),
+    ("GROUP BY 1", "text"),
+    ("ORDER BY 1;", "text"),
 ], 900)
 s.blank()
 s.type_command("psql -f report.sql")
@@ -136,31 +137,42 @@ disclosure = (
     "Nothing else leaves this machine."
 )
 s.output([(line, "dim") for line in wrap(disclosure, 96)], 1000)
-s.output([("contextualize: 11 tables described, 13 claims to test, 20.3s", "comment")], 800)
-s.output([("verify: 13 measurements, 0.1s", "comment")], 500)
-s.output([("write: 13 files, 28.8s", "comment")], 800)
+s.output([("contextualize: 11 tables described, 12 claims to test, 19.3s", "comment")], 800)
+s.output([("verify: 12 measurements, 0.1s", "comment")], 500)
+s.output([("write: 13 files, 15.2s", "comment")], 800)
 s.output([
     ("dbtruth: fixture", "head"),
     ("relations: 9 tables, 1 view, 1 materialized view, 1 partitioned (fits in an agent's context)", "text"),
-    ("relationships: 3 confirmed, 1 broken, 0 rejected, 1 unverifiable", "text"),
+    ("relationships: 6 confirmed (3 on weak evidence), 1 broken, 0 rejected, 0 unverifiable, 0 empty", "text"),
     ("  orders.customer_id->customers.id  hit rate 88.0%", "warn"),
-    ("suspicions: 5 confirmed, 0 rejected, 3 unverifiable", "text"),
+    ("suspicions: 4 confirmed, 0 rejected, 1 unverifiable, 0 empty", "text"),
     ("entities: 4, questions for a human: 5", "text"),
-    ("files written: 13 under ./context/", "text"),
-    ("database time: 0.1s, model time: 49.1s (contextualize 20.3s, write 28.8s)", "text"),
+    ("files written: 14 under ./context/", "text"),
+    ("database time: 0.1s, model time: 34.4s (contextualize 19.3s, write 15.2s)", "text"),
+    ("tokens: 21502 in, 4006 out, 2 calls", "text"),
 ], 2400)
 
-# Scene 3: what the agent reads next. Real lines from that run's context/README.md.
+# Scene 3: what the agent reads next. The first six lines of that run's context/README.md, long ones wrapped.
 s.clear()
 s.type_command("head -6 context/README.md")
+overview = (
+    "This database (relations: 9 tables, 1 view, 1 materialized view, 1 partitioned) tracks "
+    "customers, orders, order items, products, a fleet of vehicles, and an audit log. Per-table "
+    "detail lives in context/tables/<table>.md."
+)
+broken = (
+    "**orders.customer_id -> customers.id** (inferred: no declared foreign key found): 500 sampled "
+    "rows, 0 nulls, 440 hits, 60 orphans (hit rate 0.88). All 60 orphans fall above the highest "
+    "customers.id, suggesting customers that were never loaded or ids from another sequence. LEFT "
+    "JOIN customers from orders, or filter/handle unmatched customer_id."
+)
 s.output([
-    ("# Database Reference (fixture)", "head"),
+    ("## Overview", "head"),
+    *[(line, "text") for line in wrap(overview, 96)],
     ("", "text"),
-    ("## Broken relationship — fix required", "head"),
+    ("## Broken relationships", "head"),
     ("", "text"),
-    ("**orders.customer_id → customers.id is broken: 88% hit rate (440/500), 60 orphans.**", "warn"),
-    ("Do not inner-join orders to customers without guarding. Use `LEFT JOIN` and expect nulls,", "text"),
-    ("or filter orphans explicitly. This is not a declared FK — treat with suspicion.", "text"),
+    *[(line, "warn") for line in wrap(broken, 96)],
 ], 3000)
 
 # Scene 4: the agent's second attempt. Every order is counted.
@@ -171,7 +183,8 @@ s.output([
     ("SELECT coalesce(c.country, 'unknown') AS country, count(*) AS orders", "text"),
     ("FROM orders o", "text"),
     ("LEFT JOIN customers c ON c.id = o.customer_id", "text"),
-    ("GROUP BY 1;", "text"),
+    ("GROUP BY 1", "text"),
+    ("ORDER BY 1;", "text"),
 ], 900)
 s.blank()
 s.type_command("psql -f report.sql")

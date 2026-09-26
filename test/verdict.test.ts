@@ -64,6 +64,16 @@ test("dead_table: empty or stale is confirmed, otherwise rejected", () => {
   assert.equal(decide(m("dead_table", { exact: 0 }), config).status, "unverifiable", "neither count nor age: nothing to decide on");
 });
 
+test("dead_table: a materialized view never refreshed is dead on the schema's word alone, with no count", () => {
+  assert.equal(decide(m("dead_table", { populated: 0 }), config).status, "confirmed", "populated 0 proves it dead: reading it raises an error, so there is no count to decide on");
+});
+
+test("a verdict names the table its numbers were measured over when its measurement does, and none otherwise", () => {
+  const duplicate = decide({ ...m("duplicate_entity", { total: 80, matched: 70, sharedColumns: 5, overlap: 0.875 }), over: "products" }, config);
+  assert.equal(duplicate.measurement.over, "products", "the writer is told by name whose rows the overlap is a share of");
+  assert.ok(!("over" in decide(m("dead_table", { count: 0 }), config).measurement), "a measurement that names no table gives the verdict none");
+});
+
 test("inconsistent_values: any canonical-form collision confirms", () => {
   assert.equal(decide(m("inconsistent_values", { distinctValues: 5, canonicalForms: 3, collisions: 2 }), config).status, "confirmed");
   assert.equal(decide(m("inconsistent_values", { distinctValues: 3, canonicalForms: 3, collisions: 0 }), config).status, "rejected");
@@ -73,6 +83,11 @@ test("duplicate_entity: overlap at or above config confirms", () => {
   assert.equal(decide(m("duplicate_entity", { overlap: config.duplicateOverlap }), config).status, "confirmed");
   assert.equal(decide(m("duplicate_entity", { overlap: 0.875 }), config).status, "confirmed");
   assert.equal(decide(m("duplicate_entity", { overlap: 0.1 }), config).status, "rejected");
+});
+
+test("duplicate_entity: two views with the same definition are confirmed, and with different ones rejected", () => {
+  assert.equal(decide(m("duplicate_entity", { sameDefinition: 1 }), config).status, "confirmed", "the same query holds the same rows, read or not");
+  assert.equal(decide(m("duplicate_entity", { sameDefinition: 0 }), config).status, "rejected", "a different query is another relation, whatever rows the two share");
 });
 
 test("missing_key: from the schema", () => {
@@ -154,4 +169,18 @@ test("assemble carries where each row estimate came from to the writer, and noth
   assert.equal(pilot!.estimateSource, "pilot");
   assert.equal(partitions!.estimateSource, "partitions");
   assert.ok(!("estimateSource" in counted!), "a count, or an unknown size, has none");
+});
+
+test("assemble gives the writer a relation's comment with that relation's facts, and no comment to one without", () => {
+  const claims: Claims = { entities: [], tables: [], relationships: [], suspicions: [], questions: [] };
+  const extract: Extract = {
+    database: "shop",
+    tables: [{ ...relation("vehicles", "table"), comment: "Replaced the old cars table." }, relation("cars", "table")],
+    skipped: [],
+    schemaTokens: 10,
+    unmatchedReveal: [],
+  };
+  const [vehicles, cars] = assemble(extract, claims, [], config).tables;
+  assert.equal(vehicles!.comment, "Replaced the old cars table.", "the comment is on vehicles, so it goes with vehicles' facts");
+  assert.ok(!("comment" in cars!), "cars has none, and its facts carry no comment key");
 });

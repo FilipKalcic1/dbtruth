@@ -71,6 +71,18 @@ test("the quick start's .env, copied as shown, is read as its two settings, each
   assert.deepEqual(Object.keys(settings), ["DATABASE_URL", "ANTHROPIC_API_KEY"]);
 });
 
+test("the quick start says that the model's summary can misstate the verdicts, and where what was measured is", () => {
+  const start = (/^## Quick start$([\s\S]*?)^## /m.exec(read("README.md"))?.[1] ?? "").replace(/\s+/g, " ");
+  assert.ok(
+    start.includes("`context/README.md` and `context/ENTITIES.md` are the model's summary of the verdicts, and can misstate what they summarize."),
+    "the quick start says that the two files the model writes can misstate the verdicts they summarize",
+  );
+  assert.ok(
+    start.includes("What was measured is in the numbers of the files in `context/tables/` and in each verdict's numbers and query in `context/snapshot.json`: check a surprising statement there."),
+    "and names the files that hold what was measured, to check a surprising statement against",
+  );
+});
+
 test("the Team tier section has a price and a waitlist link, placeholders until a person sets them", () => {
   const team = /^## Team tier$([\s\S]*?)^## /m.exec(read("README.md"))?.[1];
   assert.ok(team, "no Team tier section");
@@ -104,4 +116,12 @@ test("the Team tier section names every command, and only those not built yet as
   const free = /free forever[^.]*/.exec(team)?.[0] ?? "";
   const listed = [...free.matchAll(span)].map((m) => m[1]);
   for (const name of named) assert.ok(listed.includes(name), `"${free}" leaves out ${name}`);
+});
+
+test("How it works says that a duplicate between two views is decided by their definitions", () => {
+  const how = (/^## How it works$([\s\S]*?)^## /m.exec(read("README.md"))?.[1] ?? "").replace(/\s+/g, " ");
+  assert.ok(
+    how.includes("of two views or materialized views, whether the catalog gives them the same definition"),
+    "How it works says what measures a duplicate between two views or materialized views",
+  );
 });

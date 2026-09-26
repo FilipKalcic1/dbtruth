@@ -121,6 +121,24 @@ test("an unchanged database passes with identical numbers, in under 5 seconds", 
   assert.deepEqual(Object.fromEntries((await recorded(copy.url, blank(sampled))).report.claims.map((c) => [c.id, c.after])), sampled.verdicts);
 });
 
+test("a snapshot written before verdicts named the table they were measured over, and gave a view never refreshed a count, checks unchanged", LIMIT, async (t) => {
+  const copy = await copyOfFixture(t);
+  const cwd = await fullRun(copy.url);
+  const snapshot = snapshotIn(cwd);
+  const duplicate = snapshot.verdicts["suspicion:duplicate_entity:products+products_legacy"]!;
+  const dead = snapshot.verdicts["suspicion:dead_table:order_totals"]!;
+  const { over: _over, ...unnamed } = duplicate.measurement;
+  const verdicts = {
+    ...snapshot.verdicts,
+    "suspicion:duplicate_entity:products+products_legacy": { ...duplicate, measurement: unnamed },
+    "suspicion:dead_table:order_totals": { ...dead, measurement: { ...dead.measurement, numbers: { count: 0, exact: 1, populated: 0 } } },
+  };
+  writeFileSync(join(cwd, SNAPSHOT), serialize({ ...snapshot, verdicts }));
+  const { code, err } = await checkIn(cwd, copy.url);
+  assert.equal(code, 0, err.join("\n"));
+  assert.deepEqual(err, [`check ${copy.name}: 12 unchanged`], "check compares a verdict's status and hit rate, which neither field moves");
+});
+
 test("a broken foreign key is a regression, named with both hit rates", LIMIT, async (t) => {
   const copy = await copyOfFixture(t);
   const cwd = await fullRun(copy.url);

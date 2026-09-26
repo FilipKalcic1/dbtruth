@@ -4896,3 +4896,862 @@ of each lost point, in the format of section 4.7 of the plan.
   `api_token`. A person should repeat it in Claude Code with the server added;
   that run also settles whether `init` prints the `cmd /c` form on native
   Windows.
+
+## What the first live run since 0.1.7 got wrong (the lead's scope)
+### Iteration 1
+- Scope, the lead's: C1 and C2 in `tableFile`, P1 to P5 in the prompts; the
+  rest of the audit is recorded as known limits (NOTES, 0.4.0). No paid run
+  here; the lead runs the live one.
+- Tests first. In `test/write.test.ts`, with the code and prompts as they
+  were: "a confirmed problem states its numbers as the fact, and the
+  analysis's words only as not measured" failed with actual
+  `- **inconsistent_values status**: Values mix case and spacing
+  (distinctValues 5, ...)`; "a problem
+  measured over another table names that table in this table's file" failed
+  with actual `- **duplicate_entity products**: same columns and values
+  (total 80, matched 70, sharedColumns 5, overlap 0.875).`; the two changed
+  assertions of "a table file carries the measured numbers, ..." failed; the
+  two prompt tests failed with "write.md no longer says that a confirmed
+  heading holds confirmed claims only: ..." and "contextualize.md says the
+  database holds a hidden column's values".
+- Sabotage, each restored and compared byte for byte with its copy:
+  `const over = ""`: "a problem measured over another table ..." failed with
+  "products_legacy's file says the numbers count products' rows, not its
+  own". The old line, detail inside the bold fact: the three `tableFile`
+  tests failed, one with "the numbers are the fact, the detail only what the
+  analysis read". Each new prompt sentence altered (ten edits: the label's
+  "no other", the confirmed heading, the open questions, the confirmed
+  suspicion, the overlap's direction, the inferred broken join, both halves
+  of the `[hidden]` rule in `write.md`, and "withheld from you only" and
+  "Never write" in `contextualize.md`): each failed a prompt test with the
+  message naming that rule.
+- A docs check failed on the first draft: T2.2's `prompt-b` pins "The queries
+  are empty when\s+the analysis was too large to send with them.", and the
+  new sentences had rewrapped that line. They now follow it, and all 99 file
+  checks pass; no check was changed.
+- `npm run verify` exits 0: 313 tests, 311 pass, the 2 live tests skipped,
+  0 fail; the package smoke test passes. `npm run acceptance`: every task
+  with checks 100/100, and T6.2 and T7.1, not built yet, 0/100 with no
+  checks, so overall 90.
+### Iteration 2: four reviews of iteration 1
+- Each finding was checked against the code, the plan, the live output and
+  `snapshot.json`, and, where it claimed a behavior, a run: the live
+  snapshot's claims and verdicts rendered through `tableFile`, and the
+  fixture queried for `products` and `products_legacy` (80 and 70 rows, all
+  70 in `products`).
+- Fixed:
+  - The label `Inferred, not measured: <detail>` (plan 7, quality 1,
+    correctness 1). Everywhere else in `context/tables/`, what follows
+    `not measured: ` is the reason nothing was measured, and the skill tells
+    an agent that anything "not measured" is unverified; the live `cars`
+    line rendered as `**dead_table**: count 0, exact 1. Inferred, not
+    measured: Table is empty ...`. Now `<detail> (inferred)`, the form of the
+    purpose line in the same function.
+  - Bare numbers in the first table's file (correctness 2): the live
+    `products.md` line names `products_legacy` alone above "total 80". Every
+    suspicion over more than one table now names the table measured over in
+    each of its files (`s.tables.length > 1`, which no longer needs `mine`).
+  - Prompt A's polymorphic rule said the reference "cannot be tested",
+    against the new ban (plan 1, quality 2, correctness 4, prompt 2). It now
+    says that no condition on a column without a "values" list is measured,
+    which is what `verify` does. The ban names hiding as the reason, since a
+    condition on a column that is not categorical is truly not measured, and
+    forbids calling a column hidden too (correctness 3, prompt 1: the live
+    detail "entity_id values are hidden which limits verification" passed
+    the first wording). Both prompts use the same words (quality 6); "every
+    measurement reads them" is now "the measurements read them" (plan 1);
+    the ban follows the "years" sentence, so it no longer splits the
+    paragraph (quality 7); write.md's rule speaks of a note, detail or reason
+    that calls a column hidden, since `Verified` holds no "[hidden]" cell
+    (quality 6).
+  - P5's premise (plan 2, correctness 5, prompt 3): "the analysis gives
+    every declared foreign key basis "stated"" is an instruction to prompt
+    A, not a guarantee (T2.2 in NOTES; `worthWeighing` asks `declares`).
+    Prompt B is now told to say that the analysis found no declared foreign
+    key for the join, and the clause is gone.
+  - write.md's numbers (plan 7, quality 4, prompt 4): the overlap's
+    direction is a rule in the rules list; the description names
+    sharedColumns and comes before "The queries are empty ...", with a
+    sentence on inconsistent_values' numbers, which cannot tell case from
+    spacing, without which "say what the numbers show" allowed
+    "casing/spacing".
+  - The Produce item's second "(inferred)" (quality 5, first half).
+  - NOTES: the ENTITIES known limit blamed prompt A, but the live snapshot
+    has `order_totals` in Customer's `referencedIn` (plan 3); "a tenth" was
+    an eighth, 10 of 80 (plan 4, correctness 6); the label, the numbers and
+    P5 follow the code (correctness 7).
+  - CHANGELOG stated what the model does as fact; it now says what the
+    model is told, as the file does elsewhere (plan 5, quality 3).
+  - The C1 test repeated an assertion of "a table file carries ..." with
+    another detail (plan 6, quality 8): removed. The prompt reader moved to
+    the top of the file, each test reads a prompt once, and the first prompt
+    test's name covers the broken-join rule (quality 9). This section gained
+    iteration headings (quality 10; the section after T6.1 has none, but two
+    iterations need them).
+- Rejected:
+  - Quality 5, second half: the broken-join rule keeps "label it
+    "(inferred)"": the lead's P5 asks for it, and the live README left the
+    label out with the general rule alone.
+  - Prompt 4, `dead_table`'s numbers: nothing false in the live run came
+    from them, so outside the lead's scope.
+  - Prompt 5, a join with alsoFits above 0 under a heading that says fact:
+    "State a relationship as fact only if it is confirmed and its alsoFits,
+    if any, is 0" already forbids it; the P1 sentence only narrows what may
+    go under a confirmed heading, and the live run kept those joins apart.
+  - Correctness 5 and prompt 3, setting a claim's basis from `declares` in
+    code: it changes what every claim and the snapshot carry, which is
+    outside the lead's scope; recorded under Not done in NOTES.
+- Tests first. With iteration 1's code and prompts, "a table file carries
+  ..." failed with "the numbers are the fact, the detail only what the
+  analysis read"; "a problem over two tables ..." failed with actual
+  `... (measured over products). Inferred, not measured: same columns and
+  values`; the prompt tests failed with "write.md no longer says that
+  unverifiable suspicions go with the open questions: ..." and
+  "contextualize.md says the database holds a hidden column's values".
+- Sabotage, each file restored and checked with `git hash-object` against
+  its blob before: `const over = ""` failed "a problem over two tables ..."
+  with "products_legacy's file says the numbers count products' rows, not
+  its own"; iteration 1's `!mine(s.tables[0]!)` failed it with "products'
+  file says it too, since its line names products_legacy alone"; the
+  `Inferred, not measured:` label failed "a table file carries ..." with
+  "the numbers are the fact, the detail only what the analysis read"; each
+  of eight prompt edits (the polymorphic rule's old words, the old ban,
+  P5's old sentence, sharedColumns, "cannot tell case from spacing", the
+  overlap rule, "only" in the hidden rule, the open questions) failed a
+  prompt test with the message naming that rule. A first run of the
+  script copied each file into a scratch directory that already had the
+  backup's name, so nothing was restored; the three files were rebuilt by
+  hand, matched their blobs from before (`710c63d`, `fcc2c7c`, `d2c1fef`),
+  and the sabotage was run again.
+- `npm run verify` exits 0: 312 tests (the repeated C1 test is gone), 310
+  pass, the 2 live tests skipped, 0 fail; the package smoke test passes.
+  `npm run acceptance`: every task with checks 100/100, T6.2 and T7.1 0/100
+  with no checks, overall 90, as before.
+### Iteration 3: the lead's words for P1 and P3
+- The tree was checked again against the lead's scope, the live output and
+  the fixture. Two prompt rules fell short of the scope's words; the rest
+  (C1, C2, P2, P4, P5) stays as iteration 2 left it, and P5's premise holds:
+  prompt B gets each relationship's `basis` as prompt A gave it, and
+  `TableFacts` carries no declared key.
+  - P3 says neither prompt may let the model say a column cannot be
+    inspected, tested or verified. Iteration 2's ban covered only hiding
+    given as the reason, so the live note with its reason cut, "entity_id
+    cannot be tested directly", passed it. Both prompts now say, in the same
+    words, "never write that a column cannot be inspected, tested or
+    verified". What is truly not measured is a claim, not a column, and the
+    ban leaves that sayable. The rest of that paragraph of
+    `contextualize.md` is rewrapped.
+  - P1 says to tie the existing "(inferred)" rule to the section headings.
+    The heading rule was a bullet of its own; it is now that rule's own
+    sentence: "Never launder a guess into a fact: only a claim whose verdict
+    is confirmed goes under a heading that says confirmed."
+  - NOTES and CHANGELOG follow both. NOTES' `shipped_orders` known limit
+    now gives its numbers from the fixture (160 of its 200 rows match
+    `customers.id`) in place of "reads `orders.customer_id` at 80%".
+- Tests first. With iteration 2's prompts the two changed assertions failed:
+  "write.md no longer says that a confirmed heading holds confirmed claims
+  only: ..." and "contextualize.md forbids calling a column hidden, or
+  saying it cannot be inspected, tested or verified". The ban's test is now
+  "neither prompt lets the model call a column hidden, or say it cannot be
+  inspected, tested or verified: ..."; no check names it.
+- Sabotage: nineteen breaks, each file copied outside the repository and
+  compared with `cmp` before the break, restored from the copy and compared
+  with `cmp` after; `git diff` hashed the same before and after. Each failed
+  `test/write.test.ts`:
+  - C1, the old line with the detail inside the bold fact, and C1, the
+    detail after the numbers without "(inferred)": "a table file carries
+    ..." failed with "the numbers are the fact, the detail only what the
+    analysis read" (and "a problem over two tables ..." with its own
+    message, since it compares the whole line).
+  - C2, `const over = ""`: "a problem over two tables ..." failed with
+    "products_legacy's file says the numbers count products' rows, not its
+    own"; C2, named only in the second table's file: the same test failed
+    with "products' file says it too, since its line names products_legacy
+    alone".
+  - P1 (the heading sentence, "in that word and no other", the open
+    questions), P2 (the confirmed-suspicion rule, "which cannot tell case
+    from spacing"), P4 (the duplicate_entity numbers, the overlap's
+    direction) and P5 (the inferred broken join) each failed "prompt B
+    files a suspicion by its verdict, ..." with "write.md no longer says
+    that <that rule>: <its sentence>".
+  - P3, in each prompt: what a hidden column means deleted, the ban
+    deleted, the ban narrowed back to hiding given as the reason, and in
+    `contextualize.md` the polymorphic rule's "cannot be tested" put back:
+    each failed "neither prompt lets the model call a column hidden, ..."
+    with the message naming that prompt and that rule.
+- All 99 file checks in `acceptance/checks.json` pass.
+- `npm run verify` exits 0: 312 tests, 310 pass, the 2 live tests skipped,
+  0 fail; the package smoke test passes.
+### Iteration 4: what the three runs after iteration 3 got wrong
+- Scope, the lead's: after iteration 3 (committed as `48acbe2`) the lead ran
+  three live runs, r2a, r2b and r2c, and audited them. Two statements were
+  false, both in r2c's README, and they are this iteration. F1: "87.5% of
+  products_legacy's sampled rows (70/80... actually measured as matched 70
+  of total 80 on products) also appear in products_legacy", the share of
+  `products`' rows given as `products_legacy`'s. F2: "order_totals is dead:
+  ... reading it returns nothing", where reading it raises an error. The
+  rest of the re-audit is recorded as known limits in NOTES. No paid run
+  here; the lead runs the live one.
+- F1, the design: the table is named in the data, beside the numbers, not
+  left to the order of the suspicion's `tables`. `verify` gives a
+  measurement `over`, the first table the suspicion names, when it names
+  more than one and a measurement was taken; `decide` copies it into the
+  verdict's `measurement`; `SnapshotSchema` keeps it, optional, so a
+  snapshot without it parses, and `check` reads only a verdict's status and
+  hit rate; `tableFile`'s "(measured over <table>)" reads it, the one
+  source; prompt B is told that such numbers are over the table named in
+  "over" and to give the overlap as a share of that table's rows, by name.
+  Every kind gets it, not `duplicate_entity` alone: r2b's `missing_key` over
+  `order_totals` and `shipped_orders` was looked up on `order_totals` only.
+- F2, the design: `measureDeadTable` gives a materialized view never
+  refreshed `{ populated: 0 }`, no count; `decide` confirms `populated` 0 as
+  dead in its own right; `TableFacts` carries `populated`, so its file says
+  "never refreshed (reading it raises an error)" where it said "no rows",
+  which came from the row estimate of 0 `extract` gives it; prompt B is told
+  what `populated` false and 0 mean, and never to say such a view has no
+  rows or returns nothing.
+- Tests first. With iteration 3's code and prompts: in `verdict.test.ts`,
+  "dead_table: a materialized view never refreshed is dead on the schema's
+  word alone, ..." failed with "populated 0 proves it dead: ..." (actual
+  `unverifiable`), and "a verdict names the table its numbers were measured
+  over ..." with "the writer is told by name whose rows the overlap is a
+  share of"; in `verify.test.ts`, "a dead materialized view that was never
+  refreshed is not counted: ..." with "no count of 0 and no exact: no row
+  was counted" (actual `{ count: 0, exact: 1, populated: 0 }`), and "a
+  suspicion measured over one of the tables it names says which, ..." with
+  "the overlap is a share of products' rows, and the measurement says so by
+  name"; in `write.test.ts`, "a materialized view never refreshed says that
+  reading it raises an error, ..." with "its size is what the schema says,
+  ..." (actual `materialized view, no rows`), the prompt test with
+  "write.md no longer says that a suspicion over more than one table is
+  measured over the table named in over: ...", and "prompt B says that a
+  materialized view never refreshed raises an error when read, ..." with
+  "write.md names populated among the per-relation facts"; in
+  `snapshot.test.ts`, "the table a verdict's numbers were measured over
+  survives serialize and parse, ..." with "the snapshot keeps whose rows
+  the overlap is a share of"; in `integration.test.ts`, "the whole loop on
+  the fixture, ..." with "what the catalog says, and no count: reading it
+  raises an error". The new test in `remeasure.test.ts`, a snapshot with the
+  old numbers and no `over` checked "12 unchanged", passed before too: it
+  guards compatibility and changes no behavior.
+- Changed tests, each named in NOTES: the duplicate test of `write.test.ts`
+  gives its verdict `over: "products"`, since the file now reads it there,
+  with its assertions unchanged; the prompt test's two sentences on a
+  `duplicate_entity` are replaced by three; `integration.test.ts` asserts
+  `order_totals`' numbers whole and its file's line as it now reads.
+- Sabotage: sixteen breaks in seventeen runs, since the `SnapshotSchema`
+  break ran against the unit tests and again against `remeasure.test.ts`.
+  Each file was copied into `sabotage2-over-populated` in the scratchpad, a
+  new directory, compared byte for byte before the break and after its
+  restore, and the hash of `git diff` was the same before and after. The
+  output of the first two scrolled off, so they were run again with the
+  copies in a second new directory, `sabotage2-over-first-two`. Each
+  failed:
+  - F1 in `verify`: no `over`, "a suspicion measured over one of the tables
+    it names ..." with "the overlap is a share of products' rows, and the
+    measurement says so by name"; `over` on an unmeasured suspicion too, the
+    same test with "nothing was measured, so over no table"; `over` on a
+    suspicion over one table too, the same test with "a suspicion that
+    names one table needs no name beside its numbers".
+  - F1 in `decide`, `over` not copied: "a verdict names the table ..." with
+    "the writer is told by name whose rows the overlap is a share of".
+  - F1 in `SnapshotSchema`, `over` dropped on parse: "the table a verdict's
+    numbers were measured over survives ..." with "the snapshot keeps whose
+    rows the overlap is a share of"; run against `remeasure.test.ts`, "an
+    unchanged database passes ..." and "check --json prints the report
+    alone ..." failed their deep equality.
+  - F1 in `tableFile`, `over` ignored: "a problem over two tables names the
+    one ..." with "products_legacy's file says the numbers count products'
+    rows, not its own".
+  - F2 in `verify`, the old count back: "a dead materialized view that was
+    never refreshed is not counted: ..." with "no count of 0 and no exact:
+    no row was counted".
+  - F2 in `decide`, no rule for `populated` 0: "dead_table: a materialized
+    view never refreshed is dead ..." with "populated 0 proves it dead:
+    ...", and the verify test's status assertion.
+  - F2 in `tableFile`, "no rows" back: "a materialized view never refreshed
+    says that reading it raises an error, ..." with "its size is what the
+    schema says, and no count of rows that were never read".
+  - F2 in `assemble`, `populated` not copied: "the whole loop on the
+    fixture, ..." with "and that the materialized view was never
+    refreshed".
+  - Prompt B, six edits (the `over` sentence, `total`'s words, the overlap
+    rule, what `populated` means, "Never say it has no rows", `populated`
+    among the facts): each failed a prompt test with the message naming
+    that rule.
+- Checked by hand: the canned fixture run renders `order_totals.md` as
+  "materialized view, never refreshed (reading it raises an error), primary
+  key: none" and "**dead_table**: populated 0.", both product files end
+  their duplicate line "(measured over products)", and the snapshot's
+  duplicate verdict holds `"over": "products"`. r2c's own snapshot, copied
+  into a new scratch directory with no `.env`, checks "13 unchanged"
+  against the fixture with this code.
+- `npm run acceptance`: every task with checks 100/100, T6.2 and T7.1 0/100
+  with no checks, overall 90, as before; no check fails, and all 99 file
+  checks pass against the final text.
+- `npm run verify` exits 0: 320 tests (eight new), 318 pass, the 2 live
+  tests skipped, 0 fail; the package smoke test passes.
+### Iteration 5: four reviews of iteration 4
+- Each finding was checked against the code, the plan, the sabotage script
+  and, where it claimed a behavior, the tests. No sabotage in this
+  iteration, at the lead's instruction.
+- Fixed:
+  - `over` was left off a suspicion skipped with numbers (correctness 1,
+    design 2, plan 6, quality 4): a duplicate whose first table's sample
+    held no rows keeps `{ total: 0, matched: 0, sharedColumns }`, and an
+    `inconsistent_values` that is not categorical keeps its counts, so
+    prompt B was sent numbers over two tables with no name beside them.
+    `verify` now sets `over` when the suspicion names more than one table
+    and there are numbers, which is what its comment already said; the
+    type's comment and NOTES follow.
+  - Prompt B (design 1, plan 2 and 3, quality 2): the sentence on
+    `populated` came before the facts that carry it, and its "Never" sat in
+    the description, not the rules. The sentence now follows the
+    per-relation facts and says that such a view's row estimate of 0 is not
+    a count, since prompt B is still sent that 0; the ban is a rule of its
+    own; the rule on "empty", which the audit named as a likely source of
+    "returns nothing", says such a view cannot be read; "the table in
+    "over"" reads "the table named in "over"", as elsewhere.
+  - The table file's one source was not guarded (correctness 3): the
+    duplicate test also gives a verdict whose `over` is the other table and
+    asserts that the file names that one. Iteration 3's `s.tables[0]` would
+    print `products` there; not run, since this iteration breaks nothing.
+  - CHANGELOG (plan 4, quality 1, design 3): the round-1 line gave the
+    overlap as a share of the first table's rows, and the new line said it
+    again by name. The `over` line is folded into the round-1 line, by
+    name, and the F2 line says that `--json` gives every materialized
+    view's `populated` in `tables`.
+  - README "How it works" (plan 4, quality 3, design 4): the overlap is "the
+    share of one table's sampled rows also in the other; the verdict names
+    that table in `over`", and a dead table is judged by "count, newest
+    timestamp, or whether a materialized view was ever refreshed".
+  - NOTES: the runs are named r2a, r2b and r2c (plan 5); a line cut short
+    mid-paragraph is rewrapped (quality 6); the prompt text, the tests and
+    the three-table case below are recorded.
+  - The write test's verdict is one literal, from a function of its `over`
+    (quality 5), since the guard above needs a second one.
+  - Iteration 4 said "seventeen breaks" and listed sixteen (plan 1): the
+    `SnapshotSchema` break ran twice, against the unit tests and against
+    `remeasure.test.ts`, as `sabotage2-over-populated.mjs` shows. It now
+    says sixteen breaks in seventeen runs.
+- Rejected:
+  - Correctness 2, a `duplicate_entity` that names three tables: it is
+    measured over its first two, as before this round, and prompt A is told
+    that a duplicate is two tables. Skipping it changes a verdict outside
+    the lead's scope, and naming the second table by position in prompt B
+    brings back the wording F1 removed. Recorded under Not done in NOTES.
+- Tests first. With iteration 4's code and prompts, "a suspicion that names
+  more than one table says which one its numbers are over, even from a
+  sample that held no rows, ..." failed with "an empty sample still has
+  numbers, total 0 of drafts' rows, and they say whose" (actual
+  `undefined`); the prompt tests failed with "write.md no longer says that
+  a duplicate_entity's total counts the rows of the table named in over:
+  ..." and "write.md says what populated false and populated 0 mean, and
+  what the row estimate of such a view is, once it has named populated
+  among the facts". The new assertion in the duplicate test passed before,
+  since it guards what iteration 4 already did.
+- `npm run acceptance`: every task with checks 100/100, T6.2 and T7.1 0/100
+  with no checks, overall 90, as before; no check fails.
+- `npm run verify` exits 0: 320 tests, 318 pass, the 2 live tests skipped,
+  0 fail; the package smoke test passes.
+### Iteration 6: the sabotage check of iterations 4 and 5
+- Scope, the lead's: no change to the design or to the prompts' wording;
+  break each part of F1 and F2 in place, and add a test only where a break
+  survives.
+- `sabotage2-final.mjs` copied the five changed files into
+  `sabotage2-final`, a new directory in the scratchpad, applied each break,
+  ran the tests named below, put the file back from its copy and compared
+  it byte for byte, and `cmp` compared all five at the end; the hash of
+  `git diff` was the same before and after. One run's output overflowed
+  the buffer of `spawnSync` and three messages were missed by its TAP
+  parser, so those breaks and one probe ran again from copies in a second
+  new directory, `sabotage2-final-rerun`, with the raw TAP kept. Before its
+  dry-run guard worked, the script wrote its first break into
+  `src/verify.ts` and stopped before any test ran; the line was put back by
+  hand, and the hash of `git diff` matched the one before.
+- Each break failed at least one test (the unit files `verdict`, `verify`,
+  `write` and `snapshot`, with `integration` and `remeasure` for every code
+  break but three of `verify`'s):
+  - F1 in `verify`: no `over`, and `over` naming the second table, both "a
+    suspicion that names more than one table says which one ..." with "the
+    overlap is a share of products' rows, and the measurement says so by
+    name", and "the whole loop on the fixture, ..." with "the writer is
+    told by name whose rows the overlap is a share of"; `over` on a
+    suspicion over one table, "a suspicion that names one table needs no
+    name beside its numbers"; on one with no numbers, "nothing was measured,
+    so over no table"; iteration 4's `m.skipped === undefined` back, "an
+    empty sample still has numbers, total 0 of drafts' rows, and they say
+    whose".
+  - F1 in `decide`, `over` not copied: "a verdict names the table ..." and
+    the whole loop, both with "the writer is told by name whose rows the
+    overlap is a share of".
+  - F1 in `SnapshotSchema`, `over` dropped on parse: "the table a verdict's
+    numbers were measured over survives ..." with "the snapshot keeps whose
+    rows the overlap is a share of"; "an unchanged database passes ..." and
+    "check --json prints the report alone ..." failed their deep equality.
+  - F1 in `tableFile`: no table named, "a problem over two tables names the
+    one ..." with "products_legacy's file says the numbers count products'
+    rows, not its own"; the table taken from the order of the names again,
+    the same test with "the table comes from the verdict, as prompt B is
+    sent it, and not from the order of the suspicion's names".
+  - F2 in `verify`: the count back beside `populated`, and a count in its
+    place, both "a dead materialized view that was never refreshed is not
+    counted: ..." with "no count of 0 and no exact: no row was counted",
+    and the whole loop with "what the catalog says, and no count: reading
+    it raises an error".
+  - F2 in `decide`, `populated` ignored: "dead_table: a materialized view
+    never refreshed is dead ..." with "populated 0 proves it dead: ...",
+    the verify test's status assertion, the whole loop with "an
+    unpopulated materialized view is dead, from the catalog", and "claims
+    the budget leaves unmeasured never fail" (10 claims not measured where
+    it expects 11, since the view's verdict was unverifiable both times).
+  - F2 in `assemble`, `populated` not copied: the whole loop with "and that
+    the materialized view was never refreshed".
+  - F2 in `tableFile`, "no rows" back: "a materialized view never refreshed
+    says that reading it raises an error, ..." with "its size is what the
+    schema says, and no count of rows that were never read", and the whole
+    loop with "not "no rows": a read raises an error".
+  - Prompt B, seven deletions (the `over` sentence, the `duplicate_entity`
+    numbers, the overlap rule, `populated` among the facts, what
+    `populated` false and 0 mean, "which cannot be read" in the rule on
+    "empty", the rule never to say such a view has no rows): each failed a
+    prompt test with the message naming that sentence.
+- Survived, a probe outside the lines this round changed: `fitForWriter`
+  rebuilding a verdict's measurement as `{ query: "", numbers }` when it
+  leaves the queries out drops `over`, so prompt B over its input limit
+  would get the numbers with no name beside them; `write.test.ts` and the
+  whole loop stayed green. New test in `write.test.ts`, "prompt B sent the
+  verdicts without their queries is still told the table a verdict's
+  numbers were measured over": it passes on this code and failed under that
+  probe with "only the query goes: the overlap still names whose rows it is
+  a share of", from a copy in a third new directory,
+  `sabotage2-final-probe`, put back and compared the same way. NOTES lists
+  it with the round's tests.
+- `npm run verify` exits 0: 321 tests (one new), 319 pass, the 2 live tests
+  skipped, 0 fail; the package smoke test passes.
+### Iteration 7: what a run on Pagila and three more fixture runs got wrong
+- Scope, the lead's: after `b14edf9` the lead ran the fixture three times
+  more, r3a, r3b and r3c, and dbtruth once on Pagila, and audited all four.
+  One last round removes the systematic causes, then the release: R1 a
+  duplicate between two views decided by their definitions, R2 each
+  relation's comment sent to prompt B, R3 two prompt B rules, R4 one prompt
+  A sentence, R5 a README paragraph, R6 NOTES, CHANGELOG and this
+  iteration. Out of scope: a suspicion kind for redundant columns, grain
+  wording, the quoting of integer categorical values, the relations string
+  and ENTITIES placement. The rest is recorded as known limits in NOTES,
+  in one list for the three rounds. No paid run here; the lead runs them.
+- R1, the design: in `measureDuplicateEntity`, when both relations are views
+  or materialized views, and before the shared columns and
+  `nothingToMeasure`, one statement asks the catalog whether
+  `pg_get_viewdef` gives both the same definition, which it answers for a
+  materialized view never refreshed. The names are `qualified()`'s, bound
+  as `$1` and `$2`, never SQL text (R8); the query kept ends with a note
+  that gives them, as a branch's does (R7). The number is `sameDefinition`,
+  1 or 0, with `over` as every suspicion over two tables that has numbers;
+  `decide` confirms on 1 and rejects on 0, so no table file lists a wrong
+  pair, and prompt B is told to leave it out. A pair with a table in it is
+  measured by its rows, as before. Prompt B is told what `sameDefinition`
+  means.
+- R2, the design: `TableFacts` carries `comment`, which `assemble` copies
+  only when the relation has one; prompt B is told it among the
+  per-relation facts, and a rule gives a comment to the relation whose
+  facts carry it. R3 of the plan holds: prompt A was sent every comment
+  `Verified.tables` holds, since both come from the extract `fitToContext`
+  returns; the comment reaches `--json` too, and no other output.
+- Tests first. With `b14edf9`'s code and prompts: in `verdict.test.ts`,
+  "duplicate_entity: two views with the same definition are confirmed, and
+  with different ones rejected" failed with "the same query holds the same
+  rows, read or not" (actual `unverifiable`), and "assemble gives the writer
+  a relation's comment with that relation's facts, ..." with "the comment is
+  on vehicles, so it goes with vehicles' facts" (actual `undefined`); in
+  `verify.test.ts`, "a duplicate between two views is measured by comparing
+  their definitions in the catalog, ..." with "the definitions, which the
+  catalog holds even for a materialized view no one can read, and no rows"
+  (actual `[{}, {}]`); in `write.test.ts`, the four prompt tests with
+  "write.md says what sameDefinition means, right after a duplicate_entity's
+  other numbers", "write.md names the comment among the per-relation
+  facts", "write.md labels the analysis's causes and reasons (inferred)"
+  and "contextualize.md ties a duplicate's tables to its detail"; in
+  `integration.test.ts`, "the whole loop on the fixture, ..." with "and the
+  comment on vehicles, with vehicles' facts, where cars has none", and "two
+  views are one relation when the catalog gives them the same definition,
+  ..." with "compared in the catalog, which Postgres answers although
+  order_totals cannot be read" (actual `['empty', {}]`). "A duplicate
+  between a table and a view is still measured by its rows, ..." passed
+  before, since it guards what this round leaves as it was.
+- Sabotage: fifteen breaks, from `sabotage3-round3.mjs` in the scratchpad.
+  It copied the four changed files into `sabotage3-round3`, a new
+  directory, applied each break, ran the unit files `verdict`, `verify` and
+  `write`, and for five breaks the whole loop and the new integration test
+  as well, put the file back from its copy and compared it byte for byte;
+  `cmp` compared all four at the end, and the hash of `git diff` was
+  `7a5814a5...` before and after. The raw TAP of each run is in
+  `sabotage3-round3/tap`. Then `measureDuplicateEntity`'s `sql` was renamed
+  `statement`, as `measureRelationship` names the statement run, and two
+  comments were reworded, so `sabotage3-final.mjs` ran the same fifteen
+  breaks on the final text from copies in `sabotage3-final`, another new
+  directory; `git diff` hashed `ce4eb2d0...` before and after, and every
+  break failed the same tests with the same messages. Each break failed at
+  least one test:
+  - R1 in `verify`: no comparison, and the comparison after the empty
+    check, both "a duplicate between two views ..." with "the definitions,
+    which the catalog holds even for a materialized view no one can read,
+    and no rows", and the integration test with "compared in the catalog,
+    which Postgres answers although order_totals cannot be read"; a table
+    beside a view compared by definition too, "a duplicate between a table
+    and a view is still measured by its rows, ..." with the fake database's
+    "nothing here should be queried", since the pair beside the materialized
+    view then ran a statement; the names written into the SQL text, "the
+    statement run holds no name" (the integration test passed, as it
+    should: Postgres reads either form); no note, "the query kept ends with
+    the note that gives $1 and $2, so that a person can rerun it".
+  - R1 in `decide`: `sameDefinition` ignored, "duplicate_entity: two views
+    with the same definition ..." with "the same query holds the same rows,
+    read or not", the verify test with "the same definition confirms the
+    pair, and a different one rejects it, so a wrong pair never appears",
+    and the integration test; read the wrong way round, the first two.
+  - R2 in `assemble`: no comment, "assemble gives the writer a relation's
+    comment ..." with "the comment is on vehicles, so it goes with
+    vehicles' facts", and the whole loop with "and the comment on vehicles,
+    with vehicles' facts, where cars has none"; a comment key on every
+    relation, "cars has none, and its facts carry no comment key".
+  - The prompts, six deletions (what `sameDefinition` means, the comment
+    among the facts, the comment rule, the cause or reason, the claim's
+    scope, prompt A's duplicate sentence): each failed a prompt test with
+    the message naming that sentence.
+- Checked by hand, read-only in psql on Pagila: the statement gives 1 for
+  `rental_by_category` and `sales_by_film_category`, 0 for
+  `rental_by_category` and `sales_by_store`.
+- All 99 file checks in `acceptance/checks.json` pass against the final
+  text; none was changed.
+- `npm run verify` exits 0: 330 tests (nine new), 328 pass, the 2 live tests
+  skipped, 0 fail; the package smoke test passes.
+- Four reviews of the working tree (plan, quality, correctness, design).
+  Each finding was checked against the code, the scope and, where it
+  claimed behavior, a run; no sabotage in this stage. Fixed:
+  - The rule on "(inferred)" said "any cause or reason the analysis
+    gives". Every relationship and entity prompt B receives carries a
+    `reason`, and Pagila's 18 stated relationships all give "Declared
+    foreign key", so it told prompt B to label declared joins "(inferred)",
+    against the rule that states a confirmed one as fact (all four
+    reviews). It now names the cause alone. The pinned sentence in
+    `write.test.ts` changed first, with the message "write.md labels a
+    cause the analysis gives (inferred), and not every reason, since a
+    declared foreign key's is a fact", and failed on the old prompt.
+  - No test held the comparison before the shared columns: moved after
+    them, every test passed, and two views with no column name in common
+    were left unverifiable (quality, correctness). And it ran through
+    `db.query`, inside the budget, so joins that spent it left the pair
+    unverifiable, printed in both table files (design). The new test in
+    `verify.test.ts`, "two views are compared by their definitions
+    whatever would stop a comparison of rows: ...", fails on `b14edf9`'s
+    code, run from a copy in `review3-head-check`, a new scratchpad
+    directory, with "asked before the shared columns, so a wrong pair is
+    rejected, not left unverifiable for want of one", and on this round's
+    code before the change with "read from the catalog outside the budget,
+    as the extract is, since it reads no rows". The statement now runs
+    through `db.catalog`, which the `Db` type keeps for catalog reads that
+    describe the schema; the fake database answers one from its script.
+  - The integration test's "a rejected pair appears in neither table's
+    file" read only `shipped_orders.md`. It reads `order_totals.md` too,
+    through a `tableFile` helper shaped as the whole loop's is.
+  - Wording. CHANGELOG and the R1 bullet above said "a wrong pair appears
+    in no file", but the rejected verdict is in the snapshot and in
+    `--json`; CHANGELOG's "restate a suspicion" and "can misstate it";
+    README's "of two views" without materialized views. In NOTES: "six
+    such tables", where all 15 of Pagila's purposes are "stated" and six
+    tables have notes; the unlabelled notes, now marked as recurring; the
+    runs with "(unverifiable)", which is every run's README, flagged in
+    r1, r3a, r3b, r3c and Pagila; "Seen once" on two items; and Pagila's
+    relations, which read as four kinds.
+- Rejected, with the reason:
+  - Reading the rows when two readable views' definitions differ
+    (correctness, design): the scope says definitions, not rows, and
+    rejected when they differ. NOTES records it as a known limit, with the
+    cases: a materialized view that caches a view, and one query written
+    differently.
+  - Deciding from the definitions the extract holds (design): the verdict
+    would carry a statement dbtruth never ran, and prompt B is told that
+    each query is the one run. `db.catalog` removes the budget's cost.
+  - Looking the definitions up by schema and name, for a role without
+    USAGE on the view's schema (correctness): not a regression, since
+    that role could not read the rows either, and the verdict is
+    unverifiable with Postgres's message. NOTES names it under not done.
+  - "measured over" beside `sameDefinition` (correctness): the scope asks
+    for `over` as round 2 gives it.
+  - An assertion that the table-and-view test runs one statement (plan):
+    under the break it would guard, the fake database throws "nothing here
+    should be queried" before the assertion is reached.
+  - The previous stage's scripts and logs in the scratchpad root
+    (quality): they are not backups, which are in new directories, and
+    moving them would break the paths this iteration cites.
+- All 99 file checks in `acceptance/checks.json` pass. `npm run verify`
+  exits 0: 331 tests (one new), 329 pass, the 2 live tests skipped, 0
+  fail; the package smoke test passes.
+- Sabotage (the sabotage stage, after the reviews' fixes): 18 breaks of R1
+  to R5, each failing a named test with its message: R1 compared by rows
+  again, different definitions confirmed, a never-refreshed view left to
+  short-circuit to empty, "over" dropped; R2's comment dropped from prompt
+  B's facts; every new prompt sentence deleted; the README paragraph
+  deleted. The README paragraph and its "How it works" clause first left
+  every test green; two tests were added to `test/readme.test.ts`, and the
+  repeated breaks failed them. Every file was restored byte for byte, and
+  the `git diff` hash was the same before and after each run (logs in the
+  scratchpad, `sabotage3-stage-*`). `npm run verify`: 333 tests, 331 pass,
+  the 2 live tests skipped, 0 fail; the package smoke test passes.
+
+## T7.1 Releases
+### Iteration 1: 77/100
+- Scope, the maintainer's: one release, 0.4.0, carries what the plan split
+  into 0.2.0, 0.3.0 and 0.4.0; 0.2.0 and 0.3.0 are never published. This
+  iteration does the checklist's steps that need no person and no API key.
+  No model was called; nothing was published, tagged, pushed or committed.
+  Backups and scripts are in `sabotage-release-t71`, a new scratchpad
+  directory.
+- Step 1, done here; CI left for the lead: `npm run verify` exits 0, 333
+  tests, 331 pass, the 2 live tests skipped, 0 fail, and the package smoke
+  test passes on `dbtruth-0.4.0.tgz` (the installed `--version` prints
+  0.4.0, `doctor` 8 checks with none failing, `mcp` measures
+  orders.customer_id -> customers.id as broken, `init --skill` writes the
+  skill byte for byte). CI's matrix runs once the release commit is pushed:
+  manual item A6-tag.
+- Step 2, done: `npm run acceptance` gives 100 to every task but T6.2, 0
+  with no checks (it waits for the paid tier), and T7.1, 77 (below);
+  overall 93 over 20 tasks.
+- Step 3, done: `npm pack --dry-run` lists `dbtruth-0.4.0.tgz`, 20 files,
+  79,434 bytes: 14 in `dist/`, 2 in `dist/prompts/`,
+  `skills/dbtruth/SKILL.md`, `README.md`, `LICENSE` and `package.json`,
+  nothing from `src/`, `test/` or `context/`. The smoke test's lines in
+  `npm run verify` say the same of the tarball it installs.
+- Step 4, done: the 0.4.0 headings of CHANGELOG.md and NOTES.md carry
+  2026-09-26, the 0.3.0 and 0.2.0 headings read "(not published: shipped
+  in 0.4.0)", and each 0.4.0 section opens with the line that it carries
+  the other two. CHANGELOG.md's first line said "Releases from 0.2.0 on";
+  it says "Changes since 0.1.8". In `acceptance/checks.json`, 37 checks
+  pinned "(unreleased)" headings before and none after: 37 changed, 48
+  headings in them (28 of 0.2.0, 16 of 0.3.0, 4 of 0.4.0), each replaced
+  by the new heading escaped as the old one was, by a script over the file's
+  text; `git diff --word-diff` shows the headings alone, and all 99 file
+  checks pass. NOTES.md, 0.4.0: "The release", and round 4's nine standing
+  findings in the known limits of the round-3 entry, now rounds 1 to 4, in
+  five causes, each with its runs.
+- Step 5, done from the lead's run r4c: the README's fixture output is
+  r4c's `stderr.txt` and `context/README.md`, whole; both blocks, read
+  back from README.md with its CRLF folded, equal the files byte for byte.
+  `stderr.txt` begins with `reading settings from ..\.env`, not with the
+  Sending to line, and is pasted whole. The lead-in: 36 seconds
+  (`stdout.txt` created at 20:22:25.49, `stderr.txt` last written at
+  20:23:01.36), exit 2, 14 files, the fixture's list as it was, and that
+  the run is one of four made for this release, with NOTES recording what
+  the model got wrong in the others. The troubleshooting row on commands an
+  older dbtruth lacks names 0.1.8 and 0.4.0; no other 0.2.0 or 0.3.0 is in
+  README.md or `skills/dbtruth/SKILL.md`. `docs/demo.gif`: scenes 2 and 3
+  take r4c's lines (stderr lines 2 to 14, and `context/README.md` lines 1
+  to 6, long lines wrapped on screen). The psql part, checked read-only as
+  `reader` on the fixture: 440 with the inner join, 500 with the left
+  join, 60 in `unknown`, AT 108, CZ 110, DE 110, SK 112. Without ORDER BY,
+  psql printed the rows as CZ, SK, DE, AT (unknown second), not in the
+  GIF's order, so both queries gain `ORDER BY 1`, whose output is the
+  GIF's lines. `python scripts/render-demo.py`: 116 frames, 19.8 s, 209
+  KB (it was 190 KB); neither README nor NOTES promises a size. The
+  docstring names no version and is unchanged.
+- Step 6: the version is done, the tag and the release notes are the
+  lead's (A6-tag). `npm version 0.4.0 --no-git-tag-version` rewrote
+  `package.json` and `package-lock.json` with CRLF line ends, so both were
+  put back and their three version lines set to 0.4.0 by hand.
+- Step 7, left for a person: `npm publish` (A7).
+- Step 8, left for a person (A8). Rehearsed on the build: `node
+  dist/cli.js --version` prints 0.4.0, and `check --url` as `reader` on
+  the fixture, in an empty scratch directory holding r4c's
+  `snapshot.json`, with no API key, prints "check fixture: 12 unchanged",
+  nothing on stdout, and exits 0.
+- Step 9, evidence written (A9): pagila2 and the final audit, 309
+  statements, four standing, one of them false, a known limit by the
+  maintainer's decision.
+- dbtruth-action: `action.yml` defaults `dbtruth-version` to 0.4.0, and
+  the README's five mentions of 0.3.0 say 0.4.0 ("v1 runs dbtruth 0.4.0
+  unless ..."); `test/scripts.test.sh` passes `PACKAGE=dbtruth@0.4.0`,
+  as the step does with the default. `DBTRUTH_REF` in `test.yml` is the
+  lead's. jq is not on this machine, so `bash test/scripts.test.sh` ran in
+  the local `dbtruth-action-test` image (jq 1.6, ShellCheck 0.9.0) with
+  no network: 35 ok, exit 0; ShellCheck on the three scripts is clean.
+- New in `acceptance/checks.json` for T7.1: A3, the package's contents from
+  the smoke test's lines in `npm run verify`; A4, CHANGELOG.md's three
+  headings, the dated one first, and no "(unreleased)"; A5, the Sending to
+  and tokens lines of a live run in the README's fixture output; A6,
+  `package.json` at 0.4.0; `pack-smoke` (tests), the smoke test's seven
+  lines for 0.4.0; `verify` (gates); `notes` and `readme-versions`
+  (docs); `invariants`, the structure, canary and stdout tests in `npm run
+  verify`. In `acceptance/manual.json`: A6-tag, A7, A8 and action-v1,
+  with no evidence, A9 with it, and the sabotage record.
+- Sabotage: eleven breaks from `sabotage.mjs`, each made in place from a
+  copy, judged by T7.1's checks as `scripts/acceptance.mjs` judges them,
+  the pack checks on `npm run test:pack`'s stdout, the part of `npm run
+  verify`'s they match, restored and compared byte for byte; `git diff` hashed `31f42b2d...`
+  before and after. The version back to 0.1.8 failed A6, and A3 and
+  pack-smoke, since the smoke test then names `dbtruth-0.1.8.tgz`;
+  `skills` left out of `files` failed A3 and pack-smoke with "pack-smoke:
+  FAIL Command failed: ... init --skill"; `src` put in failed them with
+  "pack-smoke: FAIL dbtruth-0.4.0.tgz contains src/check.ts, ..."; the
+  CHANGELOG's 0.4.0 heading unreleased again failed A4 and two other
+  tasks' changelog checks, its 0.3.0 heading A4 and seven; the old run's
+  fixture output, or r4c's without its tokens line or its Sending to line,
+  failed A5; the version row of 0.2.0 and 0.3.0 failed readme-versions;
+  NOTES without The release failed notes, and with its 0.2.0 heading
+  unreleased again, notes and thirteen other tasks' notes checks. Each
+  file check fails with "<file> does not match <regex>", each command
+  check with "stdout does not match <regex>", and the smoke test with the
+  FAIL line quoted.
+- Score 77: acceptance 5 of 9 (A3 to A6 and A9 pass; A6-tag, A7, A8 and
+  action-v1 have no evidence, and `scripts/acceptance.mjs` fails a manual
+  item whose evidence is empty), 27.7 of 50; tests 20; gates 15; docs 10;
+  invariants 5. It reaches 100 when the four items get their evidence.
+### Iteration 2: three reviews of iteration 1, 77/100
+- Each finding was checked against the files it names, the live runs'
+  files under `dbtruth-live` (no `.env`), `final-audit.json`, the plan and
+  the fixture. No model was called; nothing was published, tagged, pushed
+  or committed.
+- Fixed:
+  - The Action's README gave "0.4.0 before its release" as a version npm
+    does not have (plan 2, honesty 4, correctness 1): false from the day
+    `v1` is tagged, since that waits for 0.4.0 on npm. It now names 0.3.0,
+    which was never published: four of the five mentions of 0.3.0 say
+    0.4.0, and this one names 0.3.0 as never published. In the
+    `dbtruth-action-test` image with no network: ShellCheck clean, `bash
+    test/scripts.test.sh` 35 ok and exit 0, and every message the scripts
+    print still has a row in the README.
+  - The README's lead-in said NOTES records what the model got wrong "in
+    the others" (plan 3, honesty 1), as if r4c got nothing wrong: no
+    finding stood in r4c, but the final audit matched eleven of its
+    statements to known limits, among them, in the pasted block, the
+    relations string, `api_token` "(unverifiable claim, ...)" and no word
+    of `audit_log`'s missing primary key. It now says "in each, this one
+    included", which the next fix makes true.
+  - The known limits of rounds 1 to 4 marked round 4 only where a finding
+    stood (honesty 2, plan 8), so four items said "Seen once" or gave run
+    lists that round 4 contradicts. Each of the audit's known-limit
+    matches was read in its file and put under its item: the `audit_log`
+    branches without their reason (r4a, r4b, r4c), the empty
+    `cars.customer_id` join under a confirmed heading (r4a, r4b) and
+    Pagila 2's empty `film.original_language_id` among "all examined
+    relationships resolved to confirmed matches", "(unverifiable)" (r4a,
+    r4b, r4c, and "(unverified ...)" in Pagila 2's ENTITIES.md),
+    `order_totals` under Order alone (r4a, r4c), stated purposes with
+    nothing stated (Pagila 2, and r4c's `customers`), unlabelled notes
+    (r4a's `shipped_orders`, Pagila 2's `customer` and
+    `nicer_but_slower_film_list`), `events` "timestamped" (r4a) and
+    `customer.active` (Pagila 2), now "Recurs", views without join lines
+    (Pagila 2's `customer_list` and `actor_info`), quoted values (r4a to
+    r4c, Pagila 2) and the relations string (r4b, r4c). The rest fall under
+    items marked "every fixture run", which the header now says includes
+    r4a to r4c, or name no fault: r4b's `vehicles` "Fleet vehicles owned by
+    customers" rests on its comment and its declared foreign key, and
+    Pagila 2's `film_list` grain, one row per film and category, is right
+    (the round-3 audit counted 2,360 rows and 2,367 in `film_category`).
+    The sentence plan 8 found hard to parse is gone.
+  - Step 2 and the plan's 4.2 (plan 4): NOTES' Checks now give the
+    overall 93, say that every task the release carries scores 100, that
+    T6.2 is not in it and T7.1 reaches 100 only after its steps for a
+    person, and that 4.2 releases only at 100 while this release goes
+    ahead at 93 by the maintainer's decision.
+  - A9's evidence put the first Pagila run before round 3 (plan 5,
+    honesty 3). It ran at 13:53, after r3a to r3c (13:38 to 13:40), and
+    NOTES counts it in round 3; the evidence now says so, and
+    that its findings and the fixture runs' led to `b20b201`.
+  - The T4.1 entry's "T7.1 adds a scenario on the published default"
+    (plan 1) was tracked nowhere. Such a scenario passes only once 0.4.0 is
+    on npm, so it is not written into `test.yml`, whose runs would fail
+    until then; it is now part of manual item action-v1 and of NOTES' Left
+    for a person.
+  - T2.2 left its weak-evidence note to be judged on Pagila at release, and
+    the README's fixture output to show it once regenerated (plan 6).
+    NOTES' step-9 bullet now closes both: Pagila 2's README gives the note
+    for three of its four inferred joins (`payment.customer_id` 4 other
+    keys, `payment.staff_id` 10, `store.manager_staff_id` 1) and no
+    standing finding concerns it; r4c's README gives it on `audit_log`'s
+    branches, alsoFits 3.
+  - The sabotage record said every break was judged as
+    `scripts/acceptance.mjs` judges it (plan 7); the three `package.json`
+    breaks were judged on `npm run test:pack`'s stdout, as `sabotage.mjs`
+    says. Iteration 1 and manual item sabotage now say so.
+  - The GIF's length (honesty 5). `render-demo.py` prints the sum of the
+    delays it asks for, 19.8 s over 116 frames; the file holds 101 frames
+    and plays 19.09 s, since a GIF's delays are whole hundredths, so the
+    28 ms typing frames are stored as 20 ms, and Pillow merges identical
+    frames. NOTES now says 19.1 s. The script is unchanged: its check
+    against 20 seconds reads the longer sum.
+- Rejected:
+  - Honesty 2's guess that r4a's `shipped_orders` note "implying known
+    case/whitespace inconsistency" belongs to the `inconsistent_values`
+    item: the note is prompt A's, written before anything is measured, so
+    it is an unlabelled note, and "Seen once (r1)" stays.
+  - The other examples offered for the Action's row: "such as 0.5.0"
+    (honesty 4) turns false once 0.5.0 is out, and "the next one"
+    (correctness 1) names nothing `npm view dbtruth versions` can show;
+    0.3.0 stays true.
+- Score 77, as in iteration 1: A6-tag, A7, A8 and action-v1 have no
+  evidence until the lead's steps are done.
+### Iteration 3: the sabotage check of T7.1's checks, 77/100
+- Scope, the lead's: no change to wording or design; break what each new
+  T7.1 check guards, run `npm run acceptance -- --task T7.1` on each break,
+  and break one changed docs pattern of three other tasks. A check or test
+  is added only where a break survives. No model was called; nothing was
+  published, tagged, pushed or committed.
+- Before: `npm run acceptance`, every task 100 but T6.2 (0, no checks) and
+  T7.1 (77, its four manual items for a person without evidence); overall
+  93 over 20 tasks, in 402 s. The 37 checks changed in iteration 1 differ
+  from `HEAD` in their headings alone: put back as "(unreleased)", each
+  equals its old text, and no check outside T7.1 pins "(unreleased)" now,
+  where 37 did.
+- `sabotage.mjs` in `sabotage-release-checks`, a new scratchpad directory,
+  made ten breaks. Each file was copied there just before its break and
+  compared with it, the break was made in place, the named task was scored
+  by `npm run acceptance -- --task <id>`, and the file was put back from
+  the copy and compared with `Buffer.equals` and `cmp`. The hash of `git
+  diff` and `git diff --binary` in dbtruth (`79fd840b...`, `6547117...`)
+  was the same after every restore, and in dbtruth-action (`f023e519...`)
+  at the end. The four manual items for a person failed in every T7.1 run,
+  as before; the lines below are the other failures.
+  - The version back to 0.1.8 in `package.json`: A6 failed with
+    "package.json does not match /(?<![\s\S])\{\s+"name": "dbtruth",...",
+    and A3 and pack-smoke with "stdout does not match ...", since the smoke
+    test then packs `dbtruth-0.1.8.tgz`. 46.
+  - CHANGELOG.md's 0.4.0 heading back to "(unreleased)": A4 failed with
+    "CHANGELOG.md does not match
+    /(?<![\s\S])(?![\s\S]*\(unreleased\))...". 72.
+  - `src/check.ts` added to `files` in `package.json`: A3, pack-smoke,
+    verify and invariants failed with "exit 1, expected 0"; the saved full
+    output has 333 tests, 0 failing, and "pack-smoke: FAIL
+    dbtruth-0.4.0.tgz contains src/check.ts". 32, the gate cap.
+  - The `tokens:` line removed from the README's fixture output: A5 failed
+    with "README.md does not match /^## Output on the fixture$...". 72.
+  - NOTES.md's "- **The release.**" made "- 0.4.0 carries ...": notes
+    failed with "NOTES.md does not match ...". 72.
+  - The README's row on older versions put back as `HEAD` has it, with
+    0.3.0 and 0.2.0: readme-versions failed with "README.md does not match
+    /(?<![\s\S])(?![\s\S]*\b0\.[23]\.0\b)...". 72.
+  - The title of "dependency direction matches the spec" in
+    `test/structure.test.ts` shortened, so the test still passes under
+    another name and `npm run verify` exits 0: invariants failed with
+    "stdout does not match /(?=[\s\S]*^ok \d+ - only safety\.ts imports
+    pg...", 40, the gate cap.
+  - T1.2's changelog check (the 0.2.0 heading), its line "- `npx dbtruth
+    --version`, or `-v`, prints the version." removed: `npm run acceptance
+    -- --task T1.2` failed that check alone, "CHANGELOG.md does not match
+    /^## 0\.2\.0 \(not published: shipped in 0\.4\.0\)$[\s\S]*`npx dbtruth
+    --version`/m", 97.
+  - T4.1's notes check (the 0.3.0 heading), "**One comment per pull
+    request.**" removed from its line: T4.1 failed that check alone, "NOTES.md
+    does not match /^## 0\.3\.0 \(not published: shipped in 0\.4\.0\)$...",
+    98.
+  - T5.2's changelog check (the dated 0.4.0 heading), the `init --skill`
+    bullet removed: T5.2 failed that check alone, "CHANGELOG.md does not
+    match /^## 0\.4\.0 \(2026-09-26\)$[\s\S]*^- `npx dbtruth init --skill`
+    also installs ...", 98.
+- Every break failed at least one check, so no check or test was added. The
+  `src/` break's message in the score is the exit code; the reason is the
+  smoke test's FAIL line in the full output that `scripts/acceptance.mjs`
+  saves and names.
+- `npm run verify` exits 0 after the restores, in 92 s: 333 tests, 331
+  pass, the 2 live tests skipped, 0 fail; the package smoke test passes on
+  `dbtruth-0.4.0.tgz`.

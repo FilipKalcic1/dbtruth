@@ -185,6 +185,20 @@ test("a condition survives serialize and parse, and branches are ordered by thei
   assert.equal(written([branch("pending"), branch("shipped"), unconditional!]), text, "in any order, the same bytes");
 });
 
+test("the table a verdict's numbers were measured over survives serialize and parse, and a verdict without one reads as before", () => {
+  const duplicate = { kind: "duplicate_entity" as const, tables: ["products", "products_legacy"], detail: "same rows" };
+  const id = suspicionId(duplicate);
+  const written = (measurement: Verdict["measurement"]) => {
+    const verified = { ...verifiedOf({ suspicions: [duplicate] }), verdicts: { [id]: { status: "confirmed" as const, measurement } } };
+    const parsed = parseSnapshot(serialize(toSnapshot(verified, [relation("products"), relation("products_legacy")], config, meta)), FILE);
+    if (typeof parsed === "string") assert.fail(parsed);
+    return parsed.verdicts[id]!.measurement;
+  };
+  const numbers = { total: 80, matched: 70, sharedColumns: 5, overlap: 0.875 };
+  assert.deepEqual(written({ query: "SELECT 1", numbers, over: "products" }), { query: "SELECT 1", numbers, over: "products" }, "the snapshot keeps whose rows the overlap is a share of");
+  assert.deepEqual(written({ query: "SELECT 1", numbers }), { query: "SELECT 1", numbers }, "one written before the field existed parses, without it");
+});
+
 test("the fingerprint is sha256 of the schema only", () => {
   const catalog: Catalog = [
     { ...relation("orders", [["id", "integer"], ["customer_id", "integer"]]), size: { estimate: 500, pages: 4 } },

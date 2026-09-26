@@ -1,9 +1,11 @@
 # Changelog
 
-Releases from 0.2.0 on. What earlier releases changed, and why, is in
+Changes since 0.1.8. What earlier releases changed, and why, is in
 `NOTES.md`.
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-09-26)
+
+0.4.0 also carries the two sections below: 0.3.0 and 0.2.0 were not published.
 
 - `npx dbtruth mcp` serves an agent four tools over MCP, with no model and no
   API key: `context` returns the files in `context/`, `describe_table` a table
@@ -32,8 +34,47 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   <code>)`, never in the server's words, which quote the value.
 - The line of a declared join that could not be measured no longer calls it
   inferred.
+- A table's file states a confirmed problem by its numbers, then gives the
+  analysis's description of it marked `(inferred)`. The numbers of a problem
+  over two tables, such as a duplicate table's overlap, name the table they
+  were measured over, in the table's file and as the verdict's `over` in
+  `--json`, the snapshot and `check --json`. The model, which writes
+  `README.md` and `ENTITIES.md`, is told to list under a confirmed heading
+  only what was confirmed, to say what a confirmed problem's numbers show
+  rather than repeat the analysis's description, to give a duplicate
+  table's overlap as a share of the rows of the table named in `over`, by
+  its name, and to say that the analysis found no declared foreign key
+  behind a broken join it inferred. Both prompts now say that values
+  withheld from the model are still read by the measurements, and tell the
+  model never to call a column hidden, nor to write that one cannot be
+  inspected, tested or verified.
+- A materialized view that has never been refreshed is no longer given a
+  count of 0 rows, since reading it raises an error: a dead table's numbers
+  for it are `populated 0`, which confirms it dead on its own, and its file
+  says `never refreshed (reading it raises an error)` where it said `no
+  rows`. `--json` gives every materialized view's `populated` in `tables`.
+  The model is told what `populated` means, and never to say that such a
+  view has no rows or returns nothing.
+- A duplicate table suspicion between two views or materialized views is
+  decided by their definitions, compared in the catalog: `sameDefinition 1`
+  confirms it and `sameDefinition 0` rejects it, so no table file lists a
+  wrong pair, and the model is told to leave it out. It was measured by
+  their rows, and was empty beside a materialized view never refreshed,
+  which cannot be read. Two views whose queries differ are now rejected
+  even when they return the same rows. A pair with a table in it is
+  measured by its rows, as before.
+- `--json` gives each relation's comment in `tables`. The model that writes
+  `README.md` and `ENTITIES.md` is sent it too, and told that a comment
+  belongs to the relation that carries it, to restate an unverifiable claim
+  or a suspicion's detail only for the relations and columns it names, and
+  to label a cause the analysis gives `(inferred)`. The analysis is told to
+  name in a duplicate table suspicion exactly the two relations it says
+  duplicate each other.
+- The README says that `context/README.md` and `ENTITIES.md` are the model's
+  summary of the verdicts and can misstate what they summarize, and where
+  the measured numbers are.
 
-## 0.3.0 (unreleased)
+## 0.3.0 (not published: shipped in 0.4.0)
 
 - Every full run also writes `context/snapshot.json`: the claims, each
   verdict with its query and numbers, the settings they were measured with,
@@ -76,7 +117,7 @@ Releases from 0.2.0 on. What earlier releases changed, and why, is in
   database content passes through a server of ours. The price and the
   waitlist link are placeholders for now.
 
-## 0.2.0 (unreleased)
+## 0.2.0 (not published: shipped in 0.4.0)
 
 - `npx dbtruth --version`, or `-v`, prints the version.
 - Runs from anywhere inside a repository: the `.env` nearest to the current

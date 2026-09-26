@@ -11,6 +11,8 @@ import { confine, fitForWriter, joinLine, persist, tableFile, tableFileName, wri
 const facts = (name: string, extra: Partial<TableFacts> = {}): TableFacts => ({ name, kind: "table", rowEstimate: 500, primaryKey: ["id"], categorical: {}, ...extra });
 const verdict = (status: Verdict["status"], numbers: Record<string, number> = {}, skipped?: string): Verdict => ({ status, measurement: { query: "SELECT 1", numbers }, ...(skipped ? { skipped } : {}) });
 const nothing: Verified = { version: 1, database: "x", relations: "1 table", claims: { entities: [], tables: [], relationships: [], suspicions: [], questions: [] }, verdicts: {}, fitsInContext: true, tables: [] };
+/** A prompt on one line, so a rule is found however the file wraps it, with LF or CRLF as the checkout has it. */
+const prompt = (name: string) => readFileSync(new URL(`../src/prompts/${name}.md`, import.meta.url), "utf8").replace(/\s+/g, " ");
 
 /** The fixture's shop as the writer sees it: a broken join, a confirmed one with nulls, a rejected one, an empty one, and three suspicions. */
 const shop: Verified = {
@@ -47,7 +49,7 @@ test("a table file carries the measured numbers, both directions of a join, and 
   assert.match(orders, /^# orders\n\nOne row per customer order\. \(inferred\)\nGrain: order\n- status is free text\n\ntable, ~500 rows, primary key: id\n/, "the model's meaning, then the facts");
   assert.match(orders, /\n- \*\*BROKEN\*\* orders\.customer_id -> customers\.id: 88\.0% match \(440 of 500 sampled\), 60 orphans \(inferred\)\. An inner join drops the orphans: use LEFT JOIN, or filter them on purpose\.\n/);
   assert.match(orders, /\n- order_items\.order_id -> orders\.id: confirmed, 100\.0% of 1080 sampled rows match\. 120 sampled rows \(10\.0%\) have no order_id; an inner join drops them too\.\n/, "an incoming join, declared, with its null share");
-  assert.match(orders, /\n- \*\*inconsistent_values status\*\*: shipped \/ SHIPPED \(distinctValues 5, canonicalForms 3, collisions 2\)\. Compare with lower\(btrim\(status\)\)\.\n/);
+  assert.match(orders, /\n- \*\*inconsistent_values status\*\*: distinctValues 5, canonicalForms 3, collisions 2\. Compare with lower\(btrim\(status\)\)\. shipped \/ SHIPPED \(inferred\)\n/, "the numbers are the fact, the detail only what the analysis read");
   assert.match(orders, /\n## Values\n\n- status: "pending", "SHIPPED", "shipped"\n$/, "values are quoted so case and spacing show");
 
   const customers = tableFile(shop, shop.tables[1]!);
@@ -59,7 +61,47 @@ test("a table file carries the measured numbers, both directions of a join, and 
   const cars = tableFile(shop, shop.tables[2]!);
   assert.match(cars, /\ntable, no rows, primary key: id\n/);
   assert.match(cars, /\n- cars\.customer_id -> customers\.id \(inferred, not measured: no non-null rows to test\)\n/);
-  assert.match(cars, /\n- \*\*dead_table\*\*: empty beside vehicles \(count 0, exact 1\)\.\n/);
+  assert.match(cars, /\n- \*\*dead_table\*\*: count 0, exact 1\. empty beside vehicles \(inferred\)\n/, "the count is the fact, the detail only what the analysis read");
+});
+
+test("a problem over two tables names the one its verdict says its numbers were measured over, in both tables' files", () => {
+  const duplicate = { kind: "duplicate_entity" as const, tables: ["products", "products_legacy"], detail: "same columns and values" };
+  const id = "suspicion:duplicate_entity:products+products_legacy";
+  const overlap = (over: string): Verdict => ({ status: "confirmed", measurement: { query: "SELECT 1", numbers: { total: 80, matched: 70, sharedColumns: 5, overlap: 0.875 }, over } });
+  const v: Verified = {
+    ...nothing,
+    tables: [facts("products", { rowEstimate: 80 }), facts("products_legacy", { rowEstimate: 70 })],
+    claims: { ...nothing.claims, suspicions: [duplicate] },
+    verdicts: { [id]: overlap("products") },
+  };
+  const line = (t: TableFacts) => tableFile(v, t).split("\n").find((l) => l.startsWith("- **duplicate_entity"));
+  assert.equal(
+    line(v.tables[1]!),
+    "- **duplicate_entity products**: total 80, matched 70, sharedColumns 5, overlap 0.875 (measured over products). same columns and values (inferred)",
+    "products_legacy's file says the numbers count products' rows, not its own",
+  );
+  assert.equal(
+    line(v.tables[0]!),
+    "- **duplicate_entity products_legacy**: total 80, matched 70, sharedColumns 5, overlap 0.875 (measured over products). same columns and values (inferred)",
+    "products' file says it too, since its line names products_legacy alone",
+  );
+  assert.match(
+    tableFile({ ...v, verdicts: { [id]: overlap("products_legacy") } }, v.tables[0]!),
+    /\(measured over products_legacy\)\./,
+    "the table comes from the verdict, as prompt B is sent it, and not from the order of the suspicion's names",
+  );
+});
+
+test("a materialized view never refreshed says that reading it raises an error, not that it has no rows", () => {
+  const dead = { kind: "dead_table" as const, tables: ["order_totals"], detail: "never refreshed" };
+  const v: Verified = { ...nothing, claims: { ...nothing.claims, suspicions: [dead] }, verdicts: { "suspicion:dead_table:order_totals": verdict("confirmed", { populated: 0 }) } };
+  const never = facts("order_totals", { kind: "materialized view", populated: false, rowEstimate: 0, primaryKey: null });
+  assert.equal(
+    tableFile(v, never),
+    "# order_totals\n\nmaterialized view, never refreshed (reading it raises an error), primary key: none\n\n## Known problems\n\n- **dead_table**: populated 0. never refreshed (inferred)\n",
+    "its size is what the schema says, and no count of rows that were never read",
+  );
+  assert.match(tableFile(nothing, facts("order_totals", { kind: "materialized view", populated: true, rowEstimate: 0, primaryKey: null })), /\nmaterialized view, no rows, primary key: none\n/, "one refreshed and empty has no rows");
 });
 
 test("a branch reads with its condition, the value as SQL writes it", () => {
@@ -156,6 +198,82 @@ test("prompt B is sent Verified whole, without the verdicts' queries when that i
   assert.equal(shop.verdicts["relationship:orders.customer_id->customers.id"]!.measurement.query, "SELECT 1", "Verified keeps them, for --json and the snapshot");
 
   assert.deepEqual(fitted(tokens(told!) - 1), { reduced: "README.md and ENTITIES.md not written: over the model's input limit even without the verdicts' queries" });
+});
+
+test("prompt B sent the verdicts without their queries is still told the table a verdict's numbers were measured over", () => {
+  const id = "suspicion:duplicate_entity:products+products_legacy";
+  const numbers = { total: 80, matched: 70, sharedColumns: 5, overlap: 0.875 };
+  const v: Verified = { ...nothing, verdicts: { [id]: { status: "confirmed", measurement: { query: "SELECT 1", numbers, over: "products" } } } };
+  const { verified: told, reduced } = fitForWriter(v, { modelMaxInputTokens: Math.ceil(JSON.stringify(v).length / 4) - 1, charsPerToken: 4 });
+  assert.equal(reduced, "the verdicts' queries dropped to fit the model's input limit", "over the limit, so the queries are left out");
+  assert.deepEqual(told!.verdicts[id]!.measurement, { query: "", numbers, over: "products" }, "only the query goes: the overlap still names whose rows it is a share of");
+});
+
+test("prompt B files a suspicion by its verdict, says what its numbers show and which way an overlap runs, and gives a missing foreign key as the analysis's finding", () => {
+  const b = prompt("write");
+  const rules: [string, string][] = [
+    ["a confirmed heading holds confirmed claims only", "Never launder a guess into a fact: only a claim whose verdict is confirmed goes under a heading that says confirmed."],
+    ["the label is (inferred) and no other word", 'are labelled "(inferred)" inline, in that word and no other.'],
+    ["unverifiable suspicions go with the open questions", "then open questions for a human, with the unverifiable suspicions."],
+    ["a confirmed suspicion confirms its numbers, not its detail", "A confirmed suspicion confirms its numbers, not the words of its detail"],
+    ["an inconsistent_values count cannot tell case from spacing", "collisions (the difference), which cannot tell case from spacing."],
+    ["a suspicion over more than one table is measured over the table named in over", 'A suspicion that names more than one table is measured over the table named in "over", beside its numbers.'],
+    ["a duplicate_entity's total counts the rows of the table named in over", 'total (the distinct sampled rows of the table named in "over" on all of those columns), matched (how many of those rows are also in the other table)'],
+    ["a duplicate_entity's overlap is a share of the rows of the table named in over, by name", 'A duplicate_entity\'s overlap is one way: give it as a share of the rows of the table named in "over", by that name, never of the other table\'s.'],
+    ["a broken join on inference is one the analysis found no declared foreign key for", 'When its basis is "inferred", label it "(inferred)" and say that the analysis found no declared foreign key for it.'],
+  ];
+  for (const [what, sentence] of rules) assert.ok(b.includes(sentence), `write.md no longer says that ${what}: "${sentence}"`);
+});
+
+test("prompt B says that a materialized view never refreshed raises an error when read, and never that it has no rows", () => {
+  const b = prompt("write");
+  assert.ok(b.includes("partitions if any, populated for a materialized view, primary key"), "write.md names populated among the per-relation facts");
+  assert.ok(
+    b.includes("categorical columns. A materialized view with populated false, or populated 0 in a dead_table suspicion's numbers, has never been refreshed: reading it, even in a join, raises an error until it is refreshed, and its row estimate of 0 is not a count."),
+    "write.md says what populated false and populated 0 mean, and what the row estimate of such a view is, once it has named populated among the facts",
+  );
+  assert.ok(b.includes("or a materialized view that has never been refreshed, which cannot be read. It is not a finding."), 'write.md\'s "empty" says that such a view cannot be read, not that it has no rows');
+  assert.ok(b.includes("- Never say that a materialized view never refreshed has no rows or returns nothing."), "write.md has a rule that forbids calling such a view empty");
+});
+
+test("prompt B is told what a duplicate between two views measures: whether their definitions are the same", () => {
+  assert.ok(
+    prompt("write").includes("overlap (matched / total). Between two views or materialized views, its number is sameDefinition instead: 1 when their definitions are the same, 0 when they differ."),
+    "write.md says what sameDefinition means, right after a duplicate_entity's other numbers",
+  );
+});
+
+test("prompt B is sent each relation's comment, and gives a comment only to the relation whose facts carry it", () => {
+  const b = prompt("write");
+  assert.ok(b.includes("primary key, row estimate, comment if there is one, and the values of categorical columns."), "write.md names the comment among the per-relation facts");
+  assert.ok(b.includes("- A comment belongs to the relation whose facts carry it; never attribute it to another."), "write.md has a rule that a comment is said of the relation that carries it");
+});
+
+test("prompt B restates a claim only of what it names, and labels a cause the analysis gives as its guess", () => {
+  const b = prompt("write");
+  assert.ok(
+    b.includes('everything with basis "inferred", and any cause the analysis gives, which is a guess, are labelled "(inferred)" inline'),
+    "write.md labels a cause the analysis gives (inferred), and not every reason, since a declared foreign key's is a fact",
+  );
+  assert.ok(b.includes("Restate an unverifiable claim or a suspicion's detail only for the relations and columns it names; never widen it to others."), "write.md forbids saying a claim of relations or columns it does not name");
+});
+
+test("prompt A gives a duplicate_entity exactly the two relations its detail says duplicate each other", () => {
+  assert.ok(
+    prompt("contextualize").includes('"duplicate_entity": two tables holding the same rows; its "tables" are exactly the two relations its detail says duplicate each other.'),
+    "contextualize.md ties a duplicate's tables to its detail",
+  );
+});
+
+test("neither prompt lets the model call a column hidden, or say it cannot be inspected, tested or verified: the values are withheld from the analysis only", () => {
+  const a = prompt("contextualize");
+  const b = prompt("write");
+  const ban = "Never call a column or its values hidden, and never write that a column cannot be inspected, tested or verified.";
+  assert.ok(a.includes("its values were withheld from you only; the database still holds them, and the measurements read them."), "contextualize.md says the database holds a hidden column's values");
+  assert.ok(a.includes(ban), "contextualize.md forbids calling a column hidden, or saying it cannot be inspected, tested or verified");
+  assert.ok(a.includes('When that column has no "values" list, no condition on it is measured'), "contextualize.md says what goes unmeasured for a column without a values list, not that it cannot be tested");
+  assert.ok(b.includes("means that its sample values were withheld from the analysis model only; the database holds them, and the measurements read them."), "write.md says what a column called hidden means");
+  assert.ok(b.includes(ban), "write.md forbids it in the same words");
 });
 
 test("a view, a partitioned table and a table without a key say so", () => {
