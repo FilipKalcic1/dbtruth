@@ -2178,6 +2178,139 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     Code with the server and the skill, is the lead's, since this machine has
     no `claude`; that run also decides whether `init` prints the `cmd /c` form
     for native Windows (T5.1).
+- **What the first live run since 0.1.7 got wrong (the lead's scope).** A run
+  with the real model on the fixture wrote `context/`, and an audit checked
+  every statement in it against the database and `snapshot.json`. Twenty
+  findings survived refutation, several of them one problem found twice, and
+  nine did not. Under the plan's standard anything false that dbtruth writes
+  blocks a release, so the lead chose these fixes:
+  - **A confirmed problem's numbers are the fact, and its detail is not.**
+    `tableFile` printed a confirmed suspicion as `**<kind> <subject>**:
+    <detail> (<numbers>).`. The detail is prompt A's free text. In
+    `tables/orders.md` it said the `status` values "mix case and spacing",
+    but the data has no spacing, and the measurement cannot tell case from
+    spacing: it compares `count(DISTINCT status)` with `count(DISTINCT
+    lower(btrim(status)))`. So the file printed an unmeasured guess in bold,
+    against its own docstring ("nothing unconfirmed passes as a fact"). The
+    line is now `**<kind> <subject>**: <numbers>.<hint> <detail>
+    (inferred)`: the numbers come first, as the fact, and the detail follows
+    them with the label the same function gives the model's purpose of a
+    table. A first draft wrote `Inferred, not measured: <detail>`, which
+    three reviews rejected: everywhere else in `context/tables/` what
+    follows `not measured: ` is the reason nothing was measured, as the
+    README's troubleshooting says twice, and the skill tells an agent that
+    anything "not measured" is unverified, so an agent could have dropped a
+    confirmed dead table. The skill describes the line as it is now: a
+    problem in bold was measured, with its numbers, and what is marked
+    (inferred) without numbers was not.
+  - **Numbers measured over one of two tables name it.** Every kind of
+    suspicion that is measured is measured over the first table its claim
+    names: a `duplicate_entity`'s `total` is that table's distinct sampled
+    rows on the shared columns, and `matched` how many of them are also in
+    the second. Both tables' files showed these numbers bare.
+    `tables/products_legacy.md` read "total 80, matched 70, ..., overlap
+    0.875" under "~70 rows", which suggests that ten of eighty legacy rows,
+    an eighth, are missing from `products`; in fact all 70 are there, and
+    `products` has 10 more. `tables/products.md` read "**duplicate_entity
+    products_legacy**: ... total 80", a line that names the other table
+    alone. Now the numbers of a suspicion over more than one table end
+    `(measured over <first table>)` in every file the line is in.
+  - **Prompt B files a suspicion by its verdict.** The README listed the
+    unverifiable `customers.api_token` suspicion under "Confirmed
+    suspicions", with a label it made up, "(unverifiable further)". The
+    `(inferred)` rule now says "in that word and no other", and its "Never
+    launder a guess into a fact" goes on to the headings: only a claim whose
+    verdict is confirmed goes under a heading that says confirmed. The
+    README's open questions now take the unverifiable suspicions, since what
+    such a claim needs is a person's answer, and the `(inferred)` rule
+    labels them there.
+  - **A confirmed suspicion confirms its numbers, not the words of its
+    detail.** The README repeated the detail's "casing/spacing". The writer
+    had never been told what an `inconsistent_values` suspicion's numbers
+    are; now it is, and that they cannot tell case from spacing. A rule
+    tells it to say what the numbers and the values of categorical columns
+    show, both of which were measured, and to label anything beyond them
+    "(inferred)". On the fixture the values of `status` differ by case
+    alone.
+  - **The overlap is one way.** `write.md` explained a relationship's numbers
+    but not a `duplicate_entity`'s. ENTITIES.md then attached "87.5% overlap"
+    to `products_legacy`, although every `products_legacy` row is in
+    `products`. The prompt now explains `sharedColumns`, `total`, `matched`
+    and `overlap` where it explains a relationship's numbers, and a rule says
+    the share is of the first table's rows, never of the second's.
+  - **A broken join on inference says the analysis found no declared key.**
+    The README gave `orders.customer_id -> customers.id` without
+    "(inferred)" and never said that no foreign key is declared (seed
+    problem 1). Prompt B receives each relationship's `basis` and `reason` as
+    prompt A gave them, and no list of declared keys, since `TableFacts` has
+    none. Prompt A is told to propose every declared foreign key with basis
+    "stated", but nothing holds it to that: the model can call a declared key
+    inferred (T2.2, above), which is why `verify` asks the catalog, not the
+    basis, before it weighs a join. So the broken-relationship rule tells
+    prompt B to label such a join "(inferred)" and to say that the analysis
+    found no declared foreign key for it, which is what prompt B knows. A
+    first draft had it say that no declared foreign key backs the join; a
+    declared `NOT VALID` key that is broken, and that the model called
+    inferred, would have made that false.
+  - **"[hidden]" hides nothing from the database.** Prompt A wrote the table
+    note "entity_id is hidden so cannot be tested directly" and the detail
+    "entity_id values are hidden which limits verification", and `tableFile`
+    prints both as they are. The note sat above three joins on `entity_id`,
+    each measured at 100 of 100. Prompt B then wrote that `entity_id` "is
+    hidden from direct inspection". Both prompts now say that a hidden
+    column's values were withheld from the analysis model only, that the
+    database holds them and the measurements read them, and, in the same
+    words, never to call a column or its values hidden, nor to write that a
+    column cannot be inspected, tested or verified. An earlier draft banned
+    only hiding given as the reason, so as not to silence what is truly not
+    measured; it let the live note through with its reason cut, "entity_id
+    cannot be tested directly". What is truly not measured is a claim, not a
+    column: a condition on a column that is not categorical, which `verify`
+    refuses so that no hidden value can be guessed, or a suspicion of a kind
+    with no measurement. The ban leaves the model free to say so of the
+    claim. Prompt A's rule for a polymorphic reference whose column has no
+    "values" list no longer says the reference "cannot be tested", words
+    the ban contradicts: it says that no condition on that column is
+    measured, which is what `verify` does. Prompt B meets the word only in
+    prompt A's notes, details and reasons, since `Verified` holds no sample
+    row, and its rule is worded so.
+  - **Tests.** In `write.test.ts`, "a table file carries the measured
+    numbers, ..." asserts a confirmed problem's line in two places. Both
+    assertions change with the line, because this entry changes that
+    behavior (section 4.4 of the plan), and both gain messages. A new test
+    checks that both files of a duplicate pair give `products` as the table
+    the numbers were measured over. No test read the prompts before; docs
+    checks of T2.2, T2.3, T2.4 and T5.1 in `acceptance/checks.json` pin some
+    of their lines, and the new text leaves those lines as they were. Two new
+    tests pin each new rule's key sentence, reading the prompt with its
+    whitespace folded, so rewrapping the text or the checkout's line ends do
+    not break them. They hold the words, not what the model does with them.
+    The model's behavior is judged on a live run, which the lead does. The
+    README's fixture output predates these changes and is regenerated from
+    that run.
+  - **Not done:** making "no declared foreign key" a fact about the database
+    rather than the analysis's word, by giving prompt B the declared keys or
+    by setting a claim's basis to "stated" wherever the catalog declares its
+    key: that changes what every claim carries, the snapshot's included, and
+    is the lead's call. A guard in `tableFile` against a note or detail about
+    hidden values, since the prompt rule is the lighter fix. Explaining a
+    `dead_table`'s numbers in the prompt, since nothing false in this run
+    came from them. A rule that nothing labelled "(inferred)" goes under a
+    heading that says fact: the rule that a relationship is stated as fact
+    only when it is confirmed with no `alsoFits` already covers it, and this
+    run kept those joins apart. And `tableFile` still prints prompt A's notes
+    and grain with no label, and a purpose marked "stated" too.
+  - **Known limits (the lead's decision, not fixed):** prompt A did not claim
+    `audit_log`'s missing primary key, so the README leaves it out, and only
+    `tables/audit_log.md` says "primary key: none"; the grain is prompt A's
+    wording (`order_totals` "one row per customer", `events` "one row per
+    event per day"); ENTITIES.md left `order_totals` out of Customer's
+    references, although prompt A listed it there and it carries the
+    customers' key; a view does not inherit its base table's relationships,
+    so `shipped_orders.customer_id`, read from `orders.customer_id` and
+    matching `customers.id` on 160 of its 200 rows, has no claim and no join
+    line; and `inconsistent_values` counts case and whitespace collisions
+    together, so its numbers cannot say which one caused them.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

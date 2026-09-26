@@ -4896,3 +4896,189 @@ of each lost point, in the format of section 4.7 of the plan.
   `api_token`. A person should repeat it in Claude Code with the server added;
   that run also settles whether `init` prints the `cmd /c` form on native
   Windows.
+
+## What the first live run since 0.1.7 got wrong (the lead's scope)
+### Iteration 1
+- Scope, the lead's: C1 and C2 in `tableFile`, P1 to P5 in the prompts; the
+  rest of the audit is recorded as known limits (NOTES, 0.4.0). No paid run
+  here; the lead runs the live one.
+- Tests first. In `test/write.test.ts`, with the code and prompts as they
+  were: "a confirmed problem states its numbers as the fact, and the
+  analysis's words only as not measured" failed with actual
+  `- **inconsistent_values status**: Values mix case and spacing
+  (distinctValues 5, ...)`; "a problem
+  measured over another table names that table in this table's file" failed
+  with actual `- **duplicate_entity products**: same columns and values
+  (total 80, matched 70, sharedColumns 5, overlap 0.875).`; the two changed
+  assertions of "a table file carries the measured numbers, ..." failed; the
+  two prompt tests failed with "write.md no longer says that a confirmed
+  heading holds confirmed claims only: ..." and "contextualize.md says the
+  database holds a hidden column's values".
+- Sabotage, each restored and compared byte for byte with its copy:
+  `const over = ""`: "a problem measured over another table ..." failed with
+  "products_legacy's file says the numbers count products' rows, not its
+  own". The old line, detail inside the bold fact: the three `tableFile`
+  tests failed, one with "the numbers are the fact, the detail only what the
+  analysis read". Each new prompt sentence altered (ten edits: the label's
+  "no other", the confirmed heading, the open questions, the confirmed
+  suspicion, the overlap's direction, the inferred broken join, both halves
+  of the `[hidden]` rule in `write.md`, and "withheld from you only" and
+  "Never write" in `contextualize.md`): each failed a prompt test with the
+  message naming that rule.
+- A docs check failed on the first draft: T2.2's `prompt-b` pins "The queries
+  are empty when\s+the analysis was too large to send with them.", and the
+  new sentences had rewrapped that line. They now follow it, and all 99 file
+  checks pass; no check was changed.
+- `npm run verify` exits 0: 313 tests, 311 pass, the 2 live tests skipped,
+  0 fail; the package smoke test passes. `npm run acceptance`: every task
+  with checks 100/100, and T6.2 and T7.1, not built yet, 0/100 with no
+  checks, so overall 90.
+### Iteration 2: four reviews of iteration 1
+- Each finding was checked against the code, the plan, the live output and
+  `snapshot.json`, and, where it claimed a behavior, a run: the live
+  snapshot's claims and verdicts rendered through `tableFile`, and the
+  fixture queried for `products` and `products_legacy` (80 and 70 rows, all
+  70 in `products`).
+- Fixed:
+  - The label `Inferred, not measured: <detail>` (plan 7, quality 1,
+    correctness 1). Everywhere else in `context/tables/`, what follows
+    `not measured: ` is the reason nothing was measured, and the skill tells
+    an agent that anything "not measured" is unverified; the live `cars`
+    line rendered as `**dead_table**: count 0, exact 1. Inferred, not
+    measured: Table is empty ...`. Now `<detail> (inferred)`, the form of the
+    purpose line in the same function.
+  - Bare numbers in the first table's file (correctness 2): the live
+    `products.md` line names `products_legacy` alone above "total 80". Every
+    suspicion over more than one table now names the table measured over in
+    each of its files (`s.tables.length > 1`, which no longer needs `mine`).
+  - Prompt A's polymorphic rule said the reference "cannot be tested",
+    against the new ban (plan 1, quality 2, correctness 4, prompt 2). It now
+    says that no condition on a column without a "values" list is measured,
+    which is what `verify` does. The ban names hiding as the reason, since a
+    condition on a column that is not categorical is truly not measured, and
+    forbids calling a column hidden too (correctness 3, prompt 1: the live
+    detail "entity_id values are hidden which limits verification" passed
+    the first wording). Both prompts use the same words (quality 6); "every
+    measurement reads them" is now "the measurements read them" (plan 1);
+    the ban follows the "years" sentence, so it no longer splits the
+    paragraph (quality 7); write.md's rule speaks of a note, detail or reason
+    that calls a column hidden, since `Verified` holds no "[hidden]" cell
+    (quality 6).
+  - P5's premise (plan 2, correctness 5, prompt 3): "the analysis gives
+    every declared foreign key basis "stated"" is an instruction to prompt
+    A, not a guarantee (T2.2 in NOTES; `worthWeighing` asks `declares`).
+    Prompt B is now told to say that the analysis found no declared foreign
+    key for the join, and the clause is gone.
+  - write.md's numbers (plan 7, quality 4, prompt 4): the overlap's
+    direction is a rule in the rules list; the description names
+    sharedColumns and comes before "The queries are empty ...", with a
+    sentence on inconsistent_values' numbers, which cannot tell case from
+    spacing, without which "say what the numbers show" allowed
+    "casing/spacing".
+  - The Produce item's second "(inferred)" (quality 5, first half).
+  - NOTES: the ENTITIES known limit blamed prompt A, but the live snapshot
+    has `order_totals` in Customer's `referencedIn` (plan 3); "a tenth" was
+    an eighth, 10 of 80 (plan 4, correctness 6); the label, the numbers and
+    P5 follow the code (correctness 7).
+  - CHANGELOG stated what the model does as fact; it now says what the
+    model is told, as the file does elsewhere (plan 5, quality 3).
+  - The C1 test repeated an assertion of "a table file carries ..." with
+    another detail (plan 6, quality 8): removed. The prompt reader moved to
+    the top of the file, each test reads a prompt once, and the first prompt
+    test's name covers the broken-join rule (quality 9). This section gained
+    iteration headings (quality 10; the section after T6.1 has none, but two
+    iterations need them).
+- Rejected:
+  - Quality 5, second half: the broken-join rule keeps "label it
+    "(inferred)"": the lead's P5 asks for it, and the live README left the
+    label out with the general rule alone.
+  - Prompt 4, `dead_table`'s numbers: nothing false in the live run came
+    from them, so outside the lead's scope.
+  - Prompt 5, a join with alsoFits above 0 under a heading that says fact:
+    "State a relationship as fact only if it is confirmed and its alsoFits,
+    if any, is 0" already forbids it; the P1 sentence only narrows what may
+    go under a confirmed heading, and the live run kept those joins apart.
+  - Correctness 5 and prompt 3, setting a claim's basis from `declares` in
+    code: it changes what every claim and the snapshot carry, which is
+    outside the lead's scope; recorded under Not done in NOTES.
+- Tests first. With iteration 1's code and prompts, "a table file carries
+  ..." failed with "the numbers are the fact, the detail only what the
+  analysis read"; "a problem over two tables ..." failed with actual
+  `... (measured over products). Inferred, not measured: same columns and
+  values`; the prompt tests failed with "write.md no longer says that
+  unverifiable suspicions go with the open questions: ..." and
+  "contextualize.md says the database holds a hidden column's values".
+- Sabotage, each file restored and checked with `git hash-object` against
+  its blob before: `const over = ""` failed "a problem over two tables ..."
+  with "products_legacy's file says the numbers count products' rows, not
+  its own"; iteration 1's `!mine(s.tables[0]!)` failed it with "products'
+  file says it too, since its line names products_legacy alone"; the
+  `Inferred, not measured:` label failed "a table file carries ..." with
+  "the numbers are the fact, the detail only what the analysis read"; each
+  of eight prompt edits (the polymorphic rule's old words, the old ban,
+  P5's old sentence, sharedColumns, "cannot tell case from spacing", the
+  overlap rule, "only" in the hidden rule, the open questions) failed a
+  prompt test with the message naming that rule. A first run of the
+  script copied each file into a scratch directory that already had the
+  backup's name, so nothing was restored; the three files were rebuilt by
+  hand, matched their blobs from before (`710c63d`, `fcc2c7c`, `d2c1fef`),
+  and the sabotage was run again.
+- `npm run verify` exits 0: 312 tests (the repeated C1 test is gone), 310
+  pass, the 2 live tests skipped, 0 fail; the package smoke test passes.
+  `npm run acceptance`: every task with checks 100/100, T6.2 and T7.1 0/100
+  with no checks, overall 90, as before.
+### Iteration 3: the lead's words for P1 and P3
+- The tree was checked again against the lead's scope, the live output and
+  the fixture. Two prompt rules fell short of the scope's words; the rest
+  (C1, C2, P2, P4, P5) stays as iteration 2 left it, and P5's premise holds:
+  prompt B gets each relationship's `basis` as prompt A gave it, and
+  `TableFacts` carries no declared key.
+  - P3 says neither prompt may let the model say a column cannot be
+    inspected, tested or verified. Iteration 2's ban covered only hiding
+    given as the reason, so the live note with its reason cut, "entity_id
+    cannot be tested directly", passed it. Both prompts now say, in the same
+    words, "never write that a column cannot be inspected, tested or
+    verified". What is truly not measured is a claim, not a column, and the
+    ban leaves that sayable. The rest of that paragraph of
+    `contextualize.md` is rewrapped.
+  - P1 says to tie the existing "(inferred)" rule to the section headings.
+    The heading rule was a bullet of its own; it is now that rule's own
+    sentence: "Never launder a guess into a fact: only a claim whose verdict
+    is confirmed goes under a heading that says confirmed."
+  - NOTES and CHANGELOG follow both. NOTES' `shipped_orders` known limit
+    now gives its numbers from the fixture (160 of its 200 rows match
+    `customers.id`) in place of "reads `orders.customer_id` at 80%".
+- Tests first. With iteration 2's prompts the two changed assertions failed:
+  "write.md no longer says that a confirmed heading holds confirmed claims
+  only: ..." and "contextualize.md forbids calling a column hidden, or
+  saying it cannot be inspected, tested or verified". The ban's test is now
+  "neither prompt lets the model call a column hidden, or say it cannot be
+  inspected, tested or verified: ..."; no check names it.
+- Sabotage: nineteen breaks, each file copied outside the repository and
+  compared with `cmp` before the break, restored from the copy and compared
+  with `cmp` after; `git diff` hashed the same before and after. Each failed
+  `test/write.test.ts`:
+  - C1, the old line with the detail inside the bold fact, and C1, the
+    detail after the numbers without "(inferred)": "a table file carries
+    ..." failed with "the numbers are the fact, the detail only what the
+    analysis read" (and "a problem over two tables ..." with its own
+    message, since it compares the whole line).
+  - C2, `const over = ""`: "a problem over two tables ..." failed with
+    "products_legacy's file says the numbers count products' rows, not its
+    own"; C2, named only in the second table's file: the same test failed
+    with "products' file says it too, since its line names products_legacy
+    alone".
+  - P1 (the heading sentence, "in that word and no other", the open
+    questions), P2 (the confirmed-suspicion rule, "which cannot tell case
+    from spacing"), P4 (the duplicate_entity numbers, the overlap's
+    direction) and P5 (the inferred broken join) each failed "prompt B
+    files a suspicion by its verdict, ..." with "write.md no longer says
+    that <that rule>: <its sentence>".
+  - P3, in each prompt: what a hidden column means deleted, the ban
+    deleted, the ban narrowed back to hiding given as the reason, and in
+    `contextualize.md` the polymorphic rule's "cannot be tested" put back:
+    each failed "neither prompt lets the model call a column hidden, ..."
+    with the message naming that prompt and that rule.
+- All 99 file checks in `acceptance/checks.json` pass.
+- `npm run verify` exits 0: 312 tests, 310 pass, the 2 live tests skipped,
+  0 fail; the package smoke test passes.

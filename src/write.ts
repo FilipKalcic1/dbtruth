@@ -78,9 +78,11 @@ export function tableFile(v: Verified, t: TableFacts): string {
     const subject = [...s.tables.filter((name) => !mine(name)), ...(s.column ? [s.column] : [])].join(", ");
     const head = `${s.kind}${subject ? ` ${subject}` : ""}`;
     if (verdict.status !== "confirmed") return [`- ${head} (inferred${verdict.skipped ? `, not measured: ${verdict.skipped}` : ""}): ${s.detail}`];
+    // A verdict confirms the numbers, measured over the first table the suspicion names, and not the detail's words.
     const numbers = Object.entries(verdict.measurement.numbers).map(([k, x]) => `${k} ${x}`).join(", ");
+    const over = s.tables.length > 1 ? ` (measured over ${s.tables[0]})` : "";
     const hint = s.kind === "inconsistent_values" && s.column ? ` Compare with lower(btrim(${s.column})).` : "";
-    return [`- **${head}**: ${s.detail} (${numbers}).${hint}`];
+    return [`- **${head}**: ${numbers}${over}.${hint} ${s.detail} (inferred)`];
   });
 
   const values = Object.entries(t.categorical).map(([column, list]) => `- ${column}: ${list.map((x) => JSON.stringify(x)).join(", ")}`);

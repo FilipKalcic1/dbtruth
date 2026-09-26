@@ -11,6 +11,8 @@ import { confine, fitForWriter, joinLine, persist, tableFile, tableFileName, wri
 const facts = (name: string, extra: Partial<TableFacts> = {}): TableFacts => ({ name, kind: "table", rowEstimate: 500, primaryKey: ["id"], categorical: {}, ...extra });
 const verdict = (status: Verdict["status"], numbers: Record<string, number> = {}, skipped?: string): Verdict => ({ status, measurement: { query: "SELECT 1", numbers }, ...(skipped ? { skipped } : {}) });
 const nothing: Verified = { version: 1, database: "x", relations: "1 table", claims: { entities: [], tables: [], relationships: [], suspicions: [], questions: [] }, verdicts: {}, fitsInContext: true, tables: [] };
+/** A prompt on one line, so a rule is found however the file wraps it, with LF or CRLF as the checkout has it. */
+const prompt = (name: string) => readFileSync(new URL(`../src/prompts/${name}.md`, import.meta.url), "utf8").replace(/\s+/g, " ");
 
 /** The fixture's shop as the writer sees it: a broken join, a confirmed one with nulls, a rejected one, an empty one, and three suspicions. */
 const shop: Verified = {
@@ -47,7 +49,7 @@ test("a table file carries the measured numbers, both directions of a join, and 
   assert.match(orders, /^# orders\n\nOne row per customer order\. \(inferred\)\nGrain: order\n- status is free text\n\ntable, ~500 rows, primary key: id\n/, "the model's meaning, then the facts");
   assert.match(orders, /\n- \*\*BROKEN\*\* orders\.customer_id -> customers\.id: 88\.0% match \(440 of 500 sampled\), 60 orphans \(inferred\)\. An inner join drops the orphans: use LEFT JOIN, or filter them on purpose\.\n/);
   assert.match(orders, /\n- order_items\.order_id -> orders\.id: confirmed, 100\.0% of 1080 sampled rows match\. 120 sampled rows \(10\.0%\) have no order_id; an inner join drops them too\.\n/, "an incoming join, declared, with its null share");
-  assert.match(orders, /\n- \*\*inconsistent_values status\*\*: shipped \/ SHIPPED \(distinctValues 5, canonicalForms 3, collisions 2\)\. Compare with lower\(btrim\(status\)\)\.\n/);
+  assert.match(orders, /\n- \*\*inconsistent_values status\*\*: distinctValues 5, canonicalForms 3, collisions 2\. Compare with lower\(btrim\(status\)\)\. shipped \/ SHIPPED \(inferred\)\n/, "the numbers are the fact, the detail only what the analysis read");
   assert.match(orders, /\n## Values\n\n- status: "pending", "SHIPPED", "shipped"\n$/, "values are quoted so case and spacing show");
 
   const customers = tableFile(shop, shop.tables[1]!);
@@ -59,7 +61,28 @@ test("a table file carries the measured numbers, both directions of a join, and 
   const cars = tableFile(shop, shop.tables[2]!);
   assert.match(cars, /\ntable, no rows, primary key: id\n/);
   assert.match(cars, /\n- cars\.customer_id -> customers\.id \(inferred, not measured: no non-null rows to test\)\n/);
-  assert.match(cars, /\n- \*\*dead_table\*\*: empty beside vehicles \(count 0, exact 1\)\.\n/);
+  assert.match(cars, /\n- \*\*dead_table\*\*: count 0, exact 1\. empty beside vehicles \(inferred\)\n/, "the count is the fact, the detail only what the analysis read");
+});
+
+test("a problem over two tables names the one its numbers were measured over, in both tables' files", () => {
+  const duplicate = { kind: "duplicate_entity" as const, tables: ["products", "products_legacy"], detail: "same columns and values" };
+  const v: Verified = {
+    ...nothing,
+    tables: [facts("products", { rowEstimate: 80 }), facts("products_legacy", { rowEstimate: 70 })],
+    claims: { ...nothing.claims, suspicions: [duplicate] },
+    verdicts: { "suspicion:duplicate_entity:products+products_legacy": verdict("confirmed", { total: 80, matched: 70, sharedColumns: 5, overlap: 0.875 }) },
+  };
+  const line = (t: TableFacts) => tableFile(v, t).split("\n").find((l) => l.startsWith("- **duplicate_entity"));
+  assert.equal(
+    line(v.tables[1]!),
+    "- **duplicate_entity products**: total 80, matched 70, sharedColumns 5, overlap 0.875 (measured over products). same columns and values (inferred)",
+    "products_legacy's file says the numbers count products' rows, not its own",
+  );
+  assert.equal(
+    line(v.tables[0]!),
+    "- **duplicate_entity products_legacy**: total 80, matched 70, sharedColumns 5, overlap 0.875 (measured over products). same columns and values (inferred)",
+    "products' file says it too, since its line names products_legacy alone",
+  );
 });
 
 test("a branch reads with its condition, the value as SQL writes it", () => {
@@ -156,6 +179,32 @@ test("prompt B is sent Verified whole, without the verdicts' queries when that i
   assert.equal(shop.verdicts["relationship:orders.customer_id->customers.id"]!.measurement.query, "SELECT 1", "Verified keeps them, for --json and the snapshot");
 
   assert.deepEqual(fitted(tokens(told!) - 1), { reduced: "README.md and ENTITIES.md not written: over the model's input limit even without the verdicts' queries" });
+});
+
+test("prompt B files a suspicion by its verdict, says what its numbers show and which way an overlap runs, and gives a missing foreign key as the analysis's finding", () => {
+  const b = prompt("write");
+  const rules: [string, string][] = [
+    ["a confirmed heading holds confirmed claims only", "Never launder a guess into a fact: only a claim whose verdict is confirmed goes under a heading that says confirmed."],
+    ["the label is (inferred) and no other word", 'are labelled "(inferred)" inline, in that word and no other.'],
+    ["unverifiable suspicions go with the open questions", "then open questions for a human, with the unverifiable suspicions."],
+    ["a confirmed suspicion confirms its numbers, not its detail", "A confirmed suspicion confirms its numbers, not the words of its detail"],
+    ["an inconsistent_values count cannot tell case from spacing", "collisions (the difference), which cannot tell case from spacing."],
+    ["a duplicate_entity's numbers are over its first table", "A duplicate_entity suspicion's numbers are over the first of its two tables: sharedColumns"],
+    ["a duplicate_entity's overlap is a share of the first table's rows", "A duplicate_entity's overlap is one way: give it as a share of the first table's rows, never of the second's."],
+    ["a broken join on inference is one the analysis found no declared foreign key for", 'When its basis is "inferred", label it "(inferred)" and say that the analysis found no declared foreign key for it.'],
+  ];
+  for (const [what, sentence] of rules) assert.ok(b.includes(sentence), `write.md no longer says that ${what}: "${sentence}"`);
+});
+
+test("neither prompt lets the model call a column hidden, or say it cannot be inspected, tested or verified: the values are withheld from the analysis only", () => {
+  const a = prompt("contextualize");
+  const b = prompt("write");
+  const ban = "Never call a column or its values hidden, and never write that a column cannot be inspected, tested or verified.";
+  assert.ok(a.includes("its values were withheld from you only; the database still holds them, and the measurements read them."), "contextualize.md says the database holds a hidden column's values");
+  assert.ok(a.includes(ban), "contextualize.md forbids calling a column hidden, or saying it cannot be inspected, tested or verified");
+  assert.ok(a.includes('When that column has no "values" list, no condition on it is measured'), "contextualize.md says what goes unmeasured for a column without a values list, not that it cannot be tested");
+  assert.ok(b.includes("means that its sample values were withheld from the analysis model only; the database holds them, and the measurements read them."), "write.md says what a column called hidden means");
+  assert.ok(b.includes(ban), "write.md forbids it in the same words");
 });
 
 test("a view, a partitioned table and a table without a key say so", () => {
