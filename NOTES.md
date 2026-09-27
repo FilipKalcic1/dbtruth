@@ -2762,6 +2762,16 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   GitHub issue (#14) rather than a form: subscribing to it is how to hear
   when the tier opens, and no email address is collected. The README on npm
   keeps the placeholders until the next publish.
+- **The README opens with the product's three steps.** The maintainer found
+  the README unclear as one product: T1.5 put the quick start and then the
+  troubleshooting table first, so a newcomer met sixty rows of errors before
+  the agent and CI sections, and the Action's README stood apart. A section
+  "In three steps" now comes before the quick start: measure (`npx dbtruth`),
+  give it to the agent (the skill and `mcp`), keep it true (the Action), each
+  with its commands, a picture from a real run and a link to its section.
+  T1.5's order below it is unchanged, so its checks still hold. The Action's
+  README says it is the third step, and both READMEs say the Action is free
+  on private repositories until the Team tier opens.
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values
