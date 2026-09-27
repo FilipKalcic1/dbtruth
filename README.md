@@ -9,6 +9,49 @@ it is written down.
 
 ![An agent writes an inner join and loses 60 orders; dbtruth runs; the agent reads context/README.md and writes a left join](https://raw.githubusercontent.com/FilipKalcic1/dbtruth/main/docs/demo.gif)
 
+## In three steps
+
+dbtruth is one tool in three parts. Each step works on its own, and each one
+builds on the one before.
+
+**1. Measure your database.** `npx dbtruth init` writes a `.env`: fill in the
+database URL and an Anthropic API key, then run `npx dbtruth`. In a minute or
+two you get `context/`: what each table holds, and every join and suspicion
+measured on the data, with the query that measured it. Commit it.
+Details: [Quick start](#quick-start).
+
+```bash
+npx dbtruth init
+npx dbtruth
+```
+
+![context/tables/orders.md from a real run on the test fixture](https://raw.githubusercontent.com/FilipKalcic1/dbtruth/main/docs/steps/1-measure.png)
+
+**2. Give it to your agent.** Install the skill and add the MCP server. Claude
+Code then reads `context/` before it writes SQL, and measures a join it is
+unsure of, live and with no API key. Details:
+[Giving it to your agent](#giving-it-to-your-agent).
+
+```bash
+npx dbtruth init --skill
+claude mcp add --transport stdio dbtruth -- npx -y dbtruth mcp
+```
+
+![A real Claude Code session: the skill, context/ and the dbtruth tools before the join](https://raw.githubusercontent.com/FilipKalcic1/dbtruth/main/docs/steps/2-agent.png)
+
+**3. Keep it true on every pull request.** The GitHub Action measures the
+committed claims again on each pull request, keeps one comment with what
+moved, and fails the job when a join breaks. No model, no API key. Details:
+[CI](#ci).
+
+```yaml
+- uses: FilipKalcic1/dbtruth-action@v1
+  with:
+    database-url: ${{ secrets.DBTRUTH_DATABASE_URL }}
+```
+
+![The Action's comment on a pull request that broke a join](https://raw.githubusercontent.com/FilipKalcic1/dbtruth/main/docs/steps/3-ci.png)
+
 ## Quick start
 
 You need Node 20 or newer, a Postgres 12 or newer database you can read, and
@@ -435,7 +478,8 @@ check will never fail the job.
 The Team tier will cost $29 per team per month, or $290 per year (USD). A
 team is one license key, for up to 10 private repositories and any number
 of people. [Join the waitlist](https://github.com/FilipKalcic1/dbtruth/issues/14)
-to hear when it opens: subscribe to that issue.
+to hear when it opens: subscribe to that issue. Until it opens, the Action runs on private
+repositories for free.
 
 ## What it sends, and what it never does
 
