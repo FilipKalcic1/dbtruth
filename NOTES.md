@@ -2747,6 +2747,21 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     and the waitlist form (T6.1, T6.3). The first four are manual items of
     T7.1 in `acceptance/manual.json`, with no evidence until they are done.
 
+## 0.4.1 (2026-09-27)
+
+- **From 0.4.1 the license is PolyForm Shield 1.0.0, not MIT.** The
+  maintainer wants no one to take the code and sell it as their own product.
+  PolyForm Shield lets anyone use the software for any purpose, at work and in
+  CI included, except to provide a product that competes with it, and unlike
+  the Functional Source License it never turns into an open source license
+  later. `LICENSE` carries the required notice (Filip Kalcic) and a "Licensor
+  Line of Business" line, so a product the maintainer stops offering stays
+  protected. What was published under MIT, npm 0.1.0 to 0.4.0 and the
+  Action's v1.0.0, stays MIT for whoever has it. One commit by another author
+  (0ece505) came in under MIT; MIT allows it to be included in a work under
+  other terms as long as its notice is kept, which `NOTICE` does, and the
+  package now ships `NOTICE`. The project is source-available from here, not
+  open source; the README and the launch texts say so.
 - **The Team tier's price and waitlist, set after 0.4.0 was published.** The
   maintainer asked the lead to set the price (T6.1's HUMAN part). $29 per
   team per month, or $290 a year, from the published prices of comparable
@@ -2772,6 +2787,7 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   T1.5's order below it is unchanged, so its checks still hold. The Action's
   README says it is the third step, and both READMEs say the Action is free
   on private repositories until the Team tier opens.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values

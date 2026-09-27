@@ -711,4 +711,10 @@ score and, without `--task`, the overall score, weighted as section 4 of
 `BUILD_PLAN.md` says. It exits 0 only at 100. The format of both files is
 described at the top of `scripts/acceptance.mjs`.
 
-MIT.
+## License
+
+Free to use for any purpose, at work and in your CI included, except to
+provide a product that competes with dbtruth: the
+[PolyForm Shield License 1.0.0](LICENSE). Versions up to and including 0.4.0
+were released under the MIT License, which still applies to them; `NOTICE`
+keeps its notice for code others contributed under it.

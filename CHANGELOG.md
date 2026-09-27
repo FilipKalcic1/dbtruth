@@ -3,6 +3,17 @@
 Changes since 0.1.8. What earlier releases changed, and why, is in
 `NOTES.md`.
 
+## 0.4.1 (2026-09-27)
+
+- License: from 0.4.1, dbtruth is under the PolyForm Shield License 1.0.0
+  instead of MIT. It is free to use for any purpose, at work included, except
+  to provide a product that competes with dbtruth. 0.4.0 and earlier stay
+  under MIT, and `NOTICE` keeps the MIT notice for code contributed under it.
+- README: a section "In three steps" before the quick start; the Team tier's
+  price ($29 per team per month, or $290 per year) and its waitlist, the
+  pinned issue #14; the Action runs on private repositories for free until
+  the Team tier opens.
+
 ## 0.4.0 (2026-09-26)
 
 0.4.0 also carries the two sections below: 0.3.0 and 0.2.0 were not published.
