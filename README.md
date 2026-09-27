@@ -14,15 +14,24 @@ it is written down.
 dbtruth is one tool in three parts. Each step works on its own, and each one
 builds on the one before.
 
-**1. Measure your database.** `npx dbtruth init` writes a `.env`: fill in the
-database URL and an Anthropic API key, then run `npx dbtruth`. In a minute or
-two you get `context/`: what each table holds, and every join and suspicion
-measured on the data, with the query that measured it. Commit it.
-Details: [Quick start](#quick-start).
+| Step | You need | It costs |
+|---|---|---|
+| 1. Measure | Node 20 or newer, a Postgres 12 or newer database you can read, and an Anthropic API key from [console.anthropic.com](https://console.anthropic.com). A Claude Pro or Max subscription does not include one. | about $0.10 to $0.25 of that key per run |
+| 2. Give it to your agent | Claude Code, and the `.env` from step 1: the server reads the database URL there | nothing more: the server calls no model |
+| 3. Keep it true | a GitHub repository, and a database GitHub's runners can reach | nothing more: no model, no key |
+
+**1. Measure your database.** `npx dbtruth init` writes a `.env` at the root
+of your repository with its lines commented out: fill in the database URL and
+the API key, and remove the `#` before each. `npx dbtruth doctor` then checks
+the setup without spending anything, and `npx dbtruth` measures. In a minute
+or two you get `context/`: what each table holds, and every join and suspicion
+measured on the data, with the query that measured it. Commit it, except the
+`.env`. Details: [Quick start](#quick-start).
 
 ```bash
-npx dbtruth init
-npx dbtruth
+npx dbtruth init      # writes .env: fill in DATABASE_URL and ANTHROPIC_API_KEY
+npx dbtruth doctor    # checks the setup, spends nothing
+npx dbtruth           # writes context/
 ```
 
 ![context/tables/orders.md from a real run on the test fixture](https://raw.githubusercontent.com/FilipKalcic1/dbtruth/main/docs/steps/1-measure.png)
@@ -37,12 +46,49 @@ npx dbtruth init --skill
 claude mcp add --transport stdio dbtruth -- npx -y dbtruth mcp
 ```
 
+On native Windows (not WSL; Git Bash counts as native), the second line is
+`claude mcp add --transport stdio dbtruth -- cmd /c npx -y dbtruth mcp`. With
+no `claude` command, as in the VS Code extension, put the server in
+`.mcp.json` at the root of the project instead, and approve it when Claude
+Code asks:
+
+```json
+{
+  "mcpServers": {
+    "dbtruth": { "command": "npx", "args": ["-y", "dbtruth", "mcp"] }
+  }
+}
+```
+
+On native Windows, `.mcp.json` starts it through `cmd`:
+
+```json
+{
+  "mcpServers": {
+    "dbtruth": { "command": "cmd", "args": ["/c", "npx", "-y", "dbtruth", "mcp"] }
+  }
+}
+```
+
+The server reads the database URL from the `.env` of step 1. The skill is
+enough to make Claude use it: in a test in Claude Code, with no `CLAUDE.md`,
+Claude loaded the skill on its own before it wrote SQL. The line `init`
+suggests for `CLAUDE.md` is optional; add it if you want every session to
+read `context/`, also where Claude does not load the skill. To see that it
+works, ask Claude to write a query on two of your tables: before it answers,
+it reads `context/` or calls a dbtruth tool.
+
 ![A real Claude Code session: the skill, context/ and the dbtruth tools before the join](https://raw.githubusercontent.com/FilipKalcic1/dbtruth/main/docs/steps/2-agent.png)
 
 **3. Keep it true on every pull request.** The GitHub Action measures the
 committed claims again on each pull request, keeps one comment with what
-moved, and fails the job when a join breaks. No model, no API key. Details:
-[CI](#ci).
+moved, and fails the job when a join breaks. No model, no API key. Add the
+database URL as the repository secret `DBTRUTH_DATABASE_URL` (Settings,
+Secrets and variables, Actions). GitHub's own runners reach the database over
+the internet, so one only inside a private network needs a copy they can
+reach, or a self-hosted runner inside that network. Copy the whole workflow
+from [CI](#ci), which also checks out the repository and lets the Action
+comment; this is the step that runs the check:
 
 ```yaml
 - uses: FilipKalcic1/dbtruth-action@v1
@@ -224,6 +270,10 @@ there before it writes SQL:
 - **Cursor**: the same sentence in `.cursor/rules`, or `@context` in the chat.
 - **Anything else**: paste `context/README.md` at the start of the task.
 
+For Claude Code, the skill and the MCP server below go further: the agent
+reads `context/` on its own and measures a join it is unsure of. With them,
+the line in `CLAUDE.md` is optional.
+
 Commit `context/` next to your code. It is small, it reads well in a diff, and
 everyone on the project gets the same warnings. Run the tool again when the
 schema changes.
@@ -283,9 +333,10 @@ directory it starts a server in, so the project is named with `--project`:
 }
 ```
 
-On native Windows, if the agent shows the server as failed with "Connection
-closed", start it through `cmd`:
-`claude mcp add --transport stdio dbtruth -- cmd /c npx -y dbtruth mcp`.
+On native Windows (not WSL; Git Bash counts as native), start it through
+`cmd`, or the agent shows the server as failed with "Connection closed":
+`claude mcp add --transport stdio dbtruth -- cmd /c npx -y dbtruth mcp`. In
+`.mcp.json` the command is then `cmd`, with `/c` before the arguments.
 
 The project is the directory `--project` names, else the one Claude Code sets
 in `CLAUDE_PROJECT_DIR` when it starts the server, else the directory the
@@ -456,6 +507,51 @@ ran on, or a copy of it. On an empty database built from the migrations
 alone, the claims have nothing to measure. Since the pull request decides what
 is checked, review a change to `context/snapshot.json` as you would a change
 to the code (previous section).
+
+**Which database, in practice.** `check` answers one question: does the
+context still hold on this database? Give it a copy of the data the context
+was measured on, with the pull request's migrations applied, and it shows what
+the pull request does to the claims: a migration that breaks a join fails the
+job. Against a fixed copy without the migrations, it only says whether the
+data drifted since the snapshot. The runner must reach that database, and
+GitHub's own runners come from the internet, so there are two ways:
+
+- A staging database they can reach, or a self-hosted runner
+  (`runs-on: self-hosted`) inside the network that holds it.
+- A Postgres service container in the job, filled from a dump you keep for
+  CI and then migrated, as the Action's own
+  [test workflow](https://github.com/FilipKalcic1/dbtruth-action/blob/main/.github/workflows/test.yml)
+  does with its fixture. Measure that same copy with `npx dbtruth`, so
+  `context/` and the database agree, and keep a dump of real data out of the
+  repository. A URL to a container that lives only as long as the job needs
+  no secret. In place of the job above:
+
+```yaml
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Load the copy, then apply this pull request's migrations
+        run: |
+          psql -v ON_ERROR_STOP=1 postgres://postgres:postgres@localhost:5432/postgres -f ci-copy.sql
+          # your migration command here
+      - uses: FilipKalcic1/dbtruth-action@v1
+        with:
+          database-url: postgres://postgres:postgres@localhost:5432/postgres
+```
 
 ## Team tier
 
