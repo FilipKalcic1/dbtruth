@@ -2787,6 +2787,28 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   T1.5's order below it is unchanged, so its checks still hold. The Action's
   README says it is the third step, and both READMEs say the Action is free
   on private repositories until the Team tier opens.
+- **After 0.4.1 was published: a newcomer's walk through the three steps.** A
+  fresh agent that knew nothing of dbtruth followed only the README, on
+  Windows with Claude Code as the VS Code extension and no `claude` command,
+  in a new git repository, against Pagila, with the published 0.4.1. Steps 1
+  and 2 worked in about eleven minutes of its time: `doctor` passed, one full
+  run took 70 s and about $0.17, and Claude Code 2.1.283, started headless
+  with the project's `.mcp.json`, connected to the server, loaded the skill,
+  read `context/`, called `describe_table` and answered with what was
+  measured. Step 3 stopped at the workflow file: for a database the runners
+  cannot reach, the README named the options but showed none. Fixed in the
+  README from what it reported: a table of what each step needs, with the
+  API key from console.anthropic.com that a Claude subscription does not
+  include; `doctor` and removing the `#` in step 1; both `.mcp.json` forms
+  written out, native Windows made unconditional (Git Bash counts), the
+  `CLAUDE.md` line made optional with the skill, since the Claude Code run
+  of T5.2 A3 loaded the skill with no `CLAUDE.md`, and how to see step 2
+  work; where the secret goes; and in CI, which database a pull request's
+  check should get (a copy of the measured data with the pull request's
+  migrations applied) and a service-container job for a database the
+  runners cannot reach, modeled on the Action's own test workflow. Left for
+  later: `init` prints the `claude mcp add` line in its non-Windows form on
+  Windows, and "fill in .env" again after a run.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 
