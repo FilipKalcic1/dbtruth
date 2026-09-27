@@ -47,8 +47,9 @@ claude mcp add --transport stdio dbtruth -- npx -y dbtruth mcp
 ```
 
 On native Windows (not WSL; Git Bash counts as native), the second line is
-`claude mcp add --transport stdio dbtruth -- cmd /c npx -y dbtruth mcp`. With
-no `claude` command, as in the VS Code extension, put the server in
+`claude mcp add --transport stdio dbtruth -- cmd /c npx -y dbtruth mcp`; in
+Git Bash, write `//c` for `/c`, which Git Bash would turn into the path `C:/`.
+With no `claude` command, as in the VS Code extension, put the server in
 `.mcp.json` at the root of the project instead, and approve it when Claude
 Code asks:
 
@@ -129,7 +130,14 @@ fill in its value. It never changes an existing `.env` or `.gitignore`: it
 leaves the `.env` as it is, and asks git whether `.gitignore` ignores `.env`,
 printing the line to add when it does not. With `--skill` it also installs
 the skill for Claude Code (see Giving it to your agent). Last, it prints the
-next steps:
+next steps, leaving out those already done: `fill in .env` once that `.env`
+sets both settings, and `run npx dbtruth` once `context/snapshot.json` is
+beside it. `run npx dbtruth doctor` stays, since it checks the `.env` of
+whoever runs `init`, a teammate's in a fresh clone too. On native Windows the last line gives the command that starts the
+server through `cmd`, as under Giving it to your agent, for PowerShell and
+cmd: `claude mcp add --transport stdio dbtruth -- cmd /c npx -y dbtruth mcp`.
+In Git Bash it takes `//c`, as that section says. In a new project on any
+other system, it prints:
 
 ```
 next steps:
@@ -336,7 +344,9 @@ directory it starts a server in, so the project is named with `--project`:
 On native Windows (not WSL; Git Bash counts as native), start it through
 `cmd`, or the agent shows the server as failed with "Connection closed":
 `claude mcp add --transport stdio dbtruth -- cmd /c npx -y dbtruth mcp`. In
-`.mcp.json` the command is then `cmd`, with `/c` before the arguments.
+Git Bash, write `//c` for `/c`: Git Bash turns a lone `/c` into the path `C:/`
+before `claude` sees it, and the server does not start. In `.mcp.json` the
+command is then `cmd`, with `/c` before the arguments.
 
 The project is the directory `--project` names, else the one Claude Code sets
 in `CLAUDE_PROJECT_DIR` when it starts the server, else the directory the

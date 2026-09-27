@@ -2787,6 +2787,9 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   T1.5's order below it is unchanged, so its checks still hold. The Action's
   README says it is the third step, and both READMEs say the Action is free
   on private repositories until the Team tier opens.
+
+## 0.4.2 (2026-09-27)
+
 - **After 0.4.1 was published: a newcomer's walk through the three steps.** A
   fresh agent that knew nothing of dbtruth followed only the README, on
   Windows with Claude Code as the VS Code extension and no `claude` command,
@@ -2806,9 +2809,90 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   work; where the secret goes; and in CI, which database a pull request's
   check should get (a copy of the measured data with the pull request's
   migrations applied) and a service-container job for a database the
-  runners cannot reach, modeled on the Action's own test workflow. Left for
-  later: `init` prints the `claude mcp add` line in its non-Windows form on
-  Windows, and "fill in .env" again after a run.
+  runners cannot reach, modeled on the Action's own test workflow. 0.4.2
+  publishes these README changes and fixes the two things the walk found in
+  `init`'s next steps (next entry): on Windows the `claude mcp add` line came
+  in its non-Windows form, and `init --skill` after a full run said again to
+  fill in `.env`, run `doctor` and run `dbtruth`.
+- **`init` leaves out the steps already done, and gives native Windows its
+  `claude mcp add` line.** In the walk above, `init --skill`, run after a
+  full run to install the skill, said again to fill in `.env`, run `npx
+  dbtruth doctor` and run `npx dbtruth`, all three done, and on Windows it
+  gave `claude mcp add --transport stdio dbtruth -- npx -y dbtruth mcp`,
+  which Claude Code there shows as failed with "Connection closed"; the
+  README says native Windows needs `cmd /c` before `npx`. A newcomer who
+  follows the printed steps word for word, as the quick start invites, meets
+  both.
+  - **What counts as done.** `init` judges the directory it writes to: the
+    repository root or, outside a repository, the current directory.
+    Filling in the `.env` is done once the `.env` there sets both
+    `DATABASE_URL` and `ANTHROPIC_API_KEY`, as a run reads the file: through
+    `readDotEnv`, which is `readEnvFile` on that path, so a value is read as
+    a run reads it, and a line still behind `#`, an empty value, which a run
+    takes for unset, and a file that cannot be read, which a run passes
+    over, set nothing. The `.env` `init` has just written is all comments,
+    so it is never filled in. The run is done once
+    `context/snapshot.json` is a file there, as every full run since 0.4.0
+    leaves it. `doctor` is never left out (the maintainer's decision, after
+    a review found the case): a teammate who clones a repository that
+    commits `context/`, as the README asks, and runs `init` has a new `.env`
+    of their own, and the snapshot says the project was measured, not that
+    this `.env` works. A `context/` without it, as 0.1.8 left one, does not count,
+    nor does a snapshot in the package `init` was run from: the steps are
+    for the directory that gets the `.env` and the skill, where the README
+    says to run dbtruth and commit `context/` for the agent to read. The
+    line for `CLAUDE.md` and the `claude mcp add` line are always printed:
+    the first is optional with the skill, and whether the server was added
+    is in Claude Code's settings, not in the project.
+  - **The platform is a parameter.** `runInit` takes `platform`, and the CLI
+    passes `process.platform`, as it passes `process.version` to `doctor`:
+    the tests call `runInit` with `win32`, `linux` and `darwin` on any
+    machine, and the tests that run `init` as a command expect the form of
+    the machine they run on, which checks, on Windows, that the CLI passes
+    it: CI runs on Linux alone, where a CLI that passed `linux` would pass
+    too. `win32` is native Windows alone, Git Bash included; WSL reports
+    `linux` and gets the plain form, which works there. On native Windows
+    `npx` is a batch file, which Claude Code starts only through `cmd`.
+  - **The Windows line is PowerShell's and cmd's.** Git Bash turns a lone
+    `/c` into the path `C:/` before a Windows program such as `claude` gets
+    it: from Git Bash, `node` given `cmd /c npx -y dbtruth mcp` got `cmd C:/
+    npx -y dbtruth mcp`, and `cmd //c` got `cmd /c`. The server so added
+    would not start. From PowerShell, `cmd //c` opens an interactive `cmd`
+    instead, so no one line serves both, and the README says, wherever it
+    gives the command, that Git Bash takes `//c`. `init` does not guess the
+    shell: the line may be pasted into another one, and `MSYSTEM`, which
+    Git Bash sets, is inherited by a PowerShell started from it.
+  - **The README keeps the whole block.** The quick start still shows every
+    step, in the plain form, which `test/init.test.ts` compares with what
+    `init` prints on Linux in a new project. The paragraph before it says
+    which steps are left out once done and gives the Windows command, which
+    the test reads from there, finds under "Giving it to your agent" too,
+    and compares with what `init` prints on `win32`.
+  - **Tests.** Five new in `test/init.test.ts`: which `.env` contents count
+    as filled in (both set; both set with `export`, quotes and spaces; one
+    missing; one empty; one behind `#`; an empty file); a `.env` that
+    cannot be read, which keeps the step and does not stop `init`
+    (`readEnvFile` alone would throw there); the snapshot beside the `.env`,
+    from the root and from a package, against one in the package alone, a
+    `context/` without one and a directory of that name; the three
+    platforms; and, as a command, `init --skill` after a full run, which
+    prints the heading, `doctor`, the line for `CLAUDE.md` and the MCP line
+    alone.
+    One expectation changed, named here as section 4.4 asks: the test of an
+    existing `.env` no longer expects "fill in .env", since that `.env` sets
+    both settings. The three tests that run `init` as a command expect the
+    form of the machine they run on. Each new test is a check of T1.4 in
+    `acceptance/checks.json`.
+  - Not done: settings from the environment, which a run reads over the
+    file, do not count, since the step is about the file; leaving out the
+    line for `CLAUDE.md` when `CLAUDE.md` holds it, or the `claude mcp add`
+    line when `.mcp.json` names the server, which would have `init` read
+    other tools' files for two lines the user can pass over; a `.env` other
+    than the root's, such as a package's own, which a run from that package
+    reads instead, as before; a package measured on its own, whose snapshot
+    is in the package, so `init --skill` from there still gives the run;
+    and whether the snapshot is valid or current, which is `check`'s
+    question.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

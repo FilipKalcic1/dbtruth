@@ -16,7 +16,7 @@ import { doctor } from "./doctor.js";
 import { extract, fitToContext, integerKeys, readCatalog } from "./extract.js";
 import { serve } from "./mcp.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
-import { connect, readSettings, repositoryRoot, resolveDatabaseUrl } from "./safety.js";
+import { connect, readDotEnv, readSettings, repositoryRoot, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
 import { readSnapshot, serialize, toSnapshot } from "./snapshot.js";
 import { assemble, describeKinds, EXIT_FAILURE, EXIT_FINDINGS, EXIT_OK, exitCode } from "./verdict.js";
@@ -219,18 +219,30 @@ const DOTENV = [
   "",
 ].join("\n");
 
-/** What init prints last, word for word as README.md's quick start shows it; test/init.test.ts holds the two equal. */
-const NEXT_STEPS = [
-  "next steps:",
-  "  fill in .env",
-  "  run npx dbtruth doctor",
-  "  run npx dbtruth",
-  "  add this line to CLAUDE.md: Before writing SQL against this database, read `context/README.md` and the file in `context/tables/` for every table you touch.",
-  "  add the MCP server to Claude Code: claude mcp add --transport stdio dbtruth -- npx -y dbtruth mcp",
-];
+/**
+ * What init prints last, word for word as README.md's quick start shows it, less the steps already done in dir: filling
+ * in the .env once it sets both settings, as a run reads it (one that cannot be read, or the one init writes, sets
+ * none), and the run once a snapshot is beside it. On native Windows npx is a batch file, which Claude Code
+ * starts only through cmd. test/init.test.ts holds these and the README equal.
+ */
+function nextSteps(dir: string, platform: NodeJS.Platform): string[] {
+  const values = readDotEnv(dir);
+  const measured = statSync(join(dir, SNAPSHOT), { throwIfNoEntry: false })?.isFile();
+  return [
+    "next steps:",
+    ...(values.DATABASE_URL && values.ANTHROPIC_API_KEY ? [] : ["  fill in .env"]),
+    // Doctor stays once context/ is measured: in a clone of a repository that commits it, the .env is new.
+    "  run npx dbtruth doctor",
+    ...(measured ? [] : ["  run npx dbtruth"]),
+    "  add this line to CLAUDE.md: Before writing SQL against this database, read `context/README.md` and the file in `context/tables/` for every table you touch.",
+    `  add the MCP server to Claude Code: claude mcp add --transport stdio dbtruth -- ${platform === "win32" ? "cmd /c " : ""}npx -y dbtruth mcp`,
+  ];
+}
 
 export type InitOptions = {
   cwd: string;
+  /** process.platform: win32 is native Windows alone, since WSL reports linux. */
+  platform: NodeJS.Platform;
   /** Also install the skill. */
   skill?: boolean;
   /** Replace the skill if it is there; never the .env. */
@@ -276,7 +288,7 @@ export function runInit(opts: InitOptions): number {
     if (!create(skill, readFileSync(new URL(`../${SKILL}`, import.meta.url)), opts, opts.force)) return EXIT_FAILURE;
   }
   if (!hasEnv) return EXIT_FAILURE;
-  for (const line of NEXT_STEPS) opts.err(line);
+  for (const line of nextSteps(dir, opts.platform)) opts.err(line);
   return EXIT_OK;
 }
 
@@ -417,7 +429,7 @@ export async function main(argv: string[]): Promise<number> {
     .option("--skill", "also install the skill that tells Claude Code when to read context/ and measure a join, at .claude/skills/dbtruth/SKILL.md")
     .option("--force", "with --skill, replace a skill that is there; the .env is never replaced")
     .action((own) => {
-      code = runInit({ cwd: process.cwd(), skill: own.skill, force: own.force, err });
+      code = runInit({ cwd: process.cwd(), platform: process.platform, skill: own.skill, force: own.force, err });
     });
   const check = program
     .command("check")

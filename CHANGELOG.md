@@ -3,6 +3,28 @@
 Changes since 0.1.8. What earlier releases changed, and why, is in
 `NOTES.md`.
 
+## 0.4.2 (2026-09-27)
+
+- `init`'s next steps leave out those already done: `fill in .env` once the
+  `.env` it found sets both `DATABASE_URL` and `ANTHROPIC_API_KEY`, and `run
+  npx dbtruth` once `context/snapshot.json` is beside that `.env`; `run npx
+  dbtruth doctor` stays, since it checks each person's own `.env`.
+  On native Windows its `claude mcp add` line starts the
+  server through `cmd /c`, as PowerShell and cmd take it (typed in Git Bash,
+  `cmd //c`); WSL gets the plain form.
+- README: what each of the three steps needs, with the Anthropic API key
+  from console.anthropic.com, which a Claude subscription does not include;
+  in step 1, removing the `#` before each setting and running `doctor`
+  before the run; on native Windows (Git Bash included, WSL not), the server
+  started through `cmd /c` always, not only after "Connection closed", and
+  in Git Bash typed with `//c`, since Git Bash turns a lone `/c` into `C:/`;
+  both `.mcp.json` forms written out, the one for native Windows through
+  `cmd`; the line in `CLAUDE.md` optional with the skill, and how to see that
+  the agent uses dbtruth; where the Action's secret goes; and in CI, which
+  database a pull request's check should get (a copy of the measured data
+  with the pull request's migrations applied), with a job that runs Postgres
+  as a service container for a database GitHub's runners cannot reach.
+
 ## 0.4.1 (2026-09-27)
 
 - License: from 0.4.1, dbtruth is under the PolyForm Shield License 1.0.0

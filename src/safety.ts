@@ -74,7 +74,7 @@ export const DATATYPE_MISMATCH_STATES: readonly string[] = ["42804", "42883", "4
 
 const MS_PER_SECOND = 1000;
 
-/** KEY=value pairs from a .env file in cwd, or {} when there is none. Values are never printed. */
+/** KEY=value pairs from a .env file in cwd, or {} when there is none or it cannot be read. Values are never printed. */
 export function readDotEnv(cwd: string): Record<string, string> {
   try {
     return readEnvFile(join(cwd, ".env"));

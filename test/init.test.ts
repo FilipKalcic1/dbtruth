@@ -8,14 +8,27 @@ import { fileURLToPath } from "node:url";
 import { runInit } from "../src/cli.js";
 import { DEFAULT_MODEL } from "../src/model.js";
 import { readEnvFile } from "../src/safety.js";
+import { writeUnreadable } from "./unreadable.js";
 
 const TSX = import.meta.resolve("tsx");
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const README = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const QUICK_START = /^## Quick start$([\s\S]*?)^## /m.exec(README)?.[1] ?? "";
+const AGENT = /^## Giving it to your agent$([\s\S]*?)^## /m.exec(README)?.[1] ?? "";
 
 /** The next steps as the quick start shows them: the fenced block that opens with "next steps:". */
 const NEXT = (/^```\r?\n(next steps:\r?\n[\s\S]*?)^```/m.exec(QUICK_START)?.[1] ?? "").trimEnd().split(/\r?\n/);
+/** The steps init leaves out once they are done: filling in the .env, and the run. Doctor stays: it checks each .env. */
+const FILL = "  fill in .env";
+const RUN = "  run npx dbtruth";
+/** The next steps less those done, from the quick start's or from the list given. */
+const without = (done: string[], next = NEXT) => next.filter((line) => !done.includes(line));
+/** The command that adds the server on native Windows, as the quick start gives it: npx started through cmd. */
+const WINDOWS_COMMAND = /`(claude mcp add [^`]* -- cmd \/c [^`]*)`/.exec(QUICK_START)?.[1];
+/** The next steps on native Windows: the last one with that command. */
+const WINDOWS_NEXT = [...NEXT.slice(0, -1), NEXT.at(-1)!.replace(/claude mcp add .*$/, WINDOWS_COMMAND ?? "")];
+/** The next steps init prints as a command on this machine, which passes it process.platform. */
+const HERE = process.platform === "win32" ? WINDOWS_NEXT : NEXT;
 /** The line for CLAUDE.md under "Giving it to your agent", unwrapped. */
 const CLAUDE_LINE = /^- \*\*Claude Code\*\*: one line in `CLAUDE\.md`\. \*([^*]+)\*/m.exec(README)?.[1]?.replace(/\s+/g, " ");
 /** Where init --skill installs the skill, from the repository root, and the file the package ships. */
@@ -44,10 +57,10 @@ function contents(dir: string): Record<string, Buffer> {
   return out;
 }
 
-/** Runs init from cwd, with --skill and --force as given: its exit code and every line it printed. */
-function init(cwd: string, options: { skill?: boolean; force?: boolean } = {}): { code: number; lines: string[] } {
+/** Runs init from cwd with the options given, on Linux unless they name a platform: its exit code and every line it printed. */
+function init(cwd: string, options: { skill?: boolean; force?: boolean; platform?: NodeJS.Platform } = {}): { code: number; lines: string[] } {
   const lines: string[] = [];
-  const code = runInit({ cwd, ...options, err: (line) => lines.push(line) });
+  const code = runInit({ cwd, platform: "linux", ...options, err: (line) => lines.push(line) });
   return { code, lines };
 }
 
@@ -102,8 +115,56 @@ test("an existing .env is left as it is, byte for byte, and init says so and goe
   const { code, lines } = init(root);
   assert.equal(code, 0);
   assert.deepEqual(contents(root), before, "every file, .env included, as it was");
-  assert.deepEqual(lines, [".env already exists; left as it is", ...NEXT]);
+  assert.deepEqual(lines, [".env already exists; left as it is", ...without([FILL])], "the next steps, less filling in a .env that sets both settings");
   for (const line of lines) assert.doesNotMatch(line, /canary-pii/);
+});
+
+test("init leaves out filling in the .env once the .env it found sets both settings a run needs, as a run reads them", () => {
+  assert.ok(NEXT.includes(FILL), `"${FILL}" is not a line of the quick start's next steps`);
+  const cases: [string, boolean][] = [
+    ["DATABASE_URL=postgres://u@h/d\nANTHROPIC_API_KEY=sk-ant-x\n", true],
+    // Set in the other forms a run reads: after export, quoted, around spaces.
+    ["export DATABASE_URL=\"postgres://u@h/d\"\n  ANTHROPIC_API_KEY = 'sk-ant-x'\n", true],
+    // One of the two missing, empty, or still behind the # init writes: a run reads it as not set.
+    ["DATABASE_URL=postgres://u@h/d\n", false],
+    ["ANTHROPIC_API_KEY=sk-ant-x\n", false],
+    ["DATABASE_URL=\nANTHROPIC_API_KEY=sk-ant-x\n", false],
+    ["DATABASE_URL=postgres://u@h/d\n# ANTHROPIC_API_KEY=sk-ant-x\n", false],
+    ["", false],
+  ];
+  for (const [dotenv, filled] of cases) {
+    const root = repository({ ".env": dotenv, ".gitignore": ".env\n" });
+    const { code, lines } = init(root);
+    assert.equal(code, 0, lines.join("\n"));
+    assert.deepEqual(lines, [".env already exists; left as it is", ...(filled ? without([FILL]) : NEXT)], `${JSON.stringify(dotenv)}: ${filled ? "filled in" : "still to fill in"}`);
+  }
+});
+
+test("a .env init cannot read sets nothing, as a run passes it over, so filling it in stays a step", () => {
+  const root = repository({ ".gitignore": ".env\n" });
+  writeUnreadable(join(root, ".env"), "DATABASE_URL=postgres://u@h/d\nANTHROPIC_API_KEY=sk-ant-x\n");
+  const { code, lines } = init(root);
+  assert.equal(code, 0, lines.join("\n"));
+  assert.deepEqual(lines, [".env already exists; left as it is", ...NEXT], "every next step, filling in the .env among them");
+});
+
+test("init leaves out the run once context/snapshot.json is beside the .env, keeps doctor, and not for one elsewhere", () => {
+  assert.ok(NEXT.includes(RUN), `"${RUN}" is not a line of the quick start's next steps`);
+  const up = (file: string) => join("..", "..", file);
+  // Beside the .env init wrote, as in a clone of a repository that commits context/, and beside the one it found at the
+  // root when run from a package: measured. Doctor stays, since it checks the .env of whoever runs init.
+  const fresh = repository({ "context/snapshot.json": "{}\n", ".gitignore": ".env\n" });
+  assert.deepEqual(init(fresh).lines, ["wrote .env", ...without([RUN])], "a snapshot beside the .env init wrote: doctor and not the run");
+  const measured = repository({ "context/snapshot.json": "{}\n", "packages/api/package.json": "{}\n", ".env": "", ".gitignore": ".env\n" });
+  assert.deepEqual(init(join(measured, "packages", "api")).lines, [`${up(".env")} already exists; left as it is`, ...without([RUN])], "a snapshot at the root, init run from a package");
+  // In the package init was run from, or a context/ with no snapshot, as a dbtruth older than 0.4.0 left it: not done.
+  const elsewhere = repository({ "packages/api/context/snapshot.json": "{}\n", ".env": "", ".gitignore": ".env\n" });
+  assert.deepEqual(init(join(elsewhere, "packages", "api")).lines, [`${up(".env")} already exists; left as it is`, ...NEXT], "a snapshot in the package alone");
+  const older = repository({ "context/README.md": "# context\n", ".env": "", ".gitignore": ".env\n" });
+  assert.deepEqual(init(older).lines, [".env already exists; left as it is", ...NEXT], "a context/ with no snapshot.json in it");
+  // Nor a directory by that name, which no run writes.
+  const directory = repository({ "context/snapshot.json/x": "", ".env": "", ".gitignore": ".env\n" });
+  assert.deepEqual(init(directory).lines, [".env already exists; left as it is", ...NEXT], "a directory named context/snapshot.json");
 });
 
 test("a .env that is a directory, such as a Python virtualenv, is left alone, and init exits 1: it could not write the file", () => {
@@ -201,14 +262,23 @@ test("the next steps init prints are exactly the quick start's, and its line for
   assert.ok(CLAUDE_LINE, 'no line for CLAUDE.md under "Giving it to your agent"');
   assert.ok(NEXT.some((line) => line.endsWith(`CLAUDE.md: ${CLAUDE_LINE}`)), `the quick start's next steps do not end a line with "CLAUDE.md: ${CLAUDE_LINE}"`);
   const root = repository({ ".gitignore": ".env\n" });
-  assert.deepEqual(init(root).lines, ["wrote .env", ...NEXT]);
+  assert.deepEqual(init(root).lines, ["wrote .env", ...NEXT], "every step in a new project, filling in the .env init just wrote among them");
 });
 
 test("the next steps end with the command that adds dbtruth mcp to Claude Code, the one under Giving it to your agent", () => {
   const command = /^  add the MCP server to Claude Code: (claude mcp add .+)$/.exec(NEXT.at(-1) ?? "")?.[1];
   assert.ok(command, `the last next step is "${NEXT.at(-1)}"`);
-  const agent = /^## Giving it to your agent$([\s\S]*?)^## /m.exec(README)?.[1] ?? "";
-  assert.ok(agent.split(/\r?\n/).includes(command), `"${command}" is not a line under Giving it to your agent`);
+  assert.ok(AGENT.split(/\r?\n/).includes(command), `"${command}" is not a line under Giving it to your agent`);
+});
+
+test("on native Windows the last next step adds the server through cmd, as the quick start and Giving it to your agent give it, and elsewhere as the block shows it", () => {
+  assert.ok(WINDOWS_COMMAND, "the quick start gives no claude mcp add command through cmd /c");
+  assert.ok(AGENT.includes(`\`${WINDOWS_COMMAND}\``), `"${WINDOWS_COMMAND}" is not under Giving it to your agent`);
+  // win32 is native Windows alone: WSL reports linux.
+  for (const platform of ["win32", "linux", "darwin"] as const) {
+    const root = repository({ ".gitignore": ".env\n" });
+    assert.deepEqual(init(root, { platform }).lines, ["wrote .env", ...(platform === "win32" ? WINDOWS_NEXT : NEXT)], `the next steps on ${platform}`);
+  }
 });
 
 test("as a command, init writes .env and nothing else, prints nothing on stdout, and exits 0, or 1 when it could not write", () => {
@@ -217,7 +287,7 @@ test("as a command, init writes .env and nothing else, prints nothing on stdout,
   const done = command(root);
   assert.equal(done.status, 0, done.stderr);
   assert.equal(done.stdout, "");
-  assert.equal(done.stderr, ["wrote .env", NOT_IGNORED, ...NEXT, ""].join("\n"));
+  assert.equal(done.stderr, ["wrote .env", NOT_IGNORED, ...HERE, ""].join("\n"), `what it did, then the next steps as ${process.platform} gets them`);
   const { ".env": written, ...rest } = contents(root);
   assert.ok(written, "no .env at the root");
   assert.deepEqual(rest, before, "every other file, .git included, as it was");
@@ -290,7 +360,7 @@ test("as a command, init --skill installs the skill, refuses a second time witho
   const kept = ".env already exists; left as it is";
   const first = command(root, "--skill");
   assert.equal(first.status, 0, first.stderr);
-  assert.equal(first.stderr, [kept, `wrote ${SKILL}`, ...NEXT, ""].join("\n"));
+  assert.equal(first.stderr, [kept, `wrote ${SKILL}`, ...HERE, ""].join("\n"), `the skill written, then the next steps as ${process.platform} gets them`);
 
   // Edited since, as a user may edit it: kept, and nothing else is written.
   writeFileSync(join(root, SKILL), "edited by hand\n");
@@ -302,9 +372,24 @@ test("as a command, init --skill installs the skill, refuses a second time witho
 
   const forced = command(root, "--skill", "--force");
   assert.equal(forced.status, 0, forced.stderr);
-  assert.equal(forced.stderr, [kept, `wrote ${SKILL}`, ...NEXT, ""].join("\n"));
+  assert.equal(forced.stderr, [kept, `wrote ${SKILL}`, ...HERE, ""].join("\n"), `the skill replaced, then the next steps as ${process.platform} gets them`);
   const after = contents(root);
   assert.ok(after[SKILL]?.equals(SHIPPED), `${SKILL} is not the skill the package ships`);
   assert.deepEqual({ ...after, [SKILL]: before[SKILL] }, before, "the .env and every other file as they were");
   for (const run of [first, second, forced]) assert.equal(run.stdout, "");
+});
+
+test("as a command, init --skill after a full run gives only the steps left: doctor, the line for CLAUDE.md and the MCP server", () => {
+  // The root as a full run leaves it: a .env that sets both settings, with values init must never print, and the snapshot.
+  const root = repository({
+    ".env": "DATABASE_URL=postgres://canary-pii:canary-pii-pass@canary-pii/canary-pii\nANTHROPIC_API_KEY=sk-canary-pii\n",
+    ".gitignore": ".env\n",
+    "context/snapshot.json": "{}\n",
+  });
+  const left = without([FILL, RUN], HERE);
+  assert.equal(left.length, 4, "the heading, doctor, the line for CLAUDE.md and the MCP server's");
+  const done = command(root, "--skill");
+  assert.equal(done.status, 0, done.stderr);
+  assert.equal(done.stdout, "");
+  assert.equal(done.stderr, [".env already exists; left as it is", `wrote ${SKILL}`, ...left, ""].join("\n"), "no step a full run has done");
 });

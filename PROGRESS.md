@@ -5785,3 +5785,250 @@ of each lost point, in the format of section 4.7 of the plan.
   maintainer published release v1.0.0 to the Marketplace:
   https://github.com/marketplace/actions/dbtruth-check.
 - `npm run acceptance -- --task T7.1`: 100/100.
+
+## 0.4.2: init after the newcomer test
+### Iteration 1: 100/100
+- Scope: the two things the newcomer's walk after 0.4.1 found in `init`'s
+  next steps (NOTES.md, 0.4.2), and release 0.4.2, which also carries the
+  README changes of pull request #20. No model was called; nothing was
+  committed, pushed, tagged or published.
+- Tests first, in `test/init.test.ts`: five new (which `.env` contents count
+  as filled in; a `.env` init cannot read; the snapshot beside the `.env`
+  and elsewhere; the three platforms; as a command, `init --skill` after a
+  full run); the existing-`.env` test expecting no "fill in .env", since its
+  `.env` sets both settings; and the three command tests expecting the form
+  of the machine they run on. Against 0.4.1's `src/cli.ts` and README, 7 of
+  25 failed: the existing-`.env`, filled-in and snapshot tests with the
+  lines `init` printed, which still held the steps done; the platform test
+  with "the quick start gives no claude mcp add command through cmd /c";
+  and the three command tests, on this Windows machine, with the plain
+  form where `cmd /c` was expected. The unreadable-`.env` test passed: it
+  pins what must not change, that such a file keeps the step and does not
+  stop `init`.
+- The change, in `src/cli.ts`: `nextSteps(dir, platform)` takes the place of
+  the constant list. It reads the `.env` in the directory `init` writes to
+  with `readDotEnv` (`readEnvFile` on that path, `{}` when it cannot be
+  read, as a run passes such a file over) and leaves out "fill in .env"
+  when `DATABASE_URL` and `ANTHROPIC_API_KEY` are both set; it leaves out
+  the two runs when `context/snapshot.json` is a file there; on `win32` the
+  last line starts the server through `cmd /c`. `InitOptions` gains
+  `platform`, which the CLI fills from `process.platform`. The README's
+  quick start says, before the block, which steps are left out and gives
+  the Windows command; the block keeps the plain form.
+- Sabotage, from a copy of `src/cli.ts` in `sabotage-042-init`, a new
+  scratchpad directory, restored from it and compared with `cmp` after
+  each break:
+  - The CLI passing "linux" for `process.platform`: the three command
+    tests failed on this machine, with "what it did, then the next steps as
+    win32 gets them", "the skill written, then the next steps as win32 gets
+    them" and "no step a full run has done". The first two compared stderr
+    with no message of their own; each got one after the first run of this
+    break, which was repeated with them.
+  - The `cmd /c` form keyed to "cygwin": "the next steps on win32", and the
+    three command tests.
+  - The `.env` counted as filled in with either setting:
+    `"DATABASE_URL=postgres://u@h/d\n": still to fill in`, and the `--skill`
+    command test, whose `.env` sets the URL alone.
+  - A setting counted as set when its line is there, empty or not:
+    `"DATABASE_URL=\nANTHROPIC_API_KEY=sk-ant-x\n": still to fill in`.
+  - `readEnvFile(join(dir, ".env"))` in place of `readDotEnv(dir)`: the
+    unreadable-`.env` test failed with `init` throwing "EPERM: operation not
+    permitted, open '...\.env'".
+  - The steps judged in the directory `init` was run from (`here`), not the
+    one it writes to: "a snapshot at the root, init run from a package".
+  - A `context/` directory taken for the snapshot: "a snapshot in the
+    package alone".
+- Linux, in Docker (`node:22`, the fixture on `dbtruth_default`),
+  `test/init.test.ts` and `test/readme.test.ts`: as root, 30 of 31 pass,
+  and the unreadable-`.env` test fails on its own precondition, "... must
+  be unreadable for this test to mean anything; is it running as root?",
+  as `test/cli.test.ts`'s does as root (T1.1 iteration 5 ran these as a
+  non-root user); with `--user node`, 31 of 31 pass.
+- Docs: NOTES.md, a 0.4.2 section with the walk moved into it and an entry
+  for the change; CHANGELOG.md, 0.4.2; README.md, the quick start's
+  paragraph before the next steps. `acceptance/checks.json`: five tests
+  checks for T1.4 (`filled`, `unreadable`, `measured`, `windows`,
+  `after-run`); A3 also expects the filled-in, snapshot and platform tests;
+  `stdout` and `canary-dotenv` also expect the command test after a full
+  run; three docs checks (`readme-done`, `notes-042`, `changelog-042`), each
+  seen to fail on its file with the new text taken out. The T1.4 sabotage
+  record in `acceptance/manual.json` names this iteration.
+- Release files: `npm version 0.4.2 --no-git-tag-version` (package.json and
+  package-lock.json).
+- `npm run verify`: the first two runs, while the machine was loaded, failed
+  on timeouts: doctor's two command tests at their 60 s, and once `init`'s
+  command test, whose spawn reached the helper's 20 s with its output
+  complete. The unchanged `HEAD`, extracted into the scratchpad, then passed
+  `npm test` in 63 s, and `test/doctor.test.ts` alone took 26 s in both
+  copies. The third run exits 0 in 84 s: 338 tests, 336 pass, the 2 live
+  tests skipped, 0 fail; the package smoke test passes on
+  `dbtruth-0.4.2.tgz`.
+- `npm run acceptance -- --task T1.4`: 100/100 (39 checks). `--task T7.1`:
+  100/100. `--task T5.2`: 100/100. Every file check in
+  `acceptance/checks.json`, 107, matches.
+- Left for a person: the commit and pull request, CI green on the release
+  commit, `npm publish` of 0.4.2 (2FA), the published package's smoke test,
+  the tag `v0.4.2` and its release notes from CHANGELOG.md.
+### Iteration 2: four reviews of iteration 1, 100/100
+- Each finding was checked against the code, the plan and, where it claimed
+  a behavior, a run on this machine. Nothing was sabotaged in this round.
+- Fixed:
+  - The Windows line typed in Git Bash (plan 1, correctness 1). From Git
+    Bash, `node` given `cmd /c npx -y dbtruth mcp` got `cmd C:/ npx -y
+    dbtruth mcp`, and given `cmd //c` got `cmd /c`; from PowerShell, `/c`
+    arrives as it is, and `cmd //c echo` opened an interactive `cmd` without
+    running `echo`. No one line serves both, so `init` keeps `/c`, for
+    PowerShell and cmd. The README says that Git Bash takes `//c` in step 2,
+    in the quick start's paragraph before the block and under "Measuring
+    while it writes"; NOTES has an entry, "The Windows line is PowerShell's
+    and cmd's". It says why `init` does not tell the shells apart: a
+    PowerShell started from Git Bash inherits `MSYSTEM` (`MINGW64` here), so
+    `//c` keyed to it would break the line there.
+  - NOTES said the command tests check that the CLI passes
+    `process.platform` (plan 3, quality 5, docs 2). They do on Windows
+    alone: CI runs on `ubuntu-latest` only, where a CLI that passed `linux`
+    passes too, and iteration 1's break "the CLI passing linux" was caught
+    because it ran on this machine. NOTES now says so.
+  - `readDotEnv`'s comment says it returns `{}` for a file it cannot read
+    too, which `nextSteps` relies on (plan 4, quality 2). No behavior
+    change.
+  - NOTES's reason why a snapshot in a package does not count was circular
+    (plan 5). It now names the directory the steps are for, the one that
+    gets the `.env` and the skill, where the README says to run dbtruth and
+    commit `context/`; "Not done" names a package measured on its own, from
+    which `init --skill` still gives both runs.
+  - CHANGELOG (plan 6, docs 1): the README bullet adds step 1's `#` and
+    `doctor`, native Windows through `cmd /c` always, Git Bash included and
+    WSL not, and Git Bash's `//c`; the init bullet says Git Bash is included
+    and WSL gets the plain form.
+  - `settings` in `nextSteps` is now `values` (quality 1): in `setup`, in
+    the same file, `settings` is a `Settings` object, and `values` is the
+    name `findDotEnv` gives a file's pairs.
+  - The "Giving it to your agent" section, parsed in two tests, is one
+    constant, `AGENT`, beside `QUICK_START` (quality 3).
+  - The snapshot test opens by checking that both `RUNS` lines are in the
+    quick start's block (quality 4), as the filled-in test does for `FILL`.
+  - No test held that a directory named `context/snapshot.json` is no
+    snapshot (correctness 2). The snapshot test now has that case and
+    expects every step; without `.isFile()`, `statSync` returns the
+    directory's stats and both runs would be left out.
+- Rejected:
+  - Plan 1's other fix, `//c` when `MSYSTEM` is set: see above.
+  - Plan 2, a teammate who clones a repository that commits `context/`
+    gets no `doctor` step: true, and what the snapshot test pins, but it is
+    the rule this release was given, both runs going with the snapshot.
+    Keeping `doctor` until the `.env` is filled in too is a product
+    decision; NOTES now names the case under "Not done" for the maintainer.
+  - Plan 4, second half: "a file that cannot be read, which a run passes
+    over" is the README's own wording for a run ("named with the reason and
+    passed over"), and true.
+  - Quality 3's optional hoisting of `up`: the file keeps it local to each
+    test that uses it, as before.
+  - Correctness 3, a `context/` that cannot be searched makes `init` exit 1
+    after its work: `runInit` stats the `.env` and the skill the same way,
+    `main` prints the error with its reason, and catching it to go on would
+    be catching an error and ignoring it (section 4.4).
+- No test was renamed or added, so `acceptance/checks.json` is unchanged.
+- `npm run verify`: exit 0; 338 tests, 336 pass, the 2 live tests skipped,
+  0 fail; the package smoke test passes on `dbtruth-0.4.2.tgz`.
+- Linux, in Docker (`node:22`, the fixture on `dbtruth_default`),
+  `test/init.test.ts` and `test/readme.test.ts`: as root, 30 of 31, the
+  unreadable-`.env` test failing on its own precondition as in iteration 1;
+  with `--user node`, 31 of 31.
+- `npm run acceptance -- --task T1.4`: 100/100 (39 checks). `--task T5.1`,
+  `T5.2` and `T7.1`: 100/100 each. Every file check, 107, matches.
+### Iteration 3: the sabotage check, 100/100
+- Each break was made in place in the finished change, from copies of
+  `src/cli.ts`, README.md and CHANGELOG.md in `sabotage-042-stage`, a new
+  scratchpad directory. After each one the copies went back, `cmp` found
+  each file equal to its copy, and the hash of `git diff` was the one
+  taken before the break: `4ceb48f2`, then `b9c206f5` and `d2d14308` once
+  the check and the two tests below were sharpened. Unless named, the tests
+  run are `test/init.test.ts` and `test/readme.test.ts` on this Windows
+  machine, 31 of them.
+- Sabotage:
+  - The plain MCP line on every platform: four failed, the platform test
+    with "the next steps on win32" and the three command tests with "what
+    it did, then the next steps as win32 gets them", "the skill written,
+    then the next steps as win32 gets them" and "no step a full run has
+    done". On Linux in Docker, the platform test alone, with the same
+    message: the command tests expect the plain form there, so on CI that
+    test is the one that holds the Windows line.
+  - The `cmd /c` line on every platform: 16 failed, the platform test with
+    "the next steps on linux" and every other test that calls `runInit` on
+    the helper's default, Linux, and gets to the next steps, among them
+    "the next steps, less filling in a .env that sets both settings". In
+    Docker, 19: the three command tests too, with "... as linux gets them".
+  - "fill in .env" never left out: "the next steps, less filling in a .env
+    that sets both settings",
+    `"DATABASE_URL=postgres://u@h/d\nANTHROPIC_API_KEY=sk-ant-x\n": filled in`
+    and "no step a full run has done".
+  - "fill in .env" left out when either setting is set (`||` for `&&`):
+    `"DATABASE_URL=postgres://u@h/d\n": still to fill in`, and "the skill
+    written, then the next steps as win32 gets them", whose `.env` sets the
+    URL alone.
+  - Doctor and the run never left out: "a snapshot beside the .env init
+    wrote" and "no step a full run has done".
+  - Doctor and the run left out when `context/` is a directory, with
+    `snapshot.json` in it or not: "a snapshot in the package alone". That
+    case's repository also held a `context/` without a snapshot at the
+    root, which is what failed, so the message named the wrong case. The
+    two are now repositories of their own, the second with "a context/ with
+    no snapshot.json in it", and the repeated break failed with that.
+    Iteration 1's break that the package case catches, the steps judged in
+    the directory `init` was run from, still fails, with "a snapshot at the
+    root, init run from a package".
+  - "Done" read from the `.env` `init` just wrote, two ways. With the
+    template's `DATABASE_URL` and `ANTHROPIC_API_KEY` uncommented, 13
+    failed, "nothing is read until a line is filled in" among them; with
+    `nextSteps` reading the file's lines with the `# ` taken off, 14, the
+    unreadable-`.env` test with "EPERM: operation not permitted". In
+    neither did a message say that the new `.env` was taken for filled in:
+    the tests of a new project compared the lines with no message of their
+    own, and the new tests' messages name the snapshot or the platform. The
+    comparison in "the next steps init prints are exactly the quick
+    start's" now says "every step in a new project, filling in the .env
+    init just wrote among them", and both repeated breaks failed with it.
+  - The README's sentences on the steps left out and on native Windows
+    dropped, the paragraph ending "Last, it prints the next steps:" as in
+    0.4.1: T1.4's docs check `readme-done`; the platform test, with "the
+    quick start gives no claude mcp add command through cmd /c"; and here
+    the three command tests, whose Windows line the tests read from there.
+    Without the Windows sentences alone, the same; without the clause on
+    the steps left out, `readme-done` alone, the only check of that clause.
+    Without only its half on the two `run` lines, nothing failed:
+    `readme-done` asked for "`fill in .env` once" alone. It now asks for
+    "the two `run` lines once `context/snapshot.json`" too, and the
+    repeated break failed it.
+  - CHANGELOG.md's heading back to `## 0.4.2 (unreleased)`: `npm run
+    acceptance -- --task T7.1` failed A4, "CHANGELOG.md does not match
+    /(?<![\s\S])(?![\s\S]*\(unreleased\))...", at 94/100, and `--task T1.4`
+    failed `changelog-042`, at 99/100. No test reads the CHANGELOG; these
+    checks are its guard.
+- Changed: in `test/init.test.ts`, the snapshot test's repository with a
+  package snapshot and a root `context/` split in two, and a message for
+  the next steps of a new project; in `acceptance/checks.json`,
+  `readme-done`. No test was renamed or added, so every check still names
+  its test; `src/`, the README, NOTES and the CHANGELOG are unchanged.
+- Linux, in Docker, `test/init.test.ts` and `test/readme.test.ts`: with
+  `--user node`, 31 of 31; as root, 30 of 31, the unreadable-`.env` test
+  failing on its own precondition, as before.
+- `npm run verify`: exit 0 in 79 s; 338 tests, 336 pass, the 2 live tests
+  skipped, 0 fail; the package smoke test passes on `dbtruth-0.4.2.tgz`.
+- `npm run acceptance -- --task T1.4`: 100/100 (39 checks). `--task T5.2`
+  and `T7.1`: 100/100 each. Every file check, 107, matches.
+### Iteration 4: doctor stays (the lead), 100/100
+- The maintainer's call on the review's teammate case: `run npx dbtruth
+  doctor` is never left out, since a teammate who clones a repository that
+  commits `context/` has a new `.env` of their own; only `run npx dbtruth`
+  goes once `context/snapshot.json` is there.
+- Tests first: in `test/init.test.ts` the snapshot test, renamed "init
+  leaves out the run once context/snapshot.json is beside the .env, keeps
+  doctor, and not for one elsewhere", and the command test, renamed "as a
+  command, init --skill after a full run gives only the steps left: doctor,
+  the line for CLAUDE.md and the MCP server", expect `doctor` kept; both
+  failed on the code of iteration 3, then passed with the one-line change
+  in `nextSteps`. The five checks of T1.4 that name them, and `readme-done`,
+  which now requires "`run npx dbtruth doctor` stays", were updated; README,
+  CHANGELOG and NOTES say the new rule.
+- `npm run acceptance -- --task T1.4`: 100/100.
