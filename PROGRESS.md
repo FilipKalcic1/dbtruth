@@ -4897,6 +4897,21 @@ of each lost point, in the format of section 4.7 of the plan.
   that run also settles whether `init` prints the `cmd /c` form on native
   Windows.
 
+### Iteration 4: 100/100 (A3 in Claude Code itself)
+- A3 repeated in Claude Code 2.1.283 (model claude-opus-5-5), run headless
+  by the maintainer from the VS Code extension's binary on 2026-09-27,
+  session 3525c79c. The project held the live run r4c's `context/`, the
+  skill from the published `npx dbtruth@0.4.0 init --skill`, and a project
+  `.mcp.json` starting `cmd /c npx -y dbtruth@0.4.0 mcp --project <dir>`.
+  Asked "write a query joining orders to customers", the agent invoked the
+  dbtruth skill on its own, read `context/README.md`, `tables/orders.md` and
+  `tables/customers.md`, called `describe_table` on both tables and `check`,
+  and only then answered: a LEFT JOIN on purpose (60 of 500 orders point to
+  no customer, all above the highest id), a `customer_missing` column,
+  `lower(btrim(status))`, and no `api_token`. It did not call
+  `measure_join`; the item accepts reading `context/`. The first ToolSearch
+  for dbtruth came back empty while the server was still starting; later
+  calls worked. The `cmd /c npx` form works on native Windows.
 ## What the first live run since 0.1.7 got wrong (the lead's scope)
 ### Iteration 1
 - Scope, the lead's: C1 and C2 in `tableFile`, P1 to P5 in the prompts; the
