@@ -162,7 +162,7 @@ test("a docs check reads the file, and a missing file fails without stopping the
   const r = acceptance(
     [
       { task: "T9.1", id: "gone", part: "docs", file: "NO_SUCH_FILE.md", expectFile: "anything" },
-      { task: "T9.1", id: "license", part: "docs", file: "LICENSE", expectFile: "^MIT License$" },
+      { task: "T9.1", id: "license", part: "docs", file: "LICENSE", expectFile: "^# PolyForm Shield License " },
     ],
     [],
     ["--task", "T9.1"],

@@ -1,8 +1,8 @@
 {
   "name": "dbtruth",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Verified database context for AI coding agents. Read-only, Postgres.",
-  "license": "MIT",
+  "license": "PolyForm-Shield-1.0.0",
   "keywords": [
     "postgres",
     "postgresql",
@@ -29,7 +29,8 @@
     "dist",
     "skills",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=20"
