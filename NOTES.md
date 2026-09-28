@@ -2893,6 +2893,22 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     is in the package, so `init --skill` from there still gives the run;
     and whether the snapshot is valid or current, which is `check`'s
     question.
+- **After 0.4.2 was published: warnings from a production-readiness audit.**
+  An audit of 0.4.2 on real measurements (PgBouncer 1.25, row level security,
+  tables to 20 million rows, 1000 tables, 500 partitions) found, among others,
+  three things a user can meet today; the README now warns of them until
+  they are fixed. A pooler in transaction mode leaves dbtruth's session
+  settings on a shared server connection: after one `doctor`, an application's
+  INSERT failed with 25006 for about 30 s, and dbtruth's own statements ran
+  without read-only or a timeout. A role that row level security filters
+  gets full tables reported empty. The value gate's "at least one value that
+  repeats" shows a small table's names and salaries when one repeats, which
+  the README's "on a 40-row table as much as on a 40-million-row one" denied;
+  that sentence now says "when every value is different", and a paragraph
+  says to use `--no-samples` on personal data until the fix. Composite
+  foreign keys are measured one column at a time, so a broken two-column key
+  passes `check`; "What it does not do" says so. The fixes are planned:
+  composite keys and partitions in BUILD_PLAN_0.5.md, the rest after it.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 

@@ -116,6 +116,19 @@ DATABASE_URL=postgres://user:password@host:5432/dbname
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+**Use a direct connection.** Point `DATABASE_URL` at the database itself, or
+at a pooler in session mode, never at a pooler in transaction mode (Supabase's
+port 6543, a Neon host ending in `-pooler`, PgBouncer with
+`pool_mode = transaction`). Until the next release, dbtruth makes its session
+read-only and sets a timeout on it, and such a pooler can hand that server
+connection to your application afterwards, whose writes then fail for a
+while, while dbtruth's own statements run without the setting.
+
+**Row level security.** A role that row level security filters sees only its
+own rows, so a full table can come out empty and a good join rejected. Until
+the next release, run dbtruth on a copy, as a role that bypasses it (the
+tables' owner, or a role with `BYPASSRLS`).
+
 No key yet? Leave its line out: `doctor` checks everything else without one.
 A third line, `ANTHROPIC_MODEL=<model id>`, picks the model; any Claude model
 id works. The default, `claude-sonnet-5`, is the current Sonnet-class model; a
@@ -612,12 +625,18 @@ select only the visible columns. The model keeps the column's name, type,
 null rate, distinct count, longest value, and for dates the years of its
 oldest and newest value. Names, emails, addresses, tokens, free text, and
 also national ids stored as numbers, phone numbers, birth dates and salaries,
-all fall out of the gate automatically, on a 40-row table as much as on a
-40-million-row one, because a column where every row is different is an
-identifier whatever its count; a constant secret such as a shared password
+fall out of the gate when every value is different, on a 40-row table as much
+as on a 40-million-row one, because a column where every row is different is
+an identifier whatever its count; a constant secret such as a shared password
 hash is low-cardinality but long, and stays hidden too. There is no
 column-name matching anywhere in the code, so it does not depend on anyone
 having guessed your naming convention.
+
+**Known gap, until the next release.** "At least one value that repeats" lets
+a small table through: in a table of 25 employees where two share a first
+name, every first name is shown, and so is every salary if one salary
+repeats. On tables that hold personal data, run with `--no-samples` until the
+next release, which requires values to repeat in earnest.
 
 Escape hatches, explicit: `--reveal table.column` shows one column;
 `--no-samples` sends schema and statistics only (contextualize gets weaker;
@@ -782,6 +801,9 @@ of its own, 20 seconds by default (`--mcp-call-budget-seconds`), in place of
 - No history: each run replaces `context/`, `snapshot.json` included; git keeps
   the history.
 - Postgres only.
+- Composite (multi-column) foreign keys are measured one column at a time,
+  which is wrong: a broken two-column key can pass `check`. The next release
+  measures them whole.
 - No UI.
 
 ## Development
