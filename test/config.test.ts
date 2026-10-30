@@ -64,6 +64,14 @@ test("weakEvidenceMaxCandidates is 50 by default, a whole number of at least 0, 
   assert.throws(() => resolveConfig({ DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES: "-1" }), /is below the minimum 0/);
 });
 
+test("categoricalMinRowsPerValue is 2 by default, at least 1, from DBTRUTH_CATEGORICAL_MIN_ROWS_PER_VALUE or --categorical-min-rows-per-value", () => {
+  assert.equal(config.categoricalMinRowsPerValue, 2);
+  assert.equal(resolveConfig({ DBTRUTH_CATEGORICAL_MIN_ROWS_PER_VALUE: "3" }).categoricalMinRowsPerValue, 3);
+  assert.equal(resolveConfig({ DBTRUTH_CATEGORICAL_MIN_ROWS_PER_VALUE: "3" }, { categoricalMinRowsPerValue: "1.5" }).categoricalMinRowsPerValue, 1.5, "the flag wins, and a fraction is allowed");
+  assert.equal(resolveConfig({}, { categoricalMinRowsPerValue: "1" }).categoricalMinRowsPerValue, 1, "1 is the old rule: one repeated value is enough");
+  assert.throws(() => resolveConfig({}, { categoricalMinRowsPerValue: "0.5" }), /^Error: DBTRUTH_CATEGORICAL_MIN_ROWS_PER_VALUE \/ --categorical-min-rows-per-value: 0\.5 is below the minimum 1$/, "below 1 a value that never repeats would count as a category");
+});
+
 test("checkHitRateTolerance is 0.01 by default, from 0 to 1, from DBTRUTH_CHECK_HIT_RATE_TOLERANCE or --check-hit-rate-tolerance", () => {
   assert.equal(config.checkHitRateTolerance, 0.01);
   assert.equal(resolveConfig({ DBTRUTH_CHECK_HIT_RATE_TOLERANCE: "0.05" }).checkHitRateTolerance, 0.05);

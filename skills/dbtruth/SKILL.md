@@ -39,7 +39,9 @@ Without these tools, read the files in `context/` directly.
   as fact; say it is unverified.
 - inconsistent values such as 'shipped' and 'SHIPPED': compare with
   `lower(btrim(column))`, or use a view that already normalizes them.
-- dead tables: do not read current data from them.
+- an empty table: nothing to read from it. A table "dead" by age alone, with
+  rows in it: unchanged, not shown unused; read it as reference data, and do
+  not expect new rows in it.
 
 ## Keeping it current
 

@@ -2910,6 +2910,118 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   passes `check`; "What it does not do" says so. The fixes are planned:
   composite keys and partitions in BUILD_PLAN_0.5.md, the rest after it.
 
+## 0.4.3 (2026-10-30)
+
+- **A review of 0.4.2's code against what a user meets first.** The
+  maintainer asked for a review scored by criteria (accuracy, structure,
+  boilerplate, tests, docs) and then for its findings fixed. The review ran
+  the suite on a local Postgres 16 (338 tests; the five that failed needed a
+  non-root user or a server without SSL, and passed as one), read all of
+  `src/`, measured function size and branching with the TypeScript compiler,
+  and probed the verdicts on a copy of the fixture. Three findings concerned
+  accuracy for a real user, two the reading of the output, and the rest the
+  code. Each fix below names what was deliberately not done.
+- **Values must repeat in earnest.** `isCategorical` now also asks for at
+  least `categoricalMinRowsPerValue` non-null sampled rows per distinct value
+  on average, 2 by default, on top of one repeated value; at 1 the rule is
+  0.4.2's. The audit's case, 25 employees' first names shown once two shared
+  one, and their salaries once one repeated, now stays hidden; three statuses
+  over those 25 rows are still shown. The tunable has its comment, range,
+  variable and flag (R5). The snapshot records it, and `check` counts a
+  snapshot whose value is lower than this run's as wider, like a larger
+  distinct bound, and measures no condition then (R3). The value lists are
+  judged by each column's own non-null count: `extract` judged them by the
+  sample's row count, so a nullable key column whose values were all
+  different could be listed when its null rows made the count large enough.
+  - Not done: judging values by shape or entropy, which the rules forbid
+    (R4); a rule over the frequency of each value, which would need every
+    frequency read out of the database, where the average needs two counts
+    the statistics already take. The rule is an average, and the README
+    says so: a column whose values cluster can pass it. The condition rule
+    in `verify.ts` still judges a column by the distinct and length bounds
+    and its visibility, since a `Column` carries a null rate, not a count.
+- **A dead table confirmed by age is unchanged, not unused.** On the probe,
+  a four-row table of countries last written in 2015 was confirmed dead with
+  `ageDays 4321`, and prompt B's README on the fixture had called a dead
+  table "removable". The measurement now takes the newest value up to now
+  over every date and timestamp column (`max(col) FILTER (WHERE col <=
+  now())`), so a column of dates still to come, such as an expiry, keeps no
+  table alive and no longer hides a stale one; the verdict's rule is as it
+  was. The per-table line of a `dead_table` confirmed with a count above 0,
+  or with no count, adds "No row is newer than N days: the table is
+  unchanged, as a reference table is too; nothing here shows it unused";
+  prompt B gets the numbers' meaning and a rule never to call such a table
+  unused, removable or safe to drop; prompt A is told not to propose a
+  reference table as dead for its age; the skill reads such a table as
+  reference data.
+  - Not done: measuring use from `pg_stat_user_tables` (scans, inserts,
+    updates) since the statistics were reset. It would tell an unused table
+    from a reference table, but a fresh copy of a database, which the README
+    tells CI to run `check` against, has every counter at 0, so every
+    dead-table claim would be confirmed there; and a status of its own for
+    "stale", which would ripple into `check`'s classes and older snapshots.
+    The expectation of the dead-table query in `test/verify.test.ts` changed
+    with the statement, as section 4.4 asks to be named.
+- **A duplicate is measured both ways.** `measureDuplicateEntity` measured
+  the first-named table's sampled rows against all of the second, so a table
+  of 300 rows named first before a 70-row copy of part of it gave an overlap
+  of 0.23 and a rejection, while the other order gave 1.0. Now the second's
+  sampled rows are measured against all of the first too, in a second
+  statement from the cast the first needed (`totalReverse`,
+  `matchedReverse`, `overlapReverse`), both statements are kept in the query,
+  and the verdict is confirmed when either share reaches `duplicateOverlap`.
+  A second statement that cannot run, over budget or on a timeout, leaves the
+  first's numbers as they were, so nothing is lost against 0.4.2. The
+  per-table line says which numbers are over which table; prompt B is told
+  what the three numbers are and to give both shares by their tables' names.
+  - Not done: one statement over both samples, since a view takes no
+    `TABLESAMPLE` and `querySampled` retries one source; the second table's
+    rows are read in the plain form when it has no size, as a view has none.
+    The cost of a duplicate claim doubles: one more read of each table,
+    inside the budget. The fake-database expectations in
+    `test/verify.test.ts` gained the second statement's answer (4.4).
+- **Joins on weak evidence are counted apart.** The summary counted them
+  among the confirmed ("6 confirmed (3 on weak evidence)"), and their line
+  in `context/tables/` began "confirmed," with the caveat in a parenthesis
+  at the end. The summary now reads "2 confirmed, 1 on weak evidence, ...",
+  always with both counts, and the line and `measure_join`'s answer lead
+  with "confirmed on weak evidence, ... but the same values would also match
+  N other keys". The verdict stays `confirmed`, as T2.2 decided, so `check`
+  and the snapshot are as they were. The README's pasted fixture output is
+  0.4.0's and keeps the old line, with a sentence that says so; regenerating
+  it is a release step that needs a key (T7.1, step 5). The summary strings
+  in `test/joins.test.ts` and the line in `test/write.test.ts` changed with
+  the wording (4.4).
+  - Not done: a status of its own, which would change `check`'s classes.
+- **Relations most joined first.** `extract` profiled relations in catalog
+  order, so on a database too large for the budget the tables at the end of
+  the alphabet were never examined, whatever joined them. It now profiles
+  them by how many foreign keys each declares or is pointed at by, most
+  first, then in catalog order, and returns them in catalog order, so the
+  model, the files and the snapshot see one order and nothing else moves. The
+  summary names the first ten relations not examined and counts the rest
+  (`NOT_EXAMINED_NAMED`, part of the format); `--json` has the count in
+  `relations`, and the snapshot marks every one.
+  - Not done: `fitToContext` still drops tables from the end of the catalog
+    order; a `Table` carries no degree, and the input ceiling is reached far
+    less often than the budget. `check` and `describe_table` extract the
+    relations their claims name, in the same order, which changes nothing
+    for them.
+- **Cleanup, no behavior change.** `errorMessage` is exported from
+  `safety.ts` and used by `cli.ts`, `doctor.ts` and `mcp.ts`, the modules the
+  structure test lets import it; `model.ts`, `snapshot.ts` and `write.ts`
+  keep their own lines, since adding `safety` to their lists is what section
+  4.4 forbids. `profile` is four named parts (what is shown whatever its
+  values, the statistics statement, the size after the scan, the value lists
+  and rows), `tableFile` three (meaning, size, joins, problems), and the MCP
+  server's `describe_table` and `measure_join` are functions of their own.
+  The nested ternaries in `write.ts`, `verify.ts`, `check.ts` and
+  `schemas.ts` are if-chains or named helpers. The CLI declares `--url`,
+  `--dotenv` and the tunables through two helpers, in the order `--help`
+  showed them. The step comments in `cli.ts` count 1 to 9, and `doctor.ts`
+  says where checks 4 to 7 are. `check.ts`'s `Row` is `ReportRow`, since
+  `safety.ts` has a `Row` that is a database row.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values

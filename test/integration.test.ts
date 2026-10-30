@@ -68,6 +68,7 @@ test("the whole loop on the fixture, offline: verdicts, files, exit code, no per
   assert.equal(v["suspicion:inconsistent_values:orders.status"]!.measurement.numbers.collisions, 2);
   assert.equal(v["suspicion:duplicate_entity:products+products_legacy"]!.status, "confirmed");
   assert.equal(v["suspicion:duplicate_entity:products+products_legacy"]!.measurement.numbers.overlap, 0.875);
+  assert.equal(v["suspicion:duplicate_entity:products+products_legacy"]!.measurement.numbers.overlapReverse, 1, "every one of products_legacy's 70 rows is in products");
   assert.equal(v["suspicion:missing_key:audit_log"]!.status, "confirmed");
   assert.equal(v["suspicion:dead_table:order_totals"]!.status, "confirmed", "an unpopulated materialized view is dead, from the catalog");
   assert.deepEqual(v["suspicion:dead_table:order_totals"]!.measurement.numbers, { populated: 0 }, "what the catalog says, and no count: reading it raises an error");
@@ -411,6 +412,12 @@ test("every full run writes context/snapshot.json, and it validates", { timeout:
   assert.deepEqual(unclaimed.snapshot.claims, { entities: [], tables: [], relationships: [], suspicions: [], questions: [] });
   const skipped = await snapshotOf(cannedClaims, { flags: { budgetSeconds: 0 } });
   assert.ok(skipped.snapshot.schema.relations.every((r) => r.examined === false && r.columns.length > 0), "every relation listed, with its columns, and none examined");
+  assert.ok(skipped.err.includes("relations: no relations, 11 not examined"), skipped.err.join("\n"));
+  assert.ok(
+    skipped.err.includes("not examined: audit_log, cars, customers, events, order_items, order_totals, orders, products, products_legacy, shipped_orders, and 1 more"),
+    `the summary names the first ten relations not examined, and counts the rest:\n${skipped.err.join("\n")}`,
+  );
+  assert.ok(full.err.every((line) => !line.startsWith("not examined:")), "nothing to name when every relation was examined");
   const fitted = await snapshotOf(cannedClaims, { flags: { modelMaxInputTokens: 500 } });
   const sent = (JSON.parse((JSON.parse(fitted.requests[0]!) as { messages: { content: string }[] }).messages[0]!.content) as Extract).tables.map((t) => t.name);
   assert.ok(sent.length < 11, `${sent.length} relations sent`);

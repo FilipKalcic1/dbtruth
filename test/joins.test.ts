@@ -150,7 +150,7 @@ test("the per-table files show each branch with its condition", LIMIT, async () 
     const lines = file(`tables/${table}.md`).split("\n");
     assert.ok(lines.some((l) => (prefix ? l.startsWith(line) : l === line)), `no line in ${table}.md ${prefix ? "starts" : "is"} ${line}`);
   };
-  for (const table of ["comments", "posts"]) has(table, "- comments.commentable_id -> posts.id when commentable_type = 'post': confirmed, 100.0% of 300 sampled rows match (inferred", true);
+  for (const table of ["comments", "posts"]) has(table, "- comments.commentable_id -> posts.id when commentable_type = 'post': confirmed on weak evidence, 100.0% of 300 sampled rows match, but the same values would also match 2 other keys", true);
   for (const table of ["comments", "photos"]) has(table, "- **BROKEN** comments.commentable_id -> photos.id when commentable_type = 'photo': 66.7% match (120 of 180 sampled), 60 orphans, all above the highest photos.id (inferred).", true);
   has("comments", "- comments.commentable_id -> photos.id when commentable_type = 'video' (inferred, not measured: no non-null rows to test)");
   has("comments", "- comments.commentable_id -> posts.id when commentable_type = 'x''; DROP TABLE posts; --' (inferred, not measured: no non-null rows to test)");
@@ -188,7 +188,7 @@ test("check measures no condition when the snapshot's settings would show more v
   const { snapshot } = await offline();
   // Edited as a pull request could edit it: a guess at a hidden value, under settings on which its column looks categorical.
   const guess = claim("comments", "commentable_id", "posts", { column: "commentable_id", equals: "57" });
-  for (const edit of [{ categoricalMaxDistinct: 1_000_000 }, { categoricalMaxValueLength: 1_000_000 }, { sampleRows: 60 }]) {
+  for (const edit of [{ categoricalMaxDistinct: 1_000_000 }, { categoricalMaxValueLength: 1_000_000 }, { sampleRows: 60 }, { categoricalMinRowsPerValue: 1 }]) {
     const wider: Snapshot = { ...snapshot, measuredWith: { ...snapshot.measuredWith, ...edit }, claims: { ...snapshot.claims, relationships: [...snapshot.claims.relationships, guess] } };
     const { report, statements } = await recorded(POLYMORPH_URL, wider);
     const after = (r: Relationship) => report.claims.find((c) => c.id === relationshipId(r))!.after;
@@ -258,8 +258,8 @@ test("the fixture's inferred quantity join is confirmed, and says it would also 
   const { status, measurement } = verified.verdicts[relationshipId(QUANTITY)]!;
   assert.deepEqual([status, pick(measurement.numbers, ["total", "hits", "hit", "candidates", "alsoFits"])], ["confirmed", { total: 1200, hits: 1200, hit: 1, candidates: 5, alsoFits: 5 }]);
   assert.deepEqual(arms(measurement.query), ["customers", "order_items", "orders", "products_legacy", "vehicles"], "every integer key but the target: cars is empty, and events has two columns");
-  assert.ok(err.includes("relationships: 3 confirmed (1 on weak evidence), 1 broken, 2 rejected, 0 unverifiable, 1 empty"), err.join("\n"));
-  const line = "- order_items.quantity -> products.id: confirmed, 100.0% of 1200 sampled rows match (inferred; the same values would also match 5 other keys, so the match alone does not prove this join).";
+  assert.ok(err.includes("relationships: 2 confirmed, 1 on weak evidence, 1 broken, 2 rejected, 0 unverifiable, 1 empty"), err.join("\n"));
+  const line = "- order_items.quantity -> products.id: confirmed on weak evidence, 100.0% of 1200 sampled rows match, but the same values would also match 5 other keys, so the match alone does not prove this join (inferred).";
   for (const table of ["order_items", "products"]) assert.ok(file(`tables/${table}.md`).split("\n").includes(line), `${table}.md`);
   // Prompt B, which writes README.md, is told the same.
   const told = JSON.parse((JSON.parse(requests[1]!) as { messages: { content: string }[] }).messages[0]!.content) as Verified;
@@ -329,7 +329,7 @@ test("keys are judged in the database: a key never analyzed is piloted, an empti
   }
   // 2^53 to 2^53 + 9, all in serials, and one below serial_refs' lowest key, which a double would round up to it.
   const SERIAL = claim("serial_refs", "serial_id", "serials");
-  // Each join's numbers, then the summary's line, which counts a join on weak evidence only where another key holds its values.
+  // Each join's numbers, then the summary's line, which counts a join on weak evidence apart from the confirmed ones, and only where another key holds its values.
   const weighed = async (flags: Overrides) => {
     const { verified, err } = await offline(copy.url, { relationships: [QUANTITY, SERIAL] }, flags);
     const numbers = [QUANTITY, SERIAL].map((r) => pick(verified.verdicts[relationshipId(r)]!.measurement.numbers, ["hit", "candidates", "alsoFits"]));
@@ -338,10 +338,10 @@ test("keys are judged in the database: a key never analyzed is piloted, an empti
   // The keys, in catalog order: customers, fresh, gone, ledger, order_items, orders, products, products_legacy,
   // serial_refs, serials, sparse, vehicles, wide. The catalog cannot size fresh, so a pilot counts its 1,000 rows; gone
   // is empty, sparse fills 100 of 991 and wide 2 of 2^64.
-  assert.deepEqual(await weighed({}), [{ hit: 1, candidates: 9, alsoFits: 7 }, { hit: 1, candidates: 9, alsoFits: 0 }, "relationships: 2 confirmed (1 on weak evidence), 0 broken, 0 rejected, 0 unverifiable, 0 empty"], "quantity fits all but serials and serial_refs; the serials fit none, so only quantity is on weak evidence");
-  assert.deepEqual(await weighed({ denseKeyShare: 0 }), [{ hit: 1, candidates: 11, alsoFits: 9 }, { hit: 1, candidates: 11, alsoFits: 1 }, "relationships: 2 confirmed (2 on weak evidence), 0 broken, 0 rejected, 0 unverifiable, 0 empty"], "any key but an empty one counts, and wide holds every value");
-  assert.deepEqual(await weighed({ weakEvidenceMaxCandidates: 3 }), [{ hit: 1, candidates: 2, alsoFits: 2 }, { hit: 1, candidates: 2, alsoFits: 0 }, "relationships: 2 confirmed (1 on weak evidence), 0 broken, 0 rejected, 0 unverifiable, 0 empty"], "customers, fresh and gone are probed");
-  assert.deepEqual(await weighed({ weakEvidenceMaxCandidates: 0 }), [{ hit: 1, candidates: undefined, alsoFits: undefined }, { hit: 1, candidates: undefined, alsoFits: undefined }, "relationships: 2 confirmed, 0 broken, 0 rejected, 0 unverifiable, 0 empty"]);
+  assert.deepEqual(await weighed({}), [{ hit: 1, candidates: 9, alsoFits: 7 }, { hit: 1, candidates: 9, alsoFits: 0 }, "relationships: 1 confirmed, 1 on weak evidence, 0 broken, 0 rejected, 0 unverifiable, 0 empty"], "quantity fits all but serials and serial_refs; the serials fit none, so only quantity is on weak evidence");
+  assert.deepEqual(await weighed({ denseKeyShare: 0 }), [{ hit: 1, candidates: 11, alsoFits: 9 }, { hit: 1, candidates: 11, alsoFits: 1 }, "relationships: 0 confirmed, 2 on weak evidence, 0 broken, 0 rejected, 0 unverifiable, 0 empty"], "any key but an empty one counts, and wide holds every value");
+  assert.deepEqual(await weighed({ weakEvidenceMaxCandidates: 3 }), [{ hit: 1, candidates: 2, alsoFits: 2 }, { hit: 1, candidates: 2, alsoFits: 0 }, "relationships: 1 confirmed, 1 on weak evidence, 0 broken, 0 rejected, 0 unverifiable, 0 empty"], "customers, fresh and gone are probed");
+  assert.deepEqual(await weighed({ weakEvidenceMaxCandidates: 0 }), [{ hit: 1, candidates: undefined, alsoFits: undefined }, { hit: 1, candidates: undefined, alsoFits: undefined }, "relationships: 2 confirmed, 0 on weak evidence, 0 broken, 0 rejected, 0 unverifiable, 0 empty"]);
 });
 
 test("a branch is weighed on its own rows, and check measures a weighed join again with the same numbers", LIMIT, async () => {
@@ -351,7 +351,7 @@ test("a branch is weighed on its own rows, and check measures a weighed join aga
   assert.deepEqual(weighed(whole), { total: 480, hits: 480, candidates: 3, alsoFits: 2 }, "1 to 100 fit comments and invoices, not photos");
   assert.deepEqual(weighed(posts), { total: 300, hits: 300, candidates: 3, alsoFits: 2 });
   assert.deepEqual(weighed(five), { total: 4, hits: 4, candidates: 4, alsoFits: 4 }, "5 fits every dense key");
-  assert.ok(err.includes("relationships: 3 confirmed (3 on weak evidence), 1 broken, 0 rejected, 3 unverifiable, 3 empty"), err.join("\n"));
+  assert.ok(err.includes("relationships: 0 confirmed, 3 on weak evidence, 1 broken, 0 rejected, 3 unverifiable, 3 empty"), err.join("\n"));
 
   // Each statement of the query kept reruns by hand as it is, with the value its closing note gives bound as $1.
   const lines = verified.verdicts[relationshipId(posts)]!.measurement.query.split("\n");

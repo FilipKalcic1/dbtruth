@@ -23,6 +23,17 @@ test("relationship bands come from config: confirmed, broken, rejected", () => {
   assert.equal(decide(m("relationship", { hit: 0 }), config).status, "rejected");
 });
 
+test("duplicate_entity: confirmed when the overlap either way reaches duplicateOverlap, rejected below it, unverifiable with none", () => {
+  const oneWay = { total: 300, matched: 70, sharedColumns: 5, overlap: 70 / 300 };
+  assert.equal(decide(m("duplicate_entity", { total: 80, matched: 70, sharedColumns: 5, overlap: 0.875 }), config).status, "confirmed");
+  assert.equal(decide(m("duplicate_entity", oneWay), config).status, "rejected", "measured one way only, below the threshold");
+  assert.equal(decide(m("duplicate_entity", { ...oneWay, totalReverse: 70, matchedReverse: 70, overlapReverse: 1 }), config).status, "confirmed", "a table holding a copy of a smaller one is its duplicate from the smaller one's side");
+  assert.equal(decide(m("duplicate_entity", { ...oneWay, totalReverse: 100, matchedReverse: 20, overlapReverse: 0.2 }), config).status, "rejected");
+  assert.equal(decide(m("duplicate_entity", { ...oneWay, overlap: config.duplicateOverlap, totalReverse: 100, matchedReverse: 20, overlapReverse: 0.2 }), config).status, "confirmed", "the threshold itself, either way");
+  assert.equal(decide(m("duplicate_entity", { sharedColumns: 5 }), config).status, "unverifiable");
+  assert.equal(decide(m("duplicate_entity", { sameDefinition: 1 }), config).status, "confirmed", "two views: their definitions decide");
+});
+
 test("the broken band moves with config, not code", () => {
   const strict = { ...config, join: { confirmed: 0.999, broken: 0.9 } };
   assert.equal(decide(m("relationship", { hit: 0.995 }), strict).status, "broken");

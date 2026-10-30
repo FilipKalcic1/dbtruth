@@ -16,6 +16,43 @@ test("categorical means few, short, and repeating values, whatever the type", ()
   assert.equal(isCategorical({ nonNull: 1, distinct: 1, maxLength: 5 }, config), false, "a single row repeats nothing");
 });
 
+test("values must repeat in earnest: at least categoricalMinRowsPerValue sampled rows per distinct value on average", () => {
+  assert.equal(config.categoricalMinRowsPerValue, 2);
+  assert.equal(isCategorical({ nonNull: 25, distinct: 24, maxLength: 10 }, config), false, "25 employees, two sharing a first name: one repeat does not make the names a category");
+  assert.equal(isCategorical({ nonNull: 25, distinct: 13, maxLength: 10 }, config), false, "26 rows would be needed for 13 values");
+  assert.equal(isCategorical({ nonNull: 25, distinct: 12, maxLength: 10 }, config), true, "12 values over 25 rows: each on two rows on average");
+  assert.equal(isCategorical({ nonNull: 25, distinct: 3, maxLength: 9 }, config), true, "three statuses in a 25-row table");
+  assert.equal(isCategorical({ nonNull: 25, distinct: 24, maxLength: 10 }, { ...config, categoricalMinRowsPerValue: 1 }), true, "at 1 the rule is the old one: a single repeat is enough");
+  assert.equal(isCategorical({ nonNull: 25, distinct: 5, maxLength: 10 }, { ...config, categoricalMinRowsPerValue: 6 }), false, "30 rows would be needed at 6 per value");
+});
+
+test("a column shown for its key, or revealed, lists its values only when they repeat as the rule asks, by its own non-null count", async () => {
+  // The catalog: one table of 100 rows keyed by id, whose 40 non-null ids are all different (the other rows hold null).
+  const replies: Row[][] = [
+    [relation(1, "t", 100, 1)],
+    [{ oid: 1, attnum: 1, name: "id", type: "integer", nullable: true, comment: null }],
+    [{ oid: 1, contype: "p", conkey: [1], refoid: 0, confkey: null, local: true }],
+  ];
+  const asked: string[] = [];
+  const db: Db = {
+    database: "x",
+    readOnlyProven: true,
+    catalog: async () => ({ ok: true, rows: replies.shift()! }),
+    query: async (sql) => {
+      asked.push(sql);
+      return sql.startsWith("WITH s AS MATERIALIZED") ? { ok: true, rows: [{ shown: [{ id: 1 }] }] } : { ok: true, rows: [{ n: 100, nn0: 40, d0: 40, l0: 2 }] };
+    },
+    budget: () => ({ budgetMs: 1000, spentMs: 0, remainingMs: 1000, exhausted: false }),
+    close: async () => {},
+  };
+  const [t] = (await extract(db, config, await readCatalog(db), { samples: true, reveal: new Set() })).tables;
+  const id = t!.columns[0]!;
+  assert.equal(id.visible, true, "a key column is shown by declaration");
+  assert.equal(id.values, undefined, "40 values on 40 rows repeat nothing, whatever the 60 null rows add to the count: no list");
+  assert.ok(asked.every((sql) => !sql.includes("array_agg(DISTINCT")), asked.join("\n"));
+  assert.deepEqual(t!.samples, [{ id: 1 }], "the sample rows still show the key");
+});
+
 function table(name: string, rowEstimate: number, columns: { name: string; type: string }[]): Table {
   return {
     name,
@@ -289,6 +326,33 @@ test("readCatalog reads three catalog statements and nothing inside the budget",
     "the partition folded into its parent, the columns and keys as the catalog has them, and the size not yet estimated",
   );
   assert.equal(statements.length, 3);
+});
+
+test("extract profiles the relations most joined first, so a budget too small for every relation still covers what the schema declares, and lists them in catalog order", async () => {
+  // a, b and c, in catalog order; c declares a foreign key to a, b takes part in none. The budget takes two of the three.
+  const replies: Row[][] = [
+    [relation(1, "a", 10, 1), relation(2, "b", 10, 1), relation(3, "c", 10, 1)],
+    [1, 2, 3].map((oid) => ({ oid, attnum: 1, name: "id", type: "integer", nullable: false, comment: null })),
+    [{ oid: 3, contype: "f", conkey: [1], refoid: 1, confkey: [1], local: true }],
+  ];
+  let spentMs = 0;
+  const asked: string[] = [];
+  const db: Db = {
+    database: "x",
+    readOnlyProven: true,
+    catalog: async () => ({ ok: true, rows: replies.shift()! }),
+    query: async (sql) => {
+      asked.push(sql);
+      spentMs += 40;
+      return counted(10);
+    },
+    budget: () => ({ budgetMs: 100, spentMs, remainingMs: Math.max(0, 100 - spentMs), exhausted: spentMs >= 100 }),
+    close: async () => {},
+  };
+  const extracted = await extract(db, config, await readCatalog(db), { samples: false, reveal: new Set() });
+  assert.deepEqual(asked.map((sql) => /"public"\."(\w+)"/.exec(sql)?.[1]), ["a", "c"], "the two the key joins are read first, and the budget is spent before b");
+  assert.deepEqual(extracted.tables.map((t) => t.name), ["a", "c"], "in catalog order, whatever order they were read in");
+  assert.deepEqual(extracted.skipped, ["b"]);
 });
 
 test("extract profiles only the relations of the catalog it is given", async () => {

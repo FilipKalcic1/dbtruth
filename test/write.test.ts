@@ -92,6 +92,63 @@ test("a problem over two tables names the one its verdict says its numbers were 
   );
 });
 
+test("a dead table confirmed by age alone says that no row is newer than that many days, and that this shows it unchanged, not unused", () => {
+  const countries = { kind: "dead_table" as const, tables: ["countries"], detail: "no row since 2015" };
+  const id = "suspicion:dead_table:countries";
+  const file = (numbers: Record<string, number>) => {
+    const v: Verified = { ...nothing, tables: [facts("countries", { rowEstimate: 4, primaryKey: ["code"] })], claims: { ...nothing.claims, suspicions: [countries] }, verdicts: { [id]: verdict("confirmed", numbers) } };
+    return tableFile(v, v.tables[0]!).split("\n").find((line) => line.startsWith("- **dead_table**"));
+  };
+  assert.equal(
+    file({ exact: 1, count: 4, ageDays: 4321 }),
+    "- **dead_table**: exact 1, count 4, ageDays 4321. No row is newer than 4321 days: the table is unchanged, as a reference table is too; nothing here shows it unused. no row since 2015 (inferred)",
+    "confirmed by age with rows in it",
+  );
+  assert.equal(file({ exact: 0, ageDays: 4321 }), "- **dead_table**: exact 0, ageDays 4321. No row is newer than 4321 days: the table is unchanged, as a reference table is too; nothing here shows it unused. no row since 2015 (inferred)", "confirmed by age with no count");
+  assert.equal(file({ exact: 1, count: 0 }), "- **dead_table**: exact 1, count 0. no row since 2015 (inferred)", "empty: the count says it, and nothing is added");
+  assert.equal(file({ exact: 1, count: 0, ageDays: 4321 }), "- **dead_table**: exact 1, count 0, ageDays 4321. no row since 2015 (inferred)", "empty, whatever age its rows once had");
+});
+
+test("prompt A does not propose a reference table as dead for its age, and prompt B never calls a table confirmed dead by age unused or removable", () => {
+  const a = prompt("contextualize");
+  const b = prompt("write");
+  assert.ok(
+    a.includes('"dead_table": a table that is empty or no longer written to. Do not propose it for a table that holds a fixed list other tables point at, such as countries or statuses, only because its rows are old: such a table is unchanged, not dead.'),
+    "contextualize.md keeps reference tables out of dead_table",
+  );
+  assert.ok(
+    b.includes("A dead_table suspicion's numbers are count (exact 1 when it was counted, 0 when it is an estimate), ageDays (whole days from the newest date or timestamp up to now, over every date and timestamp column) or populated 0 for a materialized view never refreshed."),
+    "write.md says what a dead_table's numbers are",
+  );
+  assert.ok(
+    b.includes("A dead_table confirmed with a count above 0, or with no count, is confirmed by age alone: no row is newer than the limit, which shows the table unchanged, not unused; a reference table other tables point at, such as a list of countries or statuses, passes the same test. Say that no row is newer than that many days, and never that such a table is unused, removable or safe to drop; only a count of 0 is an empty table."),
+    "write.md forbids calling a table confirmed by age unused or removable",
+  );
+});
+
+test("a duplicate measured both ways says which table the plain numbers are over and which the Reverse ones, in both tables' files", () => {
+  const duplicate = { kind: "duplicate_entity" as const, tables: ["products", "products_legacy"], detail: "same columns and values" };
+  const id = "suspicion:duplicate_entity:products+products_legacy";
+  const both: Verdict = {
+    status: "confirmed",
+    measurement: { query: "SELECT 1", numbers: { total: 80, matched: 70, sharedColumns: 5, overlap: 0.875, totalReverse: 70, matchedReverse: 70, overlapReverse: 1 }, over: "products" },
+  };
+  const v: Verified = { ...nothing, tables: [facts("products", { rowEstimate: 80 }), facts("products_legacy", { rowEstimate: 70 })], claims: { ...nothing.claims, suspicions: [duplicate] }, verdicts: { [id]: both } };
+  const line = (t: TableFacts) => tableFile(v, t).split("\n").find((l) => l.startsWith("- **duplicate_entity"));
+  const numbers = "total 80, matched 70, sharedColumns 5, overlap 0.875, totalReverse 70, matchedReverse 70, overlapReverse 1 (total, matched and overlap over products; the Reverse ones over products_legacy)";
+  assert.equal(line(v.tables[1]!), `- **duplicate_entity products**: ${numbers}. same columns and values (inferred)`);
+  assert.equal(line(v.tables[0]!), `- **duplicate_entity products_legacy**: ${numbers}. same columns and values (inferred)`);
+});
+
+test("prompt B is told that a duplicate is measured the other way too, and to give both shares by their tables' names", () => {
+  const b = prompt("write");
+  assert.ok(
+    b.includes('It is also measured the other way, over the other table\'s sampled rows against the table named in "over": totalReverse, matchedReverse and overlapReverse (matchedReverse / totalReverse), and the suspicion is confirmed when either overlap reaches the threshold; when the other way could not be measured, those three are absent.'),
+    "write.md says what the Reverse numbers are and when they are absent",
+  );
+  assert.ok(b.includes("overlapReverse is the other way: a share of the other table's rows, by its name. Give both when both are there."), "write.md asks for both shares, each by its table's name");
+});
+
 test("a materialized view never refreshed says that reading it raises an error, not that it has no rows", () => {
   const dead = { kind: "dead_table" as const, tables: ["order_totals"], detail: "never refreshed" };
   const v: Verified = { ...nothing, claims: { ...nothing.claims, suspicions: [dead] }, verdicts: { "suspicion:dead_table:order_totals": verdict("confirmed", { populated: 0 }) } };
@@ -155,11 +212,12 @@ test("a confirmed join whose values other keys would fit is labelled inferred wi
     const v = { ...shop, verdicts: { ...shop.verdicts, "relationship:orders.customer_id->customers.id": verdict("confirmed", numbers) } };
     return tableFile(v, shop.tables[0]!).split("\n").find((line) => line.startsWith("- orders.customer_id"));
   };
-  const head = "- orders.customer_id -> customers.id: confirmed, 100.0% of 1200 sampled rows match";
-  assert.equal(confirmed({ candidates: 5, alsoFits: 5 }), `${head} (inferred; the same values would also match 5 other keys, so the match alone does not prove this join).`);
-  assert.equal(confirmed({ candidates: 3, alsoFits: 1 }), `${head} (inferred; the same values would also match 1 other key, so the match alone does not prove this join).`);
-  assert.equal(confirmed({ candidates: 3, alsoFits: 0 }), `${head} (inferred).`, "weighed, and no other key holds its values");
-  assert.equal(confirmed({}), `${head} (inferred).`, "not weighed");
+  const head = "- orders.customer_id -> customers.id: confirmed";
+  const match = "100.0% of 1200 sampled rows match";
+  assert.equal(confirmed({ candidates: 5, alsoFits: 5 }), `${head} on weak evidence, ${match}, but the same values would also match 5 other keys, so the match alone does not prove this join (inferred).`, "the line leads with the weak evidence, not with confirmed");
+  assert.equal(confirmed({ candidates: 3, alsoFits: 1 }), `${head} on weak evidence, ${match}, but the same values would also match 1 other key, so the match alone does not prove this join (inferred).`);
+  assert.equal(confirmed({ candidates: 3, alsoFits: 0 }), `${head}, ${match} (inferred).`, "weighed, and no other key holds its values");
+  assert.equal(confirmed({}), `${head}, ${match} (inferred).`, "not weighed");
 });
 
 test("joinLine words a rejected join, which the per-table file leaves out", () => {
