@@ -6189,3 +6189,30 @@ of each lost point, in the format of section 4.7 of the plan.
 - Gates, as root: typecheck clean; `npm run test:unit` 220 tests, 218 pass,
   2 fail, the two that need a non-root user for an unreadable `.env`
   (main without this change: 219, 217, the same 2).
+
+### Iteration 6: the first release run, refused with no reason; now npm's reason is printed
+- Run 43326951332 (started by the maintainer, on main at 76581a3): the
+  check step, `npm ci`, typecheck, 220 unit tests (220 pass), build and
+  npm 11.21.2 passed; `npm publish` packed dbtruth-0.4.3.tgz (21 files,
+  88.3 kB) and stopped with `ENEEDAUTH`. Nothing was published or tagged.
+- npm 11.21.2's code: on GitHub Actions `npm publish` always tries the OIDC
+  exchange (`lib/commands/publish.js`), and every way it can fail is logged
+  at verbose or silly only (`lib/utils/oidc.js`), so the run said nothing of
+  why. Its debug log keeps every level (`lib/utils/log-file.js` filters only
+  timing).
+- `release.yml`: the publish step gets `id: publish`, and a step that runs
+  only when it failed greps the debug log for ` verbose oidc ` and
+  ` http fetch ` lines: the exchange's status and npm's message, no token.
+- Test first: "the publish step is named" red before the change; then, with
+  the step, "and, refused, prints npm's own reason". Sabotage, each red then
+  restored green: the step dropped; `if: always()`; the oidc lines not
+  grepped; the publish step's id renamed.
+- The grep checked against npm 11.21.2's own log here: `GITHUB_ACTIONS=true`
+  with a made-up `NPM_ID_TOKEN`, `npm publish --dry-run --ignore-scripts`
+  prints `http fetch POST 401 .../oidc/token/exchange/package/dbtruth` and
+  `verbose oidc Failed token exchange request with body message: OIDC token
+  exchange error - unauthorized`.
+- The likely cause of run 43326951332 is on npmjs.com: no trusted publisher
+  for dbtruth, or one whose owner, repository, workflow file or environment
+  is not `FilipKalcic1`, `dbtruth`, `release.yml`, none. The maintainer
+  checks it; the next run says which, if it fails again.
