@@ -31,3 +31,20 @@ test("fixture_template is created last, from postgres, after every other fixture
   // A database cannot be copied while a session is connected to it, and each file starts connected to fixture.
   assert.match(read("test/fixtures/template.sql"), /^\\connect postgres\r?\nCREATE DATABASE fixture_template TEMPLATE fixture IS_TEMPLATE true ALLOW_CONNECTIONS false;$/m);
 });
+
+test("the release workflow is started by hand on main, publishes with npm's trusted publishing, and tags after", () => {
+  const release = read(".github/workflows/release.yml");
+  const on = /^on:\n((?:[ \t].*\n|\n)*)/m.exec(release)?.[1] ?? "";
+  assert.match(on, /^\s+workflow_dispatch:/m, "started by hand");
+  assert.doesNotMatch(on, /^\s+(push|pull_request|release|schedule):/m, "and by nothing else");
+  assert.match(release, /^\s+if: github\.ref == 'refs\/heads\/main'$/m, "only from main");
+  assert.match(release, /^\s+id-token: write(\s+#.*)?$/m, "npm trusts the workflow by its OIDC token");
+  assert.doesNotMatch(release, /NPM_TOKEN|NODE_AUTH_TOKEN|_authToken|secrets\./, "so no npm token is stored anywhere");
+  assert.match(release, /require\("\.\/package\.json"\)\.version/, "the version typed must be package.json's");
+  const publish = release.indexOf("npm publish");
+  const tag = release.indexOf("gh release create");
+  assert.ok(publish > 0 && tag > publish, "the tag is made only once the package is on npm");
+  // The same pinned actions as ci.yml, so one bump moves both.
+  const pins = (file: string) => [...read(file).matchAll(/uses: (\S+@[0-9a-f]{40})/g)].map((m) => m[1]).sort();
+  assert.deepEqual(pins(".github/workflows/release.yml"), pins(".github/workflows/ci.yml"));
+});
