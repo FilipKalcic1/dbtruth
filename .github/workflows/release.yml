@@ -44,7 +44,14 @@ jobs:
       - run: npm run typecheck && npm run test:unit && npm run build
       # Trusted publishing needs npm 11.5.1 or newer; Node 22 comes with npm 10.
       - run: npm install -g npm@11.21.2
-      - run: npm publish
+      - id: publish
+        run: npm publish
+      # npm gives the reason it refused a trusted publish (no trusted publisher set on npmjs.com,
+      # or one whose owner, repository, workflow or environment differs) only at verbose level,
+      # which its debug log keeps; the lines printed hold no token.
+      - name: Why npm refused to publish
+        if: failure() && steps.publish.outcome == 'failure'
+        run: grep -h -E ' (verbose oidc|http fetch) ' ~/.npm/_logs/*-debug-0.log || true
       - name: Tag and release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -44,6 +44,9 @@ test("the release workflow is started by hand on main, publishes with npm's trus
   const publish = release.indexOf("npm publish");
   const tag = release.indexOf("gh release create");
   assert.ok(publish > 0 && tag > publish, "the tag is made only once the package is on npm");
+  // npm gives the reason a trusted publish was refused only at verbose level, which its debug log keeps.
+  assert.match(release, /^\s+- id: publish\n\s+run: npm publish$/m, "the publish step is named");
+  assert.match(release, /^\s+if: failure\(\) && steps\.publish\.outcome == 'failure'\n\s+run: grep .*oidc.* ~\/\.npm\/_logs\//m, "and, refused, prints npm's own reason");
   // The same pinned actions as ci.yml, so one bump moves both.
   const pins = (file: string) => [...read(file).matchAll(/uses: (\S+@[0-9a-f]{40})/g)].map((m) => m[1]).sort();
   assert.deepEqual(pins(".github/workflows/release.yml"), pins(".github/workflows/ci.yml"));
