@@ -172,7 +172,7 @@ export function claimsSchema(tables: { name: string; schema: string }[]) {
       const named = { ...r, from: { ...r.from, table: spell(r.from.table) }, to: { ...r.to, table: spell(r.to.table) } };
       const id = relationshipId(named);
       const prev = relationships.get(id);
-      if (!prev || (prev.basis === named.basis ? JSON.stringify(named) < JSON.stringify(prev) : named.basis === "stated")) relationships.set(id, named);
+      if (!prev || supersedes(named, prev)) relationships.set(id, named);
     }
     // Gathered, then joined once: time in proportion to the copies, however many a hand-edited snapshot holds.
     const suspicions = new Map<string, { claim: Suspicion; details: Set<string> }>();
@@ -194,6 +194,12 @@ export function claimsSchema(tables: { name: string; schema: string }[]) {
 }
 
 export type Claims = z.output<ReturnType<typeof claimsSchema>>;
+
+/** Of two copies of one relationship, whether the new one replaces the kept one: a stated copy over an inferred one, and of two with one basis the one whose text sorts first. */
+function supersedes(candidate: Relationship, kept: Relationship): boolean {
+  if (candidate.basis !== kept.basis) return candidate.basis === "stated";
+  return JSON.stringify(candidate) < JSON.stringify(kept);
+}
 
 // ---------- Verified: claims + verdicts + evidence (tested) ----------
 
@@ -267,6 +273,9 @@ export const SnapshotSchema = z.object({
     duplicateOverlap: z.number(),
     categoricalMaxDistinct: z.number(),
     categoricalMaxValueLength: z.number(),
+    // A snapshot written before this existed, when one repeated value was enough, has none, and check then judges
+    // visibility with this run's rule.
+    categoricalMinRowsPerValue: z.number().optional(),
     // A snapshot written before these two existed has neither, and check then weighs joins with this run's.
     denseKeyShare: z.number().optional(),
     weakEvidenceMaxCandidates: z.number().optional(),

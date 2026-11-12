@@ -179,8 +179,9 @@ export function deadTableQuery(table: Table, cfg: Pick<Config, "sampleRows">): {
   const exact = table.rowEstimate >= 0 && table.rowEstimate <= cfg.sampleRows;
   // Whole days, so the number kept is the one the statement reruns to on the same day, and a snapshot of an unchanged
   // database stays the same until the data is a day older. Rounded up, so it is over a whole staleAfterDays exactly when
-  // the age is.
-  const age = timeColumns.length > 0 ? `ceil(EXTRACT(EPOCH FROM (now() - greatest(${timeColumns.map((c) => `max(${q(c.name)})`).join(", ")}))) / ${SECONDS_PER_DAY})` : null;
+  // the age is. Only values up to now: a date still to come, such as an expiry, would otherwise keep any table alive.
+  const newest = timeColumns.map((c) => `max(${q(c.name)}) FILTER (WHERE ${q(c.name)} <= now())`).join(", ");
+  const age = timeColumns.length > 0 ? `ceil(EXTRACT(EPOCH FROM (now() - greatest(${newest}))) / ${SECONDS_PER_DAY})` : null;
   if (!exact && age === null) {
     const numbers: Record<string, number> = table.rowEstimate >= 0 ? { count: table.rowEstimate, exact: 0 } : { exact: 0 };
     // No statement reruns an estimate, so the label says where to look it up.
@@ -192,7 +193,10 @@ export function deadTableQuery(table: Table, cfg: Pick<Config, "sampleRows">): {
     const label = table.estimateSource ? from[table.estimateSource] : `no row estimate for ${table.name}`;
     return { query: `-- ${label}; no date or timestamp column to date it by`, exact, fromSchema: numbers };
   }
-  const count = exact ? "count(*)::float8" : table.rowEstimate >= 0 ? `${Math.round(table.rowEstimate)}::float8` : "NULL::float8";
+  // Counted when the table is small; otherwise the estimate, as a number the statement reruns to, or null without one.
+  let count = "NULL::float8";
+  if (exact) count = "count(*)::float8";
+  else if (table.rowEstimate >= 0) count = `${Math.round(table.rowEstimate)}::float8`;
   return { query: `SELECT ${count} AS count, ${age ?? "NULL::float8"} AS age_days FROM ${qualified(table)}`, exact };
 }
 
@@ -275,17 +279,25 @@ async function measureDuplicateEntity(db: Db, cfg: Config, extract: Extract, cla
 
   // A set operation treats nulls as equal and hashes each side once, so the cost is one read of each table.
   const cols = (alias: string, cast: string) => shared.map((c) => `${alias}.${q(c)}${cast}`).join(", ");
-  const sql = (source: string, cast: string) =>
+  const intersect = (other: Table) => (source: string, cast: string) =>
     `WITH a AS MATERIALIZED (SELECT DISTINCT ${cols("a", cast)} FROM ${source} a)
 SELECT (SELECT count(*) FROM a) AS total,
-       (SELECT count(*) FROM (SELECT * FROM a INTERSECT SELECT ${cols("b", cast)} FROM ${qualified(b)} b) i) AS matched`;
-  const { query, result } = await runWithTextFallback(db, cfg, a, sql);
+       (SELECT count(*) FROM (SELECT * FROM a INTERSECT SELECT ${cols("b", cast)} FROM ${qualified(other)} b) i) AS matched`;
+  const { query, result, cast } = await runWithTextFallback(db, cfg, a, intersect(b));
   if (!result.ok) return skip(claimId, kind, result.message, query);
   const total = Number(result.rows[0]?.total);
   const matched = Number(result.rows[0]?.matched);
   const numbers = { total, matched, sharedColumns: shared.length };
   if (total === 0) return skipEmpty(claimId, kind, EMPTY_SOURCE, query, numbers);
-  return { claimId, kind, query, numbers: { ...numbers, overlap: matched / total } };
+  // The other way too, over b's sampled rows against all of a, from the cast the first way needed: a table that holds a
+  // copy of a smaller one is its duplicate from the smaller one's side, whichever the claim named first. One that cannot
+  // be measured leaves the first way's numbers and statement as they are.
+  const back = await runWithTextFallback(db, cfg, b, intersect(a), [], cast);
+  if (!back.result.ok) return { claimId, kind, query, numbers: { ...numbers, overlap: matched / total } };
+  const totalReverse = Number(back.result.rows[0]?.total);
+  const matchedReverse = Number(back.result.rows[0]?.matched);
+  const overlapReverse = totalReverse === 0 ? 0 : matchedReverse / totalReverse;
+  return { claimId, kind, query: `${query};\n${back.query}`, numbers: { ...numbers, overlap: matched / total, totalReverse, matchedReverse, overlapReverse } };
 }
 
 /** From the schema: is there a primary key? */
@@ -298,15 +310,25 @@ function measureMissingKey(extract: Extract, claimId: string, s: Suspicion): Mea
 
 // ---------- helpers ----------
 
-/** Runs the native comparison over a sampled source; if the server reports a datatype mismatch, compares as text once. */
-async function runWithTextFallback(db: Db, cfg: Config, from: Table, sql: (source: string, cast: string) => string, params: unknown[] = []): Promise<{ query: string; result: QueryResult }> {
-  let cast = "";
+/**
+ * Runs the native comparison over a sampled source, or from startCast the comparison as text; if the server reports a
+ * datatype mismatch on the native one, compares as text once. Returns the cast the statement ran with.
+ */
+async function runWithTextFallback(
+  db: Db,
+  cfg: Config,
+  from: Table,
+  sql: (source: string, cast: string) => string,
+  params: unknown[] = [],
+  startCast = "",
+): Promise<{ query: string; result: QueryResult; cast: string }> {
+  let cast = startCast;
   let { source, result } = await querySampled(db, from, cfg, (src) => sql(src, cast), params);
-  if (!result.ok && result.reason === "error" && result.sqlState !== undefined && DATATYPE_MISMATCH_STATES.includes(result.sqlState)) {
+  if (cast === "" && !result.ok && result.reason === "error" && result.sqlState !== undefined && DATATYPE_MISMATCH_STATES.includes(result.sqlState)) {
     cast = "::text";
     ({ source, result } = await querySampled(db, from, cfg, (src) => sql(src, cast), params));
   }
-  return { query: sql(source, cast), result };
+  return { query: sql(source, cast), result, cast };
 }
 
 function skip(claimId: string, kind: Measurement["kind"], reason: string, query = "", numbers: Record<string, number> = {}): Measurement {
@@ -324,12 +346,11 @@ function skipEmpty(claimId: string, kind: Measurement["kind"], reason: string, q
  * statement runs. Undefined when every relation named can be read.
  */
 function nothingToMeasure(claimId: string, kind: Measurement["kind"], source: Table, target?: Table): Measurement | undefined {
-  const empty = (t: Table, noRows: string) =>
-    t.populated === false
-      ? skipEmpty(claimId, kind, NEVER_REFRESHED, `-- from the schema: pg_class.relispopulated is false for ${t.name}`)
-      : t.rowEstimate === 0
-        ? skipEmpty(claimId, kind, noRows, `-- from the extract: ${t.name} has no rows`)
-        : undefined;
+  const empty = (t: Table, noRows: string): Measurement | undefined => {
+    if (t.populated === false) return skipEmpty(claimId, kind, NEVER_REFRESHED, `-- from the schema: pg_class.relispopulated is false for ${t.name}`);
+    if (t.rowEstimate === 0) return skipEmpty(claimId, kind, noRows, `-- from the extract: ${t.name} has no rows`);
+    return undefined;
+  };
   return empty(source, EMPTY_SOURCE) ?? (target && empty(target, EMPTY_TARGET));
 }
 

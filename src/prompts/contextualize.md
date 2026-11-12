@@ -54,7 +54,10 @@ How to think:
 - Suspicion kinds mean exactly this. "duplicate_entity": two tables holding
   the same rows; its "tables" are exactly the two relations its detail says
   duplicate each other. "dead_table": a table that is empty or no longer
-  written to. "inconsistent_values": one column whose values differ only by
+  written to. Do not propose it for a table that holds a fixed list other
+  tables point at, such as countries or statuses, only because its rows are
+  old: such a table is unchanged, not dead.
+  "inconsistent_values": one column whose values differ only by
   case, spacing or spelling. "missing_key": a table with no primary key. A
   missing foreign key is not a suspicion: propose the relationship and it
   will be measured. Anything else is "other".

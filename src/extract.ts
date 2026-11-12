@@ -27,7 +27,7 @@
 // claims keeps the rest.
 
 import type { Config } from "./config.js";
-import { bareName, DESCRIBED_RELATIONS, isIntegerType, q, qualified, querySampled, sampleSource, typeFamily, type Db, type Row } from "./safety.js";
+import { bareName, DESCRIBED_RELATIONS, isIntegerType, q, qualified, querySampled, sampleSource, typeFamily, type Db, type QueryResult, type Row } from "./safety.js";
 import { schemaOnly, type CatalogRelation, type Column, type Extract, type IntegerKey, type RelationKind, type Table } from "./schemas.js";
 
 
@@ -73,15 +73,11 @@ export async function readCatalog(db: Db): Promise<Catalog> {
 export async function extract(db: Db, cfg: Config, catalog: Catalog, opts: ExtractOptions): Promise<Extract> {
   const extractBudgetMs = db.budget().budgetMs * cfg.extractBudgetShare;
   const matchedReveal = new Set<string>();
+  const profiled = new Map<Catalog[number], Table>();
 
-  const tables: Table[] = [];
-  const skipped: string[] = [];
-
-  for (const { size, columns, ...relation } of catalog) {
-    if (db.budget().spentMs >= extractBudgetMs) {
-      skipped.push(relation.name);
-      continue;
-    }
+  for (const entry of mostJoinedFirst(catalog)) {
+    if (db.budget().spentMs >= extractBudgetMs) continue;
+    const { size, columns, ...relation } = entry;
     const estimate = await estimateRows(size, cfg.pilotPages, pilot(db, cfg, relation));
     const base: Table = {
       ...relation,
@@ -89,16 +85,39 @@ export async function extract(db: Db, cfg: Config, catalog: Catalog, opts: Extra
       columns: columns.map((c) => ({ ...c, nullRate: 0, distinct: 0, maxLength: 0, visible: false })),
       samples: [],
     };
-    tables.push(await profile(db, cfg, opts, base, matchedReveal));
+    profiled.set(entry, await profile(db, cfg, opts, base, matchedReveal));
   }
 
+  // In catalog order, whatever order they were read in: the model, the files and the snapshot see the one order.
+  const tables = catalog.flatMap((entry) => {
+    const table = profiled.get(entry);
+    return table ? [table] : [];
+  });
   return {
     database: db.database,
     tables,
-    skipped,
+    skipped: catalog.filter((entry) => !profiled.has(entry)).map((entry) => entry.name),
     schemaTokens: Math.ceil(JSON.stringify(schemaOnly(tables)).length / cfg.charsPerToken),
     unmatchedReveal: [...opts.reveal].filter((r) => !matchedReveal.has(r)),
   };
+}
+
+/**
+ * The catalog with the relations most joined first: by how many foreign keys each declares or is pointed at by, then in
+ * catalog order. A budget too small for every relation is spent on the joins the schema declares, and a relation no key
+ * touches is the first left out.
+ */
+function mostJoinedFirst(catalog: Catalog): Catalog {
+  const joins = new Map<string, number>();
+  const count = (name: string) => joins.set(name, (joins.get(name) ?? 0) + 1);
+  for (const r of catalog) {
+    for (const k of r.foreignKeys) {
+      count(r.name);
+      count(k.refTable);
+    }
+  }
+  const degree = (r: Catalog[number]) => joins.get(r.name) ?? 0;
+  return catalog.map((r, i) => ({ r, i })).sort((x, y) => degree(y.r) - degree(x.r) || x.i - y.i).map(({ r }) => r);
 }
 
 /**
@@ -345,48 +364,30 @@ function summarizePartitions(relations: Relation[], keysByOid: Map<number, Keys>
 
 export type ColumnStats = { nonNull: number; distinct: number; maxLength: number };
 
-/** Few distinct values, none long, and at least one that repeats. The one rule, for every type. */
-export function isCategorical(s: ColumnStats, cfg: Pick<Config, "categoricalMaxDistinct" | "categoricalMaxValueLength">): boolean {
-  return s.distinct >= 1 && s.distinct <= cfg.categoricalMaxDistinct && s.maxLength <= cfg.categoricalMaxValueLength && s.distinct < s.nonNull;
+/**
+ * Few distinct values, none long, and values that repeat in earnest: at least one repeats, and the non-null rows are at
+ * least categoricalMinRowsPerValue per distinct value on average. The one rule, for every type.
+ */
+export function isCategorical(s: ColumnStats, cfg: Pick<Config, "categoricalMaxDistinct" | "categoricalMaxValueLength" | "categoricalMinRowsPerValue">): boolean {
+  return (
+    s.distinct >= 1 &&
+    s.distinct <= cfg.categoricalMaxDistinct &&
+    s.maxLength <= cfg.categoricalMaxValueLength &&
+    s.distinct < s.nonNull &&
+    s.nonNull >= s.distinct * cfg.categoricalMinRowsPerValue
+  );
 }
 
 async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, matchedReveal: Set<string>): Promise<Table> {
   const cols = table.columns;
   if (cols.length === 0) return table;
-
-  const keyColumns = new Set([...(table.primaryKey ?? []), ...table.foreignKeys.map((f) => f.column)]);
-  // Every reveal entry that names one of this relation's columns is matched up front, whatever else decides visibility.
-  const revealed = new Set<string>();
-  for (const c of cols) {
-    for (const key of [`${bareName(table)}.${c.name}`, `${table.schema}.${bareName(table)}.${c.name}`]) {
-      if (opts.reveal.has(key)) {
-        matchedReveal.add(key);
-        revealed.add(c.name);
-      }
-    }
-  }
-  const shownRegardless = (c: Column) => (keyColumns.has(c.name) && typeFamily(c.type) !== "text") || revealed.has(c.name);
+  const shownRegardless = shownWhateverTheValues(table, opts.reveal, matchedReveal);
   const keysOnly = () => ({ ...table, columns: cols.map((c) => ({ ...c, visible: shownRegardless(c) })) });
 
   // A materialized view that was never refreshed cannot be read at all: schema only, nothing shown.
   if (table.populated === false) return { ...keysOnly(), rowEstimate: 0, unmeasured: "a materialized view that has never been refreshed cannot be read" };
 
-  // Null rate, distinct count, longest value, and for dates the year range: inside the database, over the bounded sample.
-  const aggregates = cols
-    .map((c, i) => {
-      const base = `count(${q(c.name)}) AS nn${i}, count(DISTINCT ${q(c.name)}::text) AS d${i}, max(length(${q(c.name)}::text)) AS l${i}`;
-      return typeFamily(c.type) === "time"
-        ? `${base}, date_part('year', min(${q(c.name)}))::float8 AS y0${i}, date_part('year', max(${q(c.name)}))::float8 AS y1${i}`
-        : base;
-    })
-    .join(", ");
-  const statsQuery = (source: string) => `SELECT count(*) AS n, ${aggregates} FROM ${source} s`;
-  let { source, result: stats } = await querySampled(db, table, cfg, statsQuery);
-  // A random page sample can come back empty on a table whose estimate is stale; the plain form settles it.
-  if (stats.ok && Number(stats.rows[0]?.n) === 0 && source !== sampleSource(table, cfg, false)) {
-    source = sampleSource(table, cfg, false);
-    stats = await db.query(statsQuery(source));
-  }
+  const { source, stats } = await statistics(db, cfg, table);
   // Statistics unavailable: keep the schema, show only declared keys, sample nothing, and say why. The estimate stands,
   // except a 0 that nothing confirmed, which becomes unknown and so has no source.
   if (!stats.ok) {
@@ -396,15 +397,10 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
 
   const row = stats.rows[0] as Row;
   const n = Number(row.n);
-  // A random sample keeps the estimate. A plain LIMIT that came back short counted the whole relation;
-  // one that filled up proves at least n rows, so an estimate below that (stale, or unknown) is "at least the sample size".
-  // Only an estimate that stands keeps its source: a count is not an estimate, even one that agrees with it.
-  const plain = source === sampleSource(table, cfg, false);
-  const stands = !plain || (n >= cfg.sampleRows && table.rowEstimate >= n);
-  const rowEstimate = stands ? table.rowEstimate : n < cfg.sampleRows ? n : -1;
-  const estimateSource = stands ? table.estimateSource : undefined;
+  const size = sizeAfterScan(table, cfg, source, n);
+  const measured: ColumnStats[] = cols.map((_, i) => ({ nonNull: Number(row[`nn${i}`]), distinct: Number(row[`d${i}`]), maxLength: Number(row[`l${i}`] ?? 0) }));
   const columns: Column[] = cols.map((c, i) => {
-    const s: ColumnStats = { nonNull: Number(row[`nn${i}`]), distinct: Number(row[`d${i}`]), maxLength: Number(row[`l${i}`] ?? 0) };
+    const s = measured[i]!;
     const visible = isCategorical(s, cfg) || shownRegardless(c);
     const y0 = Number(row[`y0${i}`]);
     const y1 = Number(row[`y1${i}`]);
@@ -412,29 +408,87 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
     return { ...c, nullRate: n === 0 ? 0 : 1 - s.nonNull / n, distinct: s.distinct, maxLength: s.maxLength, visible, ...(years ? { years: [y0, y1] as [number, number] } : {}) };
   });
 
-  if (!opts.samples || n === 0) return { ...table, rowEstimate, estimateSource, columns };
+  if (!opts.samples || n === 0) return { ...table, ...size, columns };
+  const samples = await valuesAndRows(db, cfg, source, columns, measured);
+  return { ...table, ...size, columns, samples };
+}
 
-  // One statement over the same sample: every distinct value of each categorical column, and a few
-  // rows with only the visible columns selected. Hidden values never leave the database.
-  const listed = columns.filter((c) => c.visible && isCategorical({ nonNull: n, distinct: c.distinct, maxLength: c.maxLength }, cfg));
+/**
+ * Whether a column is shown whatever its values: a declared primary or foreign key column that is not text, an
+ * identifier by declaration, or one named by --reveal. Every reveal entry that names one of the relation's columns is
+ * matched up front, whatever else decides visibility.
+ */
+function shownWhateverTheValues(table: Table, reveal: Set<string>, matchedReveal: Set<string>): (c: Column) => boolean {
+  const keyColumns = new Set([...(table.primaryKey ?? []), ...table.foreignKeys.map((f) => f.column)]);
+  const revealed = new Set<string>();
+  for (const c of table.columns) {
+    for (const key of [`${bareName(table)}.${c.name}`, `${table.schema}.${bareName(table)}.${c.name}`]) {
+      if (reveal.has(key)) {
+        matchedReveal.add(key);
+        revealed.add(c.name);
+      }
+    }
+  }
+  return (c: Column) => (keyColumns.has(c.name) && typeFamily(c.type) !== "text") || revealed.has(c.name);
+}
+
+/**
+ * Null rate, distinct count, longest value, and for dates the year range, inside the database over the bounded sample:
+ * one statement, and the source it ran over. A random page sample can come back empty on a table whose estimate is
+ * stale; the plain form then settles it.
+ */
+async function statistics(db: Db, cfg: Config, table: Table): Promise<{ source: string; stats: QueryResult }> {
+  const aggregates = table.columns
+    .map((c, i) => {
+      const base = `count(${q(c.name)}) AS nn${i}, count(DISTINCT ${q(c.name)}::text) AS d${i}, max(length(${q(c.name)}::text)) AS l${i}`;
+      const years = `, date_part('year', min(${q(c.name)}))::float8 AS y0${i}, date_part('year', max(${q(c.name)}))::float8 AS y1${i}`;
+      return typeFamily(c.type) === "time" ? base + years : base;
+    })
+    .join(", ");
+  const statsQuery = (source: string) => `SELECT count(*) AS n, ${aggregates} FROM ${source} s`;
+  let { source, result: stats } = await querySampled(db, table, cfg, statsQuery);
+  if (stats.ok && Number(stats.rows[0]?.n) === 0 && source !== sampleSource(table, cfg, false)) {
+    source = sampleSource(table, cfg, false);
+    stats = await db.query(statsQuery(source));
+  }
+  return { source, stats };
+}
+
+/**
+ * The size once the sample of n rows was read from source. A random sample keeps the estimate. A plain LIMIT that came
+ * back short counted the whole relation; one that filled up proves at least n rows, so an estimate below that (stale, or
+ * unknown) is "at least the sample size". Only an estimate that stands keeps its source: a count is not an estimate, even
+ * one that agrees with it.
+ */
+function sizeAfterScan(table: Table, cfg: Config, source: string, n: number): Pick<Table, "rowEstimate" | "estimateSource"> {
+  const plain = source === sampleSource(table, cfg, false);
+  const stands = !plain || (n >= cfg.sampleRows && table.rowEstimate >= n);
+  if (stands) return { rowEstimate: table.rowEstimate, estimateSource: table.estimateSource };
+  if (n < cfg.sampleRows) return { rowEstimate: n, estimateSource: undefined };
+  return { rowEstimate: -1, estimateSource: undefined };
+}
+
+/**
+ * One statement over the same sample: every distinct value of each categorical column, judged by its own counts, so a
+ * key or a revealed column, shown whatever its values, is listed only when they repeat as the rule asks; and a few rows
+ * with only the visible columns selected. Hidden values never leave the database. The value lists are written into the
+ * columns; the rows are returned.
+ */
+async function valuesAndRows(db: Db, cfg: Config, source: string, columns: Column[], measured: ColumnStats[]): Promise<Record<string, unknown>[]> {
+  const listed = columns.filter((c, i) => c.visible && isCategorical(measured[i]!, cfg));
   const shown = columns.filter((c) => c.visible);
   const parts = listed.map((c, i) => `(SELECT array_agg(DISTINCT ${q(c.name)}::text) FROM s) AS v${i}`);
   if (shown.length > 0) parts.push(`(SELECT json_agg(r) FROM (SELECT ${shown.map((c) => q(c.name)).join(", ")} FROM s LIMIT ${cfg.sampleRowsShown}) r) AS shown`);
-  let samples: Record<string, unknown>[] = [];
-  if (parts.length > 0) {
-    const detail = await db.query(`WITH s AS MATERIALIZED (SELECT * FROM ${source} src) SELECT ${parts.join(", ")}`);
-    if (detail.ok) {
-      const drow = detail.rows[0] as Row;
-      listed.forEach((c, i) => {
-        const v = drow[`v${i}`];
-        if (Array.isArray(v)) c.values = v.filter((x) => x !== null);
-      });
-      const rows = Array.isArray(drow.shown) ? (drow.shown as Record<string, unknown>[]) : [];
-      samples = rows.map((r) => Object.fromEntries(columns.map((c) => [c.name, c.visible ? r[c.name] : HIDDEN])));
-    }
-  }
-
-  return { ...table, rowEstimate, estimateSource, columns, samples };
+  if (parts.length === 0) return [];
+  const detail = await db.query(`WITH s AS MATERIALIZED (SELECT * FROM ${source} src) SELECT ${parts.join(", ")}`);
+  if (!detail.ok) return [];
+  const drow = detail.rows[0] as Row;
+  listed.forEach((c, i) => {
+    const v = drow[`v${i}`];
+    if (Array.isArray(v)) c.values = v.filter((x) => x !== null);
+  });
+  const rows = Array.isArray(drow.shown) ? (drow.shown as Record<string, unknown>[]) : [];
+  return rows.map((r) => Object.fromEntries(columns.map((c) => [c.name, c.visible ? r[c.name] : HIDDEN])));
 }
 
 // ---------- helpers ----------

@@ -19,6 +19,7 @@ export type Config = {
   statementTimeoutSeconds: number;
   categoricalMaxDistinct: number;
   categoricalMaxValueLength: number;
+  categoricalMinRowsPerValue: number;
   join: { confirmed: number; broken: number };
   denseKeyShare: number;
   weakEvidenceMaxCandidates: number;
@@ -71,6 +72,12 @@ export const config: Config = {
   // A column also counts as categorical only if its longest value on the sample is at most this many characters.
   // Too low: long enum labels are hidden. Too high: a constant secret passes as categorical (an MD5 hash is 32, SHA-1 is 40).
   categoricalMaxValueLength: 30,
+
+  // A column also counts as categorical only if its values repeat in earnest: at least this many sampled non-null rows
+  // per distinct value on average (nonNull >= distinct * categoricalMinRowsPerValue), on top of at least one value that
+  // repeats. At 1 one repeat is enough. Too low: in a table of 25 employees where two share a first name, every first
+  // name is shown, and every salary if one salary repeats. Too high: a real enum on a small table is hidden.
+  categoricalMinRowsPerValue: 2,
 
   // Join hit rate bands: at or above confirmed is a fact; at or above broken is a broken
   // relationship the output leads with; below broken is rejected. broken must not exceed confirmed.
@@ -160,6 +167,7 @@ export const overridable = [
   { path: "statementTimeoutSeconds", env: "DBTRUTH_STATEMENT_TIMEOUT_SECONDS", flag: "statement-timeout-seconds", min: 0.001 },
   { path: "categoricalMaxDistinct", env: "DBTRUTH_CATEGORICAL_MAX_DISTINCT", flag: "categorical-max-distinct", min: 0, integer: true },
   { path: "categoricalMaxValueLength", env: "DBTRUTH_CATEGORICAL_MAX_VALUE_LENGTH", flag: "categorical-max-value-length", min: 0, integer: true },
+  { path: "categoricalMinRowsPerValue", env: "DBTRUTH_CATEGORICAL_MIN_ROWS_PER_VALUE", flag: "categorical-min-rows-per-value", min: 1 },
   { path: "join.confirmed", env: "DBTRUTH_JOIN_CONFIRMED", flag: "join-confirmed", min: 0, max: 1 },
   { path: "join.broken", env: "DBTRUTH_JOIN_BROKEN", flag: "join-broken", min: 0, max: 1 },
   { path: "denseKeyShare", env: "DBTRUTH_DENSE_KEY_SHARE", flag: "dense-key-share", min: 0, max: 1 },

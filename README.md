@@ -245,7 +245,7 @@ in its own words.
 | `the model's reply to "<prompt>" failed validation twice; raw replies saved to <path>` | The model answered twice with JSON that is not what dbtruth asked for. Both replies, and what was wrong with each, are in that file, `context/.raw-contextualize.json` or `context/.raw-write.json`; the next run that writes its files removes it. Run again: replies vary from run to run. |
 | `note: <model> did not accept the effort parameter; the calls ran at its default effort` | The model refused the reasoning effort setting, and each call was sent again without it. The run finished and nothing needs fixing; to choose the effort, use a model that takes it. |
 | `--reveal <table.column>: no such column, nothing revealed` | The value of `--reveal` names no column of a relation dbtruth read, often a typo; the run goes on without revealing anything for it. Write it as `table.column`, or `schema.table.column`. |
-| `(<n> skipped)`<br>`relations: <kinds>, <n> not examined` | The first is part of the line that starts `Sending to`, the second of the summary. Some relations were not read: sampling used up its share of the time budget (`--extract-budget-share` of `--budget-seconds`) before it reached them, or they were dropped to fit the model's input (next row). Nothing is measured on them, and a measurement the budget cut off is marked `not measured: time budget exhausted` in `context/tables/`. Raise `--budget-seconds`. |
+| `(<n> skipped)`<br>`relations: <kinds>, <n> not examined`<br>`not examined: <names>, and <n> more` | The first is part of the line that starts `Sending to`, the second and third of the summary, the third naming the first ten relations left out and counting the rest; `snapshot.json` marks every one. Some relations were not read: sampling used up its share of the time budget (`--extract-budget-share` of `--budget-seconds`) before it reached them, or they were dropped to fit the model's input (next row). Nothing is measured on them, and a measurement the budget cut off is marked `not measured: time budget exhausted` in `context/tables/`. Raise `--budget-seconds`. |
 | `sample rows dropped to fit the model's input limit`<br>`sample rows and value lists dropped to fit the model's input limit`<br>`sample rows, value lists and <n> tables dropped to fit the model's input limit` | Printed as part of the line that starts `Sending to`. The schema with its samples is larger than the model's input ceiling, `DBTRUTH_MODEL_MAX_INPUT_TOKENS`, so detail was dropped until it fit: sample rows first, then value lists, then whole tables. The model sees less and proposes less; what it proposes is still measured on the database. Raise `--model-max-input-tokens` only for a model that takes more. |
 | `the verdicts' queries dropped to fit the model's input limit`<br>`README.md and ENTITIES.md not written: over the model's input limit even without the verdicts' queries` | Printed as part of the line that starts `write:`. What the model is sent to write `README.md` and `ENTITIES.md`, every claim with its verdict, query and numbers, is larger than the model's input ceiling, `DBTRUTH_MODEL_MAX_INPUT_TOKENS`; a database with many joins compared with other keys (see How it works) reaches it first. So the queries were left out of it: the numbers were all sent, and every query is still in `context/snapshot.json` and in `--json`. When even that is too large, the model is not called: the per-table files and the snapshot are written, `README.md` and `ENTITIES.md` are not, and the last run's are removed. Raise `--model-max-input-tokens` only for a model that takes more; a lower `--weak-evidence-max-candidates` shortens the query of every join compared. |
 | `could not write <path>: <error>` | A file under `context/` could not be written, or, when the error names `unlink` or `rm`, a file the last run wrote there for a table since renamed or dropped could not be removed. The cause is a directory this user cannot write (`EACCES`), a full disk, or on Windows another program that holds the file open (`EBUSY`). The other files were written, and a file that could not be removed stays as the last run left it. Close the program, or fix the cause, and run again. From `init`, the path is the `.env` it would have written, and `EEXIST` means a directory of that name is there, such as a Python virtualenv: dbtruth reads no directory as settings, so rename it, or keep the settings in a file of another name and pass `--dotenv <path>`; `init --skill` still installs the skill. With `--skill`, the path can be the skill's, `.claude/skills/dbtruth/SKILL.md`, where `EEXIST`, or `EISDIR` with `--force`, means a directory of that name is there: `init` removes no directory, so move it. From `check`, the path is the file `--markdown` names; check then exits 1 without printing its JSON. Give it a path to a file, in a directory that exists and this user can write. |
@@ -616,8 +616,10 @@ value. Nothing else in the code can reach the database.
 
 **Value visibility, the mechanism that replaces PII lists.** A column's values
 are shown to the model only if it is categorical, whatever its type: at most
-50 distinct values, none longer than 30 characters, and at least one value
-that repeats, all measured on a sample. The one exception is a declared
+50 distinct values, none longer than 30 characters, and values that repeat in
+earnest, at least one of them more than once and at least two non-null rows
+per distinct value on average (`--categorical-min-rows-per-value`), all
+measured on a sample. The one exception is a declared
 non-text key, a primary key or foreign key column, which is an identifier by
 declaration. Everything else is sent as `"[hidden]"`, and the hidden values
 are never even read out of the database: the sample rows shown to the model
@@ -632,11 +634,15 @@ hash is low-cardinality but long, and stays hidden too. There is no
 column-name matching anywhere in the code, so it does not depend on anyone
 having guessed your naming convention.
 
-**Known gap, until the next release.** "At least one value that repeats" lets
-a small table through: in a table of 25 employees where two share a first
-name, every first name is shown, and so is every salary if one salary
-repeats. On tables that hold personal data, run with `--no-samples` until the
-next release, which requires values to repeat in earnest.
+**Small tables.** Repeating in earnest is what keeps a small table's per-row
+values out. Until 0.4.3 one repeat was enough: in a table of 25 employees
+where two shared a first name, every first name was shown, and every salary
+if one salary repeated. Now a column needs at least two rows per distinct
+value on average, so 25 names with one repeat stay hidden, and so do the
+salaries, while a column of three statuses over those 25 rows is still shown.
+The rule is an average, not a proof: a column whose values happen to cluster
+can still pass it. On tables that hold personal data, `--no-samples` still
+sends no values at all.
 
 Escape hatches, explicit: `--reveal table.column` shows one column;
 `--no-samples` sends schema and statistics only (contextualize gets weaker;
@@ -679,10 +685,16 @@ as fact with its hit rate. Between 50% and 95% it is **broken**, and the
 output leads with it and the numbers. Below 50% it is dropped. The same goes
 for suspected dead tables (count, newest timestamp, or whether a materialized
 view was ever refreshed), duplicate tables (the share of one table's sampled
-rows also in the other, the verdict naming that table in `over`; of two
-views or materialized views, whether the catalog gives them the same
-definition), inconsistent values (case and whitespace collisions) and
-missing keys. Every verdict
+rows also in the other, measured both ways and confirmed when either share
+reaches `--duplicate-overlap`, the verdict naming in `over` the table the
+first share is of; of two views or materialized views, whether the catalog
+gives them the same definition), inconsistent values (case and whitespace
+collisions) and missing keys. A dead table's newest timestamp is taken over
+every date and timestamp column, values up to now only, so a date still to
+come keeps no table alive; and a table confirmed dead by age alone, with rows
+in it, is unchanged, not shown unused: a reference table of countries or
+statuses passes the same test, and the output says so, never that such a
+table is removable. Every verdict
 carries the query and the numbers so you can rerun it.
 When a column points at different tables depending on another column that is
 categorical, each value of that other column is a claim of its own, measured
@@ -695,7 +707,9 @@ other integer keys that fill most of their range (`--dense-key-share`),
 among the first `--weak-evidence-max-candidates` that hold rows: when its
 values would also fit one or more of them, as a quantity from 1 to 5 fits
 every table's id, it keeps its verdict and says how many, and that the match
-alone does not prove it.
+alone does not prove it: its line in `context/tables/` leads with "confirmed
+on weak evidence", and the summary counts such joins apart from the confirmed
+ones.
 Each table's file under `context/tables/` is rendered from those
 measurements directly, so every number in it is the measured number; the
 model writes `README.md` and `ENTITIES.md`, where the synthesis is.
@@ -707,7 +721,11 @@ table's size is the catalog's estimate; where Postgres has none, as for a
 table never analyzed or a partitioned table, it comes from the partitions'
 estimates, or is scaled up from a count of the rows on a few of its pages
 (`--pilot-pages`), so the sample of a large table is drawn from all of it, not
-from its oldest rows.
+from its oldest rows. Relations are read most joined first, by how many
+foreign keys each declares or is pointed at by, then in catalog order, so a
+time budget (`--budget-seconds`) too small for every relation still covers the
+joins the schema declares; the summary names the relations not examined, and
+the snapshot marks every one.
 Human-readable lines go to stderr; with `--json`, stdout is the analysis and
 nothing else, so it can be piped.
 
@@ -721,7 +739,10 @@ constant secret in `customers`, `products_legacy` duplicating `products`, a
 view, a partitioned table and a materialized view that was never refreshed.
 It is one of four runs made for this release, three on the fixture and one on
 Pagila, and `NOTES.md` records what the model got wrong in each, this one
-included. This run took 36 seconds, exited 2, wrote 14 files and printed this
+included. It is 0.4.0's output: since 0.4.3 the `relationships:` line counts
+joins on weak evidence apart from the confirmed ones, as `3 confirmed, 3 on
+weak evidence, ...`, and such a join's line in `context/tables/` leads with
+"confirmed on weak evidence". This run took 36 seconds, exited 2, wrote 14 files and printed this
 on stderr:
 
 ```
@@ -804,6 +825,11 @@ of its own, 20 seconds by default (`--mcp-call-budget-seconds`), in place of
 - Composite (multi-column) foreign keys are measured one column at a time,
   which is wrong: a broken two-column key can pass `check`. The next release
   measures them whole.
+- It cannot tell an unused table from one that never changes. A `dead_table`
+  confirmed by age alone says that no row is newer than that many days, and
+  nothing more; whether anything reads the table is not measured.
+- Value visibility is a rule over counts, not a proof: a column whose values
+  cluster, two rows per value on average, is shown. `--no-samples` sends none.
 - No UI.
 
 ## Development

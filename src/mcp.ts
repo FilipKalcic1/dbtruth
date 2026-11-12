@@ -20,7 +20,7 @@ import { z } from "zod";
 import { remeasure, reportLines } from "./check.js";
 import type { Config } from "./config.js";
 import { extract, integerKeys, readCatalog, type Catalog } from "./extract.js";
-import type { Connection } from "./safety.js";
+import { errorMessage, type Connection, type Db } from "./safety.js";
 import { declares, findTable, relationshipId, type Relationship, type Table } from "./schemas.js";
 import { readSnapshot } from "./snapshot.js";
 import { decide } from "./verdict.js";
@@ -72,7 +72,7 @@ export function tools(project: string, open: () => Promise<Opened>) {
         // No settings yet, no connection, or one lost during the call: this call says why, and the next reads the
         // settings and connects again.
         await drop();
-        return refuse(e instanceof Error ? e.message : String(e));
+        return refuse(errorMessage(e));
       }
     });
     turn = call;
@@ -106,40 +106,9 @@ export function tools(project: string, open: () => Promise<Opened>) {
       return reply(readFileSync(path, "utf8"));
     },
 
-    describeTable: ({ table }: { table: string }) =>
-      withDatabase(async (db, cfg) => {
-        const found = lookUp(await readCatalog(db), table);
-        if (typeof found === "string") return refuse(found);
-        // No sample row is shown, so none is read: only the value lists of categorical columns leave the database.
-        const { tables, skipped } = await extract(db, { ...cfg, sampleRowsShown: 0 }, [found], { samples: true, reveal: new Set() });
-        if (skipped.length > 0) return refuse(notExamined(found.name));
-        return reply(JSON.stringify(described(tables[0]!), null, 2));
-      }),
+    describeTable: ({ table }: { table: string }) => withDatabase((db, cfg) => describeTable(db, cfg, table)),
 
-    measureJoin: (asked: Join) =>
-      withDatabase(async (db, cfg) => {
-        const catalog = await readCatalog(db);
-        const from = lookUp(catalog, asked.from_table, asked.from_column, asked.when_column);
-        if (typeof from === "string") return refuse(from);
-        const to = lookUp(catalog, asked.to_table, asked.to_column);
-        if (typeof to === "string") return refuse(to);
-        const claim: Relationship = {
-          from: { table: from.name, column: asked.from_column },
-          to: { table: to.name, column: asked.to_column },
-          ...(asked.when_column !== undefined && asked.when_equals !== undefined ? { when: { column: asked.when_column, equals: asked.when_equals } } : {}),
-          // As prompt A claims a join: stated when the database declares it.
-          basis: declares(from, asked.from_column, to, asked.to_column) ? "stated" : "inferred",
-          confidence: 1,
-          reason: "measure_join",
-        };
-        const extracted = await extract(db, cfg, catalog.filter((r) => r === from || r === to), { samples: false, reveal: new Set() });
-        // verify would call a relation the budget skipped unknown.
-        if (extracted.skipped.length > 0) return refuse(notExamined(extracted.skipped[0]!));
-        const claims = { entities: [], tables: [], relationships: [claim], suspicions: [], questions: [] };
-        const [measured] = await verify(db, cfg, extracted, claims, () => integerKeys(db, cfg, catalog));
-        const verdict = decide(measured!, cfg);
-        return reply(joinLine(claim, verdict), JSON.stringify({ claim: relationshipId(claim), ...verdict }, null, 2));
-      }),
+    measureJoin: (asked: Join) => withDatabase((db, cfg) => measureJoin(db, cfg, asked)),
 
     async check(): Promise<Reply> {
       // Read and checked before anything connects, as by dbtruth check.
@@ -207,6 +176,41 @@ export async function serve(opts: { project: string; version: string; open: () =
     process.once("SIGINT", stop).once("SIGTERM", stop);
   });
   await handlers.close();
+}
+
+/** describe_table: the relation as the catalog and a sample describe it now. */
+async function describeTable(db: Db, cfg: Config, table: string): Promise<Reply> {
+  const found = lookUp(await readCatalog(db), table);
+  if (typeof found === "string") return refuse(found);
+  // No sample row is shown, so none is read: only the value lists of categorical columns leave the database.
+  const { tables, skipped } = await extract(db, { ...cfg, sampleRowsShown: 0 }, [found], { samples: true, reveal: new Set() });
+  if (skipped.length > 0) return refuse(notExamined(found.name));
+  return reply(JSON.stringify(described(tables[0]!), null, 2));
+}
+
+/** measure_join: one join, claimed as prompt A would claim it, measured and decided as a full run measures and decides it. */
+async function measureJoin(db: Db, cfg: Config, asked: Join): Promise<Reply> {
+  const catalog = await readCatalog(db);
+  const from = lookUp(catalog, asked.from_table, asked.from_column, asked.when_column);
+  if (typeof from === "string") return refuse(from);
+  const to = lookUp(catalog, asked.to_table, asked.to_column);
+  if (typeof to === "string") return refuse(to);
+  const claim: Relationship = {
+    from: { table: from.name, column: asked.from_column },
+    to: { table: to.name, column: asked.to_column },
+    ...(asked.when_column !== undefined && asked.when_equals !== undefined ? { when: { column: asked.when_column, equals: asked.when_equals } } : {}),
+    // As prompt A claims a join: stated when the database declares it.
+    basis: declares(from, asked.from_column, to, asked.to_column) ? "stated" : "inferred",
+    confidence: 1,
+    reason: "measure_join",
+  };
+  const extracted = await extract(db, cfg, catalog.filter((r) => r === from || r === to), { samples: false, reveal: new Set() });
+  // verify would call a relation the budget skipped unknown.
+  if (extracted.skipped.length > 0) return refuse(notExamined(extracted.skipped[0]!));
+  const claims = { entities: [], tables: [], relationships: [claim], suspicions: [], questions: [] };
+  const [measured] = await verify(db, cfg, extracted, claims, () => integerKeys(db, cfg, catalog));
+  const verdict = decide(measured!, cfg);
+  return reply(joinLine(claim, verdict), JSON.stringify({ claim: relationshipId(claim), ...verdict }, null, 2));
 }
 
 /** Every name the fewest single-character edits from name, ignoring case, in the order given: spellings only, never a meaning. */

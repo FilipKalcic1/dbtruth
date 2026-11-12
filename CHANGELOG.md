@@ -3,6 +3,48 @@
 Changes since 0.1.8. What earlier releases changed, and why, is in
 `NOTES.md`.
 
+## 0.4.3 (2026-11-12)
+
+Five changes from a review of 0.4.2's code against what a user meets first,
+and a cleanup.
+
+- Value visibility: a column's values are shown only when they repeat in
+  earnest: on top of at least one repeated value, at least two non-null
+  sampled rows per distinct value on average
+  (`--categorical-min-rows-per-value`, `DBTRUTH_CATEGORICAL_MIN_ROWS_PER_VALUE`;
+  1 is the old rule). The known gap of 0.4.2, 25 employees' first names shown
+  once two shared one, is closed. A key or revealed column lists its values
+  by its own non-null count, not the sample's row count. The snapshot records
+  the setting, and `check` measures no condition under a snapshot whose
+  setting is lower than this run's.
+- `dead_table`: the age is taken over values up to now, so a date still to
+  come, such as an expiry, keeps no table alive. A table confirmed dead by
+  age alone, with rows in it, is reported as unchanged, not unused: its line
+  in `context/tables/` says that no row is newer than that many days and that
+  this does not show it unused; prompt B is told never to call such a table
+  unused or removable, prompt A not to propose a reference table as dead for
+  its age, and the skill reads such a table as reference data.
+- `duplicate_entity` is measured both ways: the first table's sampled rows
+  against all of the second, as before, then the second's against all of the
+  first (`totalReverse`, `matchedReverse`, `overlapReverse`), from the same
+  cast; the verdict is confirmed when either share reaches
+  `--duplicate-overlap`, so a table that holds a copy of a smaller one is its
+  duplicate whichever the analysis named first. An other way that could not
+  be measured leaves the first way's numbers as they were.
+- Joins on weak evidence are counted apart: the summary reads
+  `relationships: 2 confirmed, 1 on weak evidence, ...`, and such a join's
+  line in `context/tables/`, and `measure_join`'s answer, lead with
+  "confirmed on weak evidence". The verdict stays `confirmed`, as before.
+- Relations are read most joined first, by how many foreign keys each
+  declares or is pointed at by, then in catalog order, so a budget too small
+  for every relation covers the joins the schema declares rather than the
+  start of the alphabet; the output keeps the catalog order. The summary adds
+  `not examined: <names>, and <n> more` when any was left out.
+- Cleanup, no behavior change: `errorMessage` shared from `safety.ts`;
+  `profile`, `tableFile` and the MCP tool handlers split into named parts;
+  nested ternaries replaced; the CLI's `--url`, `--dotenv` and tunable flags
+  declared once; step comments renumbered.
+
 ## 0.4.2 (2026-09-27)
 
 - `init`'s next steps leave out those already done: `fill in .env` once the

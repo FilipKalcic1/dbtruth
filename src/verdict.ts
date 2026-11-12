@@ -36,7 +36,8 @@ export function decide(m: Measurement, cfg: Config): Verdict {
       // Two views are one relation when they are one query, whatever rows either holds and whether it can be read.
       if (n.sameDefinition !== undefined) return verdict(n.sameDefinition === 1 ? "confirmed" : "rejected");
       if (n.overlap === undefined) return verdict("unverifiable");
-      return verdict(n.overlap >= cfg.duplicateOverlap ? "confirmed" : "rejected");
+      // Either way: a table that holds a copy of a smaller one is the smaller one's duplicate, whichever was named first.
+      return verdict(Math.max(n.overlap, n.overlapReverse ?? 0) >= cfg.duplicateOverlap ? "confirmed" : "rejected");
     case "missing_key":
       if (n.hasPrimaryKey === undefined) return verdict("unverifiable");
       return verdict(n.hasPrimaryKey === 0 ? "confirmed" : "rejected");

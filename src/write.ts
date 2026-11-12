@@ -10,7 +10,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { AskOptions, Model } from "./model.js";
-import { FilesSchema, relationshipId, sqlString, suspicionId, type Files, type Relationship, type TableFacts, type Verdict, type Verified } from "./schemas.js";
+import { FilesSchema, relationshipId, sqlString, suspicionId, type Claims, type Files, type Relationship, type Suspicion, type TableFacts, type Verdict, type Verified } from "./schemas.js";
 
 export const OUTPUT_DIR = "context";
 /** cli.ts adds the snapshot to the files it hands persist, so this module need not know what it holds. */
@@ -64,50 +64,83 @@ export function tableFileName(name: string): string {
  * and verify. Rejected claims are left out, and nothing unconfirmed passes as a fact.
  */
 export function tableFile(v: Verified, t: TableFacts): string {
-  const mine = (name: string) => name === t.name;
-  const meaning = v.claims.tables.find((m) => mine(m.name));
-
-  const joins = v.claims.relationships.filter((r) => mine(r.from.table) || mine(r.to.table)).flatMap((r) => {
-    const verdict = v.verdicts[relationshipId(r)];
-    return verdict && verdict.status !== "rejected" ? [`- ${joinLine(r, verdict)}`] : [];
-  });
-
-  const problems = v.claims.suspicions.filter((s) => s.tables.some(mine)).flatMap((s) => {
-    const verdict = v.verdicts[suspicionId(s)];
-    if (!verdict || verdict.status === "rejected") return [];
-    const subject = [...s.tables.filter((name) => !mine(name)), ...(s.column ? [s.column] : [])].join(", ");
-    const head = `${s.kind}${subject ? ` ${subject}` : ""}`;
-    if (verdict.status !== "confirmed") return [`- ${head} (inferred${verdict.skipped ? `, not measured: ${verdict.skipped}` : ""}): ${s.detail}`];
-    // A verdict confirms the numbers, and not the detail's words. Of a suspicion that names more than one table, it names
-    // the table they were measured over.
-    const numbers = Object.entries(verdict.measurement.numbers).map(([k, x]) => `${k} ${x}`).join(", ");
-    const over = verdict.measurement.over ? ` (measured over ${verdict.measurement.over})` : "";
-    const hint = s.kind === "inconsistent_values" && s.column ? ` Compare with lower(btrim(${s.column})).` : "";
-    return [`- **${head}**: ${numbers}${over}.${hint} ${s.detail} (inferred)`];
-  });
-
   const values = Object.entries(t.categorical).map(([column, list]) => `- ${column}: ${list.map((x) => JSON.stringify(x)).join(", ")}`);
-  const sampled = t.estimateSource === "pilot" ? " (estimated from a sample)" : "";
-  // A materialized view never refreshed has a size of 0 that nothing counted: reading it raises an error.
-  const size =
-    t.populated === false
-      ? "never refreshed (reading it raises an error)"
-      : t.rowEstimate < 0
-        ? "size unknown"
-        : t.rowEstimate === 0
-          ? "no rows"
-          : `~${Math.round(t.rowEstimate)} rows${sampled}`;
-  const facts = `${t.kind}${t.partitions ? `, ${t.partitions.count} partitions` : ""}, ${size}, primary key: ${t.primaryKey?.join(", ") ?? "none"}`;
+  const facts = `${t.kind}${t.partitions ? `, ${t.partitions.count} partitions` : ""}, ${sizeOf(t)}, primary key: ${t.primaryKey?.join(", ") ?? "none"}`;
   const section = (title: string, lines: string[]) => (lines.length ? ["", `## ${title}`, "", ...lines] : []);
   return [
     `# ${t.name}`,
     "",
-    ...(meaning ? [`${meaning.purpose}${meaning.basis === "inferred" ? " (inferred)" : ""}`, `Grain: ${meaning.grain}`, ...meaning.notes.map((note) => `- ${note}`), ""] : []),
+    ...meaningLines(v.claims.tables.find((m) => m.name === t.name)),
     facts,
-    ...section("Joins", joins),
-    ...section("Known problems", problems),
+    ...section("Joins", joinLines(v, t.name)),
+    ...section("Known problems", problemLines(v, t.name)),
     ...section("Values", values),
   ].join("\n") + "\n";
+}
+
+/** The purpose, grain and notes the model gave the relation, when it described it, with a blank line after. */
+function meaningLines(meaning: Claims["tables"][number] | undefined): string[] {
+  if (!meaning) return [];
+  return [`${meaning.purpose}${meaning.basis === "inferred" ? " (inferred)" : ""}`, `Grain: ${meaning.grain}`, ...meaning.notes.map((note) => `- ${note}`), ""];
+}
+
+const SIZE_NEVER_REFRESHED = "never refreshed (reading it raises an error)";
+const SIZE_UNKNOWN = "size unknown";
+const SIZE_NO_ROWS = "no rows";
+
+/** The size as the facts line gives it. A materialized view never refreshed has a size of 0 that nothing counted: reading it raises an error. */
+function sizeOf(t: TableFacts): string {
+  if (t.populated === false) return SIZE_NEVER_REFRESHED;
+  if (t.rowEstimate < 0) return SIZE_UNKNOWN;
+  if (t.rowEstimate === 0) return SIZE_NO_ROWS;
+  return `~${Math.round(t.rowEstimate)} rows${t.estimateSource === "pilot" ? " (estimated from a sample)" : ""}`;
+}
+
+/** One line per join the relation takes part in, from either side, with its verdict; a rejected one is left out. */
+function joinLines(v: Verified, name: string): string[] {
+  return v.claims.relationships
+    .filter((r) => r.from.table === name || r.to.table === name)
+    .flatMap((r) => {
+      const verdict = v.verdicts[relationshipId(r)];
+      return verdict && verdict.status !== "rejected" ? [`- ${joinLine(r, verdict)}`] : [];
+    });
+}
+
+/** One line per suspicion that names the relation: a confirmed one with its numbers in bold, any other as the analysis's words; a rejected one is left out. */
+function problemLines(v: Verified, name: string): string[] {
+  return v.claims.suspicions
+    .filter((s) => s.tables.includes(name))
+    .flatMap((s) => {
+      const verdict = v.verdicts[suspicionId(s)];
+      if (!verdict || verdict.status === "rejected") return [];
+      const subject = [...s.tables.filter((other) => other !== name), ...(s.column ? [s.column] : [])].join(", ");
+      const head = `${s.kind}${subject ? ` ${subject}` : ""}`;
+      if (verdict.status !== "confirmed") return [`- ${head} (inferred${verdict.skipped ? `, not measured: ${verdict.skipped}` : ""}): ${s.detail}`];
+      // A verdict confirms the numbers, and not the detail's words. Of a suspicion that names more than one table, it
+      // names the table they were measured over.
+      const numbers = Object.entries(verdict.measurement.numbers).map(([k, x]) => `${k} ${x}`).join(", ");
+      return [`- **${head}**: ${numbers}${measuredOver(s, verdict.measurement)}.${confirmedHint(s, verdict.measurement.numbers)} ${s.detail} (inferred)`];
+    });
+}
+
+/**
+ * Which table a suspicion's numbers are over, when its verdict names one: with a measurement the other way too, which
+ * numbers are the other table's.
+ */
+function measuredOver(s: Suspicion, m: Verdict["measurement"]): string {
+  if (!m.over) return "";
+  const other = s.tables.find((name) => name !== m.over);
+  const bothWays = m.numbers.overlapReverse !== undefined && other !== undefined;
+  return bothWays ? ` (total, matched and overlap over ${m.over}; the Reverse ones over ${other})` : ` (measured over ${m.over})`;
+}
+
+/** What a reader needs beside a confirmed suspicion's numbers, where the numbers alone would be read as more than they show. */
+function confirmedHint(s: Suspicion, n: Record<string, number>): string {
+  const compare = s.kind === "inconsistent_values" && s.column ? ` Compare with lower(btrim(${s.column})).` : "";
+  // Confirmed by age alone, with rows in it or a count nothing took: a reference table is unchanged too, and not unused.
+  const byAge = s.kind === "dead_table" && n.ageDays !== undefined && n.count !== 0;
+  const unchanged = byAge ? ` No row is newer than ${n.ageDays} days: the table is unchanged, as a reference table is too; nothing here shows it unused.` : "";
+  return compare + unchanged;
 }
 
 /**
@@ -120,10 +153,16 @@ export function joinLine(r: Relationship, verdict: Verdict): string {
   // A branch's condition as a SQL literal, which an agent can paste into a WHERE.
   const edge = `${r.from.table}.${r.from.column} -> ${r.to.table}.${r.to.column}${r.when ? ` when ${r.when.column} = ${sqlString(r.when.equals)}` : ""}`;
   const inferred = r.basis === "stated" ? "" : " (inferred)";
-  // A join confirmed on inference whose values other keys would hold too is not stated as a fact.
-  const evidence = n.alsoFits ? ` (inferred; the same values would also match ${n.alsoFits} other key${n.alsoFits === 1 ? "" : "s"}, so the match alone does not prove this join)` : inferred;
   const nulls = n.nulls ? ` ${n.nulls} sampled rows (${pct(n.nulls / (n.total! + n.nulls))}) have no ${r.from.column}; an inner join drops them too.` : "";
-  if (verdict.status === "confirmed") return `${edge}: confirmed, ${pct(n.hit!)} of ${n.total} sampled rows match${evidence}.${nulls}`;
+  if (verdict.status === "confirmed") {
+    const match = `${pct(n.hit!)} of ${n.total} sampled rows match`;
+    // A join confirmed on inference whose values other keys would hold too is not stated as a fact: the line leads with
+    // the weak evidence, and the summary counts it apart.
+    if (n.alsoFits) {
+      return `${edge}: confirmed on weak evidence, ${match}, but the same values would also match ${n.alsoFits} other key${n.alsoFits === 1 ? "" : "s"}, so the match alone does not prove this join (inferred).${nulls}`;
+    }
+    return `${edge}: confirmed, ${match}${inferred}.${nulls}`;
+  }
   if (verdict.status === "broken") return `**BROKEN** ${edge}: ${pct(n.hit!)} match (${n.hits} of ${n.total} sampled), ${n.orphans} orphans${orphanShape(n, `${r.to.table}.${r.to.column}`)}${inferred}. An inner join drops the orphans: use LEFT JOIN, or filter them on purpose.${nulls}`;
   if (verdict.status === "rejected") return `${edge}: rejected, ${pct(n.hit!)} of ${n.total} sampled rows match: these columns do not relate; find the right key.`;
   const status = verdict.skipped ? `not measured: ${verdict.skipped}` : verdict.status;

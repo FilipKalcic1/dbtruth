@@ -246,6 +246,7 @@ test("toSnapshot lists every catalog relation, marks those not examined, and car
     duplicateOverlap: config.duplicateOverlap,
     categoricalMaxDistinct: config.categoricalMaxDistinct,
     categoricalMaxValueLength: config.categoricalMaxValueLength,
+    categoricalMinRowsPerValue: config.categoricalMinRowsPerValue,
     denseKeyShare: config.denseKeyShare,
     weakEvidenceMaxCandidates: config.weakEvidenceMaxCandidates,
   });
@@ -258,6 +259,17 @@ test("the snapshot records denseKeyShare and weakEvidenceMaxCandidates, held to 
   assert.equal(settings({ weakEvidenceMaxCandidates: 2.5 }), `${FILE} is not a dbtruth snapshot: measuredWith: DBTRUTH_WEAK_EVIDENCE_MAX_CANDIDATES / --weak-evidence-max-candidates: 2.5 must be a whole number`);
   // Written before either existed: check then weighs with this run's.
   const { denseKeyShare: _share, weakEvidenceMaxCandidates: _cap, ...before } = valid.measuredWith;
+  const older = parseSnapshot(JSON.stringify({ ...valid, measuredWith: before }), FILE);
+  if (typeof older === "string") assert.fail(older);
+  assert.deepEqual(older.measuredWith, before);
+});
+
+test("the snapshot records categoricalMinRowsPerValue, held to its flag's range, and reads one without it", () => {
+  assert.equal(valid.measuredWith.categoricalMinRowsPerValue, 2);
+  const settings = (changed: Partial<Snapshot["measuredWith"]>) => parseSnapshot(JSON.stringify({ ...valid, measuredWith: { ...valid.measuredWith, ...changed } }), FILE);
+  assert.equal(settings({ categoricalMinRowsPerValue: 0.5 }), `${FILE} is not a dbtruth snapshot: measuredWith: DBTRUTH_CATEGORICAL_MIN_ROWS_PER_VALUE / --categorical-min-rows-per-value: 0.5 is below the minimum 1`);
+  // Written before it existed, when one repeated value was enough: check then judges visibility with this run's rule.
+  const { categoricalMinRowsPerValue: _rows, ...before } = valid.measuredWith;
   const older = parseSnapshot(JSON.stringify({ ...valid, measuredWith: before }), FILE);
   if (typeof older === "string") assert.fail(older);
   assert.deepEqual(older.measuredWith, before);

@@ -145,17 +145,36 @@ test("a datatype mismatch is compared as text once, and text has no index, so ev
   assert.equal(m?.numbers.hit, 1);
 });
 
-test("duplicate rows are counted as distinct tuples on the shared columns, intersected with the other table", async () => {
+test("duplicate rows are counted as distinct tuples on the shared columns, intersected with the other table, and then the other way round", async () => {
   const suspicion: Claims["suspicions"][number] = { kind: "duplicate_entity", tables: ["products", "products_legacy"], detail: "same rows" };
   const pair = extractOf(table("products", 80), table("products_legacy", 70));
-  const [m] = await verify(fakeDb(answer({ total: "80", matched: "70" })), config, pair, claims({ suspicions: [suspicion] }), noKeys);
-  assert.deepEqual(m?.numbers, { total: 80, matched: 70, sharedColumns: 3, overlap: 0.875 });
-  assert.match(m?.query ?? "", /SELECT DISTINCT a\."id", a\."customer_id", a\."make" FROM/);
-  assert.match(m?.query ?? "", /INTERSECT SELECT b\."id", b\."customer_id", b\."make" FROM "public"\."products_legacy" b/);
+  const db = fakeDb(answer({ total: "80", matched: "70" }), answer({ total: "70", matched: "70" }));
+  const [m] = await verify(db, config, pair, claims({ suspicions: [suspicion] }), noKeys);
+  assert.deepEqual(m?.numbers, { total: 80, matched: 70, sharedColumns: 3, overlap: 0.875, totalReverse: 70, matchedReverse: 70, overlapReverse: 1 });
+  const [forward, back] = (m?.query ?? "").split(";\n");
+  assert.match(forward ?? "", /SELECT DISTINCT a\."id", a\."customer_id", a\."make" FROM \(SELECT \* FROM "public"\."products" LIMIT \d+\) a/);
+  assert.match(forward ?? "", /INTERSECT SELECT b\."id", b\."customer_id", b\."make" FROM "public"\."products_legacy" b/);
+  assert.match(back ?? "", /SELECT DISTINCT a\."id", a\."customer_id", a\."make" FROM \(SELECT \* FROM "public"\."products_legacy" LIMIT \d+\) a/, "the other way: products_legacy's sampled rows");
+  assert.match(back ?? "", /INTERSECT SELECT b\."id", b\."customer_id", b\."make" FROM "public"\."products" b/, "against all of products");
+  assert.deepEqual(db.queries, [forward, back], "the two statements kept are the two that ran");
 
-  const [asText] = await verify(fakeDb(mismatch, answer({ total: "80", matched: "70" })), config, pair, claims({ suspicions: [suspicion] }), noKeys);
+  const text = fakeDb(mismatch, answer({ total: "80", matched: "70" }), answer({ total: "70", matched: "70" }));
+  const [asText] = await verify(text, config, pair, claims({ suspicions: [suspicion] }), noKeys);
   assert.match(asText?.query ?? "", /SELECT DISTINCT a\."id"::text, a\."customer_id"::text, a\."make"::text FROM/, "a datatype mismatch casts every shared column, on both sides");
   assert.match(asText?.query ?? "", /INTERSECT SELECT b\."id"::text, b\."customer_id"::text, b\."make"::text FROM/);
+  assert.equal(text.queries.length, 3, "the other way starts from the cast the first way needed");
+  assert.match(text.queries[2] ?? "", /a\."id"::text.*"public"\."products_legacy" LIMIT[\s\S]*b\."id"::text/, "the other way, as text from the start");
+  assert.equal(asText?.numbers.overlapReverse, 1);
+});
+
+test("a duplicate whose other way could not be measured keeps the first way's numbers and statement alone", async () => {
+  const suspicion: Claims["suspicions"][number] = { kind: "duplicate_entity", tables: ["products", "products_legacy"], detail: "same rows" };
+  const pair = extractOf(table("products", 80), table("products_legacy", 70));
+  const spent: QueryResult = { ok: false, reason: "budget", message: "time budget exhausted" };
+  const [m] = await verify(fakeDb(answer({ total: "80", matched: "70" }), spent), config, pair, claims({ suspicions: [suspicion] }), noKeys);
+  assert.deepEqual(m?.numbers, { total: 80, matched: 70, sharedColumns: 3, overlap: 0.875 });
+  assert.equal(m?.skipped, undefined, "measured, one way");
+  assert.ok(!(m?.query ?? "").includes(";\n"), "one statement kept: the one that ran");
 });
 
 test("a duplicate between two views is measured by comparing their definitions in the catalog, a materialized view never refreshed among them, with the names bound", async () => {
@@ -195,10 +214,11 @@ test("a duplicate between a table and a view is still measured by its rows, and 
     { kind: "duplicate_entity", tables: ["orders", "order_totals"], detail: "same rows" },
   ];
   const tables = extractOf(table("orders", 500), table("shipped_orders", -1, { kind: "view" }), table("order_totals", 0, { kind: "materialized view", populated: false }));
-  const db = fakeDb(answer({ total: "500", matched: "200" }));
+  const db = fakeDb(answer({ total: "500", matched: "200" }), answer({ total: "200", matched: "200" }));
   const [view, never] = await verify(db, config, tables, claims({ suspicions }), noKeys);
-  assert.deepEqual(view?.numbers, { total: 500, matched: 200, sharedColumns: 3, overlap: 0.4 }, "the table's sampled rows, intersected with the view's");
+  assert.deepEqual(view?.numbers, { total: 500, matched: 200, sharedColumns: 3, overlap: 0.4, totalReverse: 200, matchedReverse: 200, overlapReverse: 1 }, "the table's sampled rows, intersected with the view's, then the view's with the table's");
   assert.match(db.queries[0] ?? "", /INTERSECT SELECT b\."id", b\."customer_id", b\."make" FROM "public"\."shipped_orders" b/);
+  assert.match(db.queries[1] ?? "", /FROM \(SELECT \* FROM "public"\."shipped_orders" LIMIT \d+\) a\)[\s\S]*INTERSECT SELECT b\."id", b\."customer_id", b\."make" FROM "public"\."orders" b/, "a view has no size, so its rows are read in the plain form, never with TABLESAMPLE");
   assert.deepEqual([never?.empty, never?.skipped], [true, "a materialized view that has never been refreshed cannot be read"], "no rows can be read on one side, and a table has no definition to compare");
 });
 
@@ -212,7 +232,7 @@ test("a suspicion that names more than one table says which one its numbers are 
   ];
   // drafts has no row estimate, so it is sampled, and the sample holds no rows.
   const tables = extractOf(table("products", 80), table("products_legacy", 70), table("drafts", -1));
-  const db = fakeDb(answer({ total: "80", matched: "70" }), answer({ total: "0", matched: "0" }));
+  const db = fakeDb(answer({ total: "80", matched: "70" }), answer({ total: "70", matched: "70" }), answer({ total: "0", matched: "0" }));
   const [duplicate, keys, key, other, drafts] = await verify(db, config, tables, claims({ suspicions }), noKeys);
   assert.equal(duplicate?.over, "products", "the overlap is a share of products' rows, and the measurement says so by name");
   assert.equal(keys?.over, "products", "the key is looked up on the first table alone");
@@ -435,8 +455,25 @@ test("the dead-table age is counted in whole days by the statement, so the numbe
   const db = fakeDb(answer({ count: 120, age_days: "3" }));
   const [m] = await verify(db, config, extractOf(vehicles), deadVehicles, noKeys);
   // Rounded up: a whole number over staleAfterDays exactly when the age is, so a table 90 days and an hour old is dead at 90.
-  assert.equal(m?.query, 'SELECT count(*)::float8 AS count, ceil(EXTRACT(EPOCH FROM (now() - greatest(max("registered_at")))) / 86400) AS age_days FROM "public"."vehicles"');
+  assert.equal(m?.query, 'SELECT count(*)::float8 AS count, ceil(EXTRACT(EPOCH FROM (now() - greatest(max("registered_at") FILTER (WHERE "registered_at" <= now())))) / 86400) AS age_days FROM "public"."vehicles"');
   assert.deepEqual(m?.numbers, { exact: 1, count: 120, ageDays: 3 });
+});
+
+test("the dead-table age is the newest value up to now over every date and timestamp column: a date still to come, such as an expiry, keeps no table alive", async () => {
+  const dated = table("passes", 120, {
+    columns: [
+      { name: "issued_on", type: "date", nullable: false, nullRate: 0, distinct: 0, maxLength: 0, visible: false },
+      { name: "expires_at", type: "timestamp without time zone", nullable: true, nullRate: 0, distinct: 0, maxLength: 0, visible: false },
+      { name: "note", type: "text", nullable: true, nullRate: 0, distinct: 0, maxLength: 0, visible: false },
+    ],
+  });
+  const db = fakeDb(answer({ count: 120, age_days: "400" }));
+  const [m] = await verify(db, config, extractOf(dated), claims({ suspicions: [{ kind: "dead_table", tables: ["passes"], detail: "old" }] }), noKeys);
+  assert.equal(
+    m?.query,
+    'SELECT count(*)::float8 AS count, ceil(EXTRACT(EPOCH FROM (now() - greatest(max("issued_on") FILTER (WHERE "issued_on" <= now()), max("expires_at") FILTER (WHERE "expires_at" <= now())))) / 86400) AS age_days FROM "public"."passes"',
+  );
+  assert.deepEqual(m?.numbers, { exact: 1, count: 120, ageDays: 400 });
 });
 
 test("a dead-table age that is not a finite number is left out", async () => {

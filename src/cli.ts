@@ -16,7 +16,7 @@ import { doctor } from "./doctor.js";
 import { extract, fitToContext, integerKeys, readCatalog } from "./extract.js";
 import { serve } from "./mcp.js";
 import { createModel, DEFAULT_MODEL, type Transport } from "./model.js";
-import { connect, readDotEnv, readSettings, repositoryRoot, resolveDatabaseUrl } from "./safety.js";
+import { connect, errorMessage, readDotEnv, readSettings, repositoryRoot, resolveDatabaseUrl } from "./safety.js";
 import type { Verified } from "./schemas.js";
 import { readSnapshot, serialize, toSnapshot } from "./snapshot.js";
 import { assemble, describeKinds, EXIT_FAILURE, EXIT_FINDINGS, EXIT_OK, exitCode } from "./verdict.js";
@@ -54,7 +54,7 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
   if (!found) return EXIT_FAILURE;
   const { env, cfg, url } = found;
 
-  // 1. Prove the API is reachable with this key and model before touching the database. Sends only the model id.
+  // 2. Prove the API is reachable with this key and model before touching the database. Sends only the model id.
   const model = env.ANTHROPIC_MODEL || DEFAULT_MODEL;
   const ai = createModel({
     rawDir: join(opts.cwd, OUTPUT_DIR),
@@ -65,10 +65,10 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
   });
   await ai.preflight();
 
-  // 2. Connect through safety, prove read-only.
+  // 3. Connect through safety, prove read-only.
   const db = await connect(url, { ...cfg, warn: (message) => opts.err(`WARNING: ${message}`) });
   try {
-    // 3. The catalog and the server's version, outside the budget; then extract, and trim to what the model can take.
+    // 4. The catalog and the server's version, outside the budget; then extract, and trim to what the model can take.
     const catalog = await readCatalog(db);
     const version = await db.catalog("SELECT current_setting('server_version_num')::int AS num");
     if (!version.ok) throw new Error(`could not read the server version: ${version.message}`);
@@ -78,7 +78,7 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
     const { extract: extracted, reduced } = fitToContext(raw, cfg);
     const effort = effortFor(extracted.schemaTokens, cfg);
 
-    // 4. Disclosure, before the first call that carries data. Human-facing lines go to stderr so --json stays clean.
+    // 5. Disclosure, before the first call that carries data. Human-facing lines go to stderr so --json stays clean.
     opts.err(
       `Sending to ${model} at effort ${effort}${cfg.modelEffort === "auto" ? ` (by schema size, ${extracted.schemaTokens} tokens)` : ""}: ` +
         `${extracted.tables.length} relations (${describeKinds(extracted.tables)})` +
@@ -91,7 +91,7 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
         `. Nothing else leaves this machine.`,
     );
 
-    // 5. Contextualize. 6. Verify. 7. Write. One progress line each, so a person can see it working.
+    // 6. Contextualize. 7. Verify. 8. Write. One progress line each, so a person can see it working.
     const t0 = performance.now();
     const claims = await contextualize(ai, extracted, { effort });
     const t1 = performance.now();
@@ -104,12 +104,12 @@ export async function run(opts: RunOptions, deps: RunDeps = {}): Promise<number>
     const modelMs = { contextualize: t1 - t0, write: performance.now() - t2 };
     opts.err(`write: ${Object.keys(files).length} files, ${seconds(modelMs.write)}${withheld ? `; ${withheld}` : ""}`);
 
-    // 8. Write the files and the snapshot, print the summary, exit. The snapshot lists every relation of the catalog.
+    // 9. Write the files and the snapshot, print the summary, exit. The snapshot lists every relation of the catalog.
     const snapshot = serialize(toSnapshot(verified, catalog, cfg, { toolVersion: VERSION, serverVersionNum }));
     const saved = persist(opts.cwd, { ...files, [SNAPSHOT]: snapshot });
     for (const f of saved.failed) opts.err(`could not write ${f.path}: ${f.error}`);
     if (opts.json) opts.out(JSON.stringify(verified, null, 2));
-    for (const line of summary(verified, saved.written.length, db.budget().spentMs, modelMs)) opts.err(line);
+    for (const line of summary(verified, saved.written.length, db.budget().spentMs, modelMs, extracted.skipped)) opts.err(line);
     const used = ai.usage();
     if (used.inputTokens > 0) opts.err(`tokens: ${used.inputTokens} in, ${used.outputTokens} out, ${used.calls} calls`);
     if (used.effortDropped) opts.err(`note: ${model} did not accept the effort parameter; the calls ran at its default effort`);
@@ -160,7 +160,7 @@ export async function runCheck(opts: CheckOptions): Promise<number> {
       try {
         writeFileSync(resolve(opts.cwd, opts.markdown), comment);
       } catch (e) {
-        opts.err(`could not write ${opts.markdown}: ${e instanceof Error ? e.message : String(e)}`);
+        opts.err(`could not write ${opts.markdown}: ${errorMessage(e)}`);
         return EXIT_FAILURE;
       }
     }
@@ -302,7 +302,7 @@ function create(path: string, text: string | Buffer, opts: InitOptions, replace 
     if (replace) rmSync(path, { force: true });
     writeFileSync(path, text, { flag: "wx" });
   } catch (e) {
-    opts.err(`could not write ${file}: ${e instanceof Error ? e.message : String(e)}`);
+    opts.err(`could not write ${file}: ${errorMessage(e)}`);
     return false;
   }
   opts.err(`wrote ${file}`);
@@ -342,11 +342,22 @@ function noDatabaseUrl(file: string | undefined, searched: { dir: string }[]): s
   ];
 }
 
-function summary(v: Verified, fileCount: number, spentMs: number, modelMs: { contextualize: number; write: number }): string[] {
+/** Part of the summary's format: how many relations not examined are named before the rest are counted. The snapshot marks every one. */
+const NOT_EXAMINED_NAMED = 10;
+
+/** The relations not examined, by name up to NOT_EXAMINED_NAMED and the rest counted, or nothing when every one was. */
+function notExamined(skipped: string[]): string[] {
+  if (skipped.length === 0) return [];
+  const rest = skipped.length - NOT_EXAMINED_NAMED;
+  return [`not examined: ${skipped.slice(0, NOT_EXAMINED_NAMED).join(", ")}${rest > 0 ? `, and ${rest} more` : ""}`];
+}
+
+function summary(v: Verified, fileCount: number, spentMs: number, modelMs: { contextualize: number; write: number }, skipped: string[]): string[] {
   const count = (prefix: string, status: string) => Object.entries(v.verdicts).filter(([id, x]) => id.startsWith(prefix) && x.status === status).length;
   const rel = (s: string) => count("relationship:", s);
   const sus = (s: string) => count("suspicion:", s);
-  // Confirmed, and matched as well by other keys: the match alone proves nothing.
+  // Confirmed, and matched as well by other keys: the match alone proves nothing, so they are counted apart from the
+  // confirmed ones.
   const weak = Object.entries(v.verdicts).filter(([id, x]) => id.startsWith("relationship:") && x.status === "confirmed" && (x.measurement.numbers.alsoFits ?? 0) > 0).length;
   const broken = Object.entries(v.verdicts)
     .filter(([id, x]) => id.startsWith("relationship:") && x.status === "broken")
@@ -354,7 +365,8 @@ function summary(v: Verified, fileCount: number, spentMs: number, modelMs: { con
   return [
     `dbtruth: ${v.database}`,
     `relations: ${v.relations}${v.fitsInContext ? " (fits in an agent's context)" : ""}`,
-    `relationships: ${rel("confirmed")} confirmed${weak > 0 ? ` (${weak} on weak evidence)` : ""}, ${rel("broken")} broken, ${rel("rejected")} rejected, ${rel("unverifiable")} unverifiable, ${rel("empty")} empty`,
+    ...notExamined(skipped),
+    `relationships: ${rel("confirmed") - weak} confirmed, ${weak} on weak evidence, ${rel("broken")} broken, ${rel("rejected")} rejected, ${rel("unverifiable")} unverifiable, ${rel("empty")} empty`,
     ...broken,
     `suspicions: ${sus("confirmed")} confirmed, ${sus("rejected")} rejected, ${sus("unverifiable")} unverifiable, ${sus("empty")} empty`,
     ...emptyClaims(v),
@@ -390,14 +402,13 @@ export async function main(argv: string[]): Promise<number> {
     .description("Verified database context for AI coding agents. Read-only, Postgres.")
     .version(VERSION, "-v, --version")
     // Options after a subcommand's name are its own, so doctor's --url is not taken for the full run's.
-    .enablePositionalOptions()
-    .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
-    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root")
+    .enablePositionalOptions();
+  withDatabaseOptions(program)
     .option("--reveal <table.column>", "show one hidden column's values to the model (repeatable)", collect)
     .option("--no-samples", "send schema and statistics only, no sample rows")
     .option("--json", "print the Verified object as JSON to stdout")
     .option(`--${EFFORT_FLAG} <level>`, `auto, low, medium, high, xhigh or max (env ${EFFORT_ENV})`);
-  for (const o of overridable) program.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
+  withTunables(program);
   program.action(async (o) => {
     code = await run({
       url: o.url,
@@ -412,12 +423,8 @@ export async function main(argv: string[]): Promise<number> {
       err,
     });
   });
-  program
-    .command("doctor")
-    .description("check what a full run needs, one line per check, without spending a token")
-    .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
-    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root")
-    .action(async (own) => {
+  const doctorCommand = program.command("doctor").description("check what a full run needs, one line per check, without spending a token");
+  withDatabaseOptions(doctorCommand).action(async (own) => {
       // Options before `doctor` are the program's, and would otherwise be dropped; its own, after its name, win.
       const o = { ...program.opts(), ...own };
       const ready = await doctor({ url: o.url, dotenv: o.dotenv, flags: overrides(o), cwd: process.cwd(), env: process.env, node: process.version, err });
@@ -437,10 +444,9 @@ export async function main(argv: string[]): Promise<number> {
     .option("--snapshot <path>", "the snapshot to check, relative to the current directory", SNAPSHOT)
     .addOption(new Option("--fail-on <when>", "exit 2 on a regression or a stale item, on any change, or never").choices(FAIL_ON).default("regression"))
     .option("--json", "print the report as JSON to stdout")
-    .option("--markdown <path>", "write the report as a pull request comment to this file, relative to the current directory")
-    .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
-    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root");
-  for (const o of overridable) check.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
+    .option("--markdown <path>", "write the report as a pull request comment to this file, relative to the current directory");
+  withDatabaseOptions(check);
+  withTunables(check);
   check.action(async (own) => {
     // As for doctor: the program's options before `check`, and its own after the name, which win.
     const o = { ...program.opts(), ...own };
@@ -461,10 +467,9 @@ export async function main(argv: string[]): Promise<number> {
   const mcp = program
     .command("mcp")
     .description("serve context/ and measurements to an agent over MCP on stdin and stdout, without a model or an API key")
-    .option("--project <dir>", "the directory whose context/ the tools read and whose .env is looked for first (default: CLAUDE_PROJECT_DIR, else the current directory)")
-    .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
-    .option("--dotenv <path>", "read settings from this file instead of the nearest .env up to the repository root, relative to the project directory");
-  for (const o of overridable) mcp.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
+    .option("--project <dir>", "the directory whose context/ the tools read and whose .env is looked for first (default: CLAUDE_PROJECT_DIR, else the current directory)");
+  withDatabaseOptions(mcp, ", relative to the project directory");
+  withTunables(mcp);
   mcp.action(async (own) => {
     // As for check: the program's options before `mcp`, and its own after the name, which win. stdout is the protocol's.
     const o = { ...program.opts(), ...own };
@@ -473,10 +478,23 @@ export async function main(argv: string[]): Promise<number> {
   try {
     await program.parseAsync(argv);
   } catch (e) {
-    err(`dbtruth: ${e instanceof Error ? e.message : String(e)}`);
+    err(`dbtruth: ${errorMessage(e)}`);
     return EXIT_FAILURE;
   }
   return code;
+}
+
+/** --url and --dotenv, which every command that opens the database takes; dotenvNote says where a relative path starts. */
+function withDatabaseOptions(command: Command, dotenvNote = ""): Command {
+  return command
+    .option("--url <url>", "database URL (else DATABASE_URL, else .env)")
+    .option("--dotenv <path>", `read settings from this file instead of the nearest .env up to the repository root${dotenvNote}`);
+}
+
+/** One flag per tunable, as config.ts lists them. */
+function withTunables(command: Command): Command {
+  for (const o of overridable) command.option(`--${o.flag} <number>`, `override config (env ${o.env})`);
+  return command;
 }
 
 /** The tunables given as flags, keyed as resolveConfig takes them. */

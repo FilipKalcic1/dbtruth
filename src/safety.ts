@@ -317,7 +317,8 @@ function sqlState(e: unknown): string | undefined {
     : undefined;
 }
 
-function errorMessage(e: unknown): string {
+/** The words of whatever was thrown: an Error's message, each of an AggregateError's, or the value as text. */
+export function errorMessage(e: unknown): string {
   if (e instanceof AggregateError) return e.errors.map(errorMessage).join("; ");
   if (e instanceof Error) return e.message || (sqlState(e) ?? e.name);
   return String(e);

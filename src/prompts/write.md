@@ -19,10 +19,19 @@ rows of the table named in "over" on all of those columns), matched (how
 many of those rows are also in the other table) and overlap (matched /
 total). Between two views or materialized views, its number is
 sameDefinition instead: 1 when their definitions are the same, 0 when
-they differ. An inconsistent_values suspicion's numbers are distinctValues
+they differ. It is also measured the other way, over the other table's
+sampled rows against the table named in "over": totalReverse,
+matchedReverse and overlapReverse (matchedReverse / totalReverse), and the
+suspicion is confirmed when either overlap reaches the threshold; when the
+other way could not be measured, those three are absent.
+An inconsistent_values suspicion's numbers are distinctValues
 (distinct values on the sample), canonicalForms (distinct values once
 lowercased and trimmed) and collisions (the difference), which cannot tell
 case from spacing.
+A dead_table suspicion's numbers are count (exact 1 when it was counted, 0
+when it is an estimate), ageDays (whole days from the newest date or
+timestamp up to now, over every date and timestamp column) or populated 0
+for a materialized view never refreshed.
 The queries are empty when the analysis was too large to send with them.
 You also receive per-relation facts measured from the database: kind
 (table, view, materialized view), partitions if any, populated for a
@@ -77,8 +86,16 @@ Rules that override everything else:
 - A confirmed suspicion confirms its numbers, not the words of its detail,
   which are the analysis's guess. Say what the numbers and the values of
   categorical columns show; label anything beyond them "(inferred)".
+- A dead_table confirmed with a count above 0, or with no count, is
+  confirmed by age alone: no row is newer than the limit, which shows the
+  table unchanged, not unused; a reference table other tables point at, such
+  as a list of countries or statuses, passes the same test. Say that no row
+  is newer than that many days, and never that such a table is unused,
+  removable or safe to drop; only a count of 0 is an empty table.
 - A duplicate_entity's overlap is one way: give it as a share of the rows
   of the table named in "over", by that name, never of the other table's.
+  overlapReverse is the other way: a share of the other table's rows, by its
+  name. Give both when both are there.
 - A note, detail or reason that calls a column hidden means that its sample
   values were withheld from the analysis model only; the database holds
   them, and the measurements read them. Never call a column or its values

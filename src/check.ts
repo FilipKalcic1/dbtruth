@@ -49,7 +49,7 @@ type Name = [table: string, column?: string];
  * An item that is not unchanged, as a report shows it. A relation added or dropped has no before. Why it could not be
  * measured is printed on stderr only.
  */
-type Row = { cls: CheckClass; name: string; before?: string; after: string; reason?: string };
+type ReportRow = { cls: CheckClass; name: string; before?: string; after: string; reason?: string };
 
 /** The snapshot's claims measured again on db, as the snapshot measured them, and compared with it. */
 export async function remeasure(db: Db, cfg: Config, snapshot: Snapshot): Promise<CheckReport> {
@@ -58,9 +58,14 @@ export async function remeasure(db: Db, cfg: Config, snapshot: Snapshot): Promis
   const named = new Set(claimNames(snapshot.claims).flatMap((c) => c.names.map(([table]) => findTable(catalog, table))));
   const extracted = await extract(db, measuring, catalog.filter((r) => named.has(r)), { samples: false, reveal: new Set() });
   // A condition is measured only on a column that looks categorical, which these settings decide, and a pull request can
-  // edit them: bounds wider than this run's, or a smaller sample, on whose few rows most columns repeat a value, would let
-  // a condition count a guess at a hidden value (R3). With such settings no column counts as categorical.
-  const wider = measuring.sampleRows < cfg.sampleRows || measuring.categoricalMaxDistinct > cfg.categoricalMaxDistinct || measuring.categoricalMaxValueLength > cfg.categoricalMaxValueLength;
+  // edit them: bounds wider than this run's, fewer rows per value, or a smaller sample, on whose few rows most columns
+  // repeat a value, would let a condition count a guess at a hidden value (R3). With such settings no column counts as
+  // categorical.
+  const wider =
+    measuring.sampleRows < cfg.sampleRows ||
+    measuring.categoricalMaxDistinct > cfg.categoricalMaxDistinct ||
+    measuring.categoricalMaxValueLength > cfg.categoricalMaxValueLength ||
+    measuring.categoricalMinRowsPerValue < cfg.categoricalMinRowsPerValue;
   const tables = wider ? extracted.tables.map((t) => ({ ...t, columns: t.columns.map((c) => ({ ...c, visible: false })) })) : extracted.tables;
   const measured = verdicts(await verify(db, measuring, { ...extracted, tables }, snapshot.claims, () => integerKeys(db, measuring, catalog)), measuring);
   return diff(snapshot, { database: db.database, schema: schemaOf(catalog), verdicts: measured }, cfg);
@@ -195,18 +200,23 @@ function items(report: CheckReport): CheckClass[] {
  * Every item that is not unchanged, most serious first: the classes in their order, the claims of each in the report's,
  * and the relations after the stale claims. show turns each name the report holds into what is printed.
  */
-function rows({ claims, relations }: CheckReport, show = (text: string) => text): Row[] {
+function rows({ claims, relations }: CheckReport, show = (text: string) => text): ReportRow[] {
   return CHECK_CLASSES.filter((c) => c !== "unchanged").flatMap((cls) => [
     ...claims
       .filter((c) => c.class === cls)
-      .map(({ id, before, hitBefore, after, missing }): Row => ({
-        cls,
-        name: show(id),
-        before: side(before, hitBefore),
-        ...(missing ? { after: `${show(missing)} is not in the database` } : { after: side(after.status, after.measurement.numbers.hit), ...(after.skipped ? { reason: after.skipped } : {}) }),
-      })),
-    ...(cls === "stale" ? relations.map((r): Row => ({ cls, name: show(r.name), after: r.in === "database" ? "in the database, not in the context" : "in the context, not in the database" })) : []),
+      .map(({ id, before, hitBefore, after, missing }): ReportRow => {
+        const row: ReportRow = { cls, name: show(id), before: side(before, hitBefore), after: side(after.status, after.measurement.numbers.hit) };
+        if (missing) row.after = `${show(missing)} is not in the database`;
+        else if (after.skipped) row.reason = after.skipped;
+        return row;
+      }),
+    ...(cls === "stale" ? relations.map((r): ReportRow => ({ cls, name: show(r.name), after: whereIs(r) })) : []),
   ]);
+}
+
+/** Which side has a relation the other lacks. */
+function whereIs(r: CheckReport["relations"][number]): string {
+  return r.in === "database" ? "in the database, not in the context" : "in the context, not in the database";
 }
 
 /** What the report notes: another database, other settings, a changed schema. The settings' names are the snapshot schema's own. */
@@ -228,7 +238,7 @@ function tally(classes: CheckClass[]): string {
 }
 
 /** The rows as a Markdown table, or nothing. A pipe inside a cell is escaped: GitHub ends a cell at any other. */
-function table(entries: Row[]): string[] {
+function table(entries: ReportRow[]): string[] {
   if (entries.length === 0) return [];
   return ["| Class | Claim | Before | After |", "|---|---|---|---|", ...entries.map(({ cls, name, before, after }) => `| ${[cls, name, before ?? "", after].map((cell) => cell.replace(/\|/g, "\\|")).join(" | ")} |`)];
 }

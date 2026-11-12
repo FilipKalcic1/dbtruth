@@ -9,7 +9,7 @@
 
 import { resolveConfig, type Config, type Overrides } from "./config.js";
 import { createModel, DEFAULT_MODEL } from "./model.js";
-import { connect, DESCRIBED_RELATIONS, readSettings, resolveDatabaseUrl, type Db } from "./safety.js";
+import { connect, DESCRIBED_RELATIONS, errorMessage, readSettings, resolveDatabaseUrl, type Db } from "./safety.js";
 
 // The oldest versions dbtruth supports, as README.md states and CI tests.
 const NODE_MINIMUM = 20;
@@ -50,7 +50,7 @@ export async function doctor(opts: DoctorOptions, deps: DoctorDeps = {}): Promis
   try {
     cfg = resolveConfig(settings.env, opts.flags);
   } catch (e) {
-    opts.err(`FAIL ${e instanceof Error ? e.message : String(e)}`);
+    opts.err(`FAIL ${errorMessage(e)}`);
     return false;
   }
   opts.err(`ok settings from ${settings.file ?? "the environment"}`);
@@ -59,6 +59,7 @@ export async function doctor(opts: DoctorOptions, deps: DoctorDeps = {}): Promis
   const url = resolveDatabaseUrl(opts.url, settings.env);
   if (url) opts.err("ok database URL set");
   else opts.err(`FAIL no database URL: set DATABASE_URL in ${settings.file ?? "a .env"}, in the environment, pass --url, or read a file elsewhere with --dotenv <path>`);
+  // 4 to 7, in checkDatabase.
   const databaseReady = url !== undefined && (await checkDatabase(url, cfg, opts.err));
 
   // 8. The key, by the one request that sends nothing but the model id.
@@ -70,7 +71,7 @@ export async function doctor(opts: DoctorOptions, deps: DoctorDeps = {}): Promis
       await (deps.preflight?.() ?? createModel({ rawDir: opts.cwd, model, maxOutputTokens: cfg.modelMaxOutputTokens, apiKey }).preflight());
       opts.err(`ok ANTHROPIC_API_KEY works with ${model}`);
     } catch (e) {
-      opts.err(`FAIL ${e instanceof Error ? e.message : String(e)}`);
+      opts.err(`FAIL ${errorMessage(e)}`);
     }
   }
   return nodeReady && databaseReady;
@@ -84,7 +85,7 @@ async function checkDatabase(url: string, cfg: Config, err: (line: string) => vo
   try {
     db = await connect(url, { ...cfg, warn: (message) => (unproven = message) });
   } catch (e) {
-    err(`FAIL ${e instanceof Error ? e.message : String(e)}`);
+    err(`FAIL ${errorMessage(e)}`);
     return false;
   }
   try {

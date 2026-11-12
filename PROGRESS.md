@@ -6032,3 +6032,128 @@ of each lost point, in the format of section 4.7 of the plan.
   which now requires "`run npx dbtruth doctor` stays", were updated; README,
   CHANGELOG and NOTES say the new rule.
 - `npm run acceptance -- --task T1.4`: 100/100.
+
+## 0.4.3: the review's fixes (the maintainer's request)
+### Iteration 1: the review, 7/10 overall
+- Scope, the maintainer's: a review of 0.4.2's code against what a user
+  meets first, scored 1 to 10 by criteria (accuracy, structure, boilerplate,
+  tests, docs), and then its findings fixed. No model was called; nothing
+  was published or tagged.
+- How it was checked: `npm ci`, typecheck, build and the package smoke test;
+  the fixture loaded into a local Postgres 16 on port 54329, since the
+  sandbox has no Docker daemon; the suite run as root (338 tests: 331 pass,
+  2 live skipped, 5 fail) and again as a non-root user (the four tests that
+  need an unreadable `.env` pass; the fifth assumes a fixture without SSL,
+  which the local server had on). All of `src/` read; function size and
+  branching measured with the TypeScript compiler API (186 functions, 9 over
+  50 lines, `profile` 86 lines at 37 branches); the verdicts probed on a copy
+  of `fixture_template` with hand-made claims, and a full offline run's
+  `context/tables/` read.
+- Found, for a user: a four-row `countries` table last written in 2015 is a
+  `dead_table` confirmed (`ageDays 4321`), and prompt B's README on the
+  fixture called a dead table removable; a duplicate is measured over the
+  first-named table only (0.875 one way, 1.0 the other on the fixture, and
+  rejected whenever the larger table is named first and 3 times larger); the
+  value gate lets 25 names through once two repeat, which the README calls
+  a known gap; `order_items.quantity -> products.id` is counted among the
+  confirmed joins though its values fit 5 other keys; relations are
+  profiled alphabetically, so a budget too small skips the end of the
+  alphabet. For the code: 12 copies of `e instanceof Error ? e.message :
+  String(e)` beside an unexported `errorMessage`; nested ternaries in
+  `write.ts`, `verify.ts`, `check.ts`, `schemas.ts`; the CLI's `--url` and
+  `--dotenv` declared four times; a step comment "8." before "4."; `Row`
+  meaning two things.
+### Iteration 2: tests first, then the five fixes and the cleanup
+- Each behavior change began with its tests, run on 0.4.2's code: 5 of
+  `test/extract.test.ts`, `config.test.ts` and `snapshot.test.ts` failed for
+  the value rule (no such tunable, the old rule, the listing by row count);
+  4 of `verify.test.ts` and `write.test.ts` for the dead table (the old
+  statement, no hint, no prompt rule); 6 of `verify.test.ts`,
+  `verdict.test.ts` and `write.test.ts` for the duplicate (one way only); 1
+  of `write.test.ts` and the `joins.test.ts` strings for the weak evidence;
+  1 of `extract.test.ts` for the order (b profiled, c skipped). Then the
+  code, as NOTES.md's 0.4.3 entry records it, fix by fix, with what was not
+  done.
+- Expectations changed, named as section 4.4 asks: the dead-table query
+  string in `test/verify.test.ts` (the `FILTER` clause); the duplicate
+  numbers and fake-database answers in `test/verify.test.ts` (the second
+  statement); the summary strings and the branch line in
+  `test/joins.test.ts` and the weak-evidence line in `test/write.test.ts`
+  (the new wording); `measuredWith` in `test/snapshot.test.ts` (the new
+  setting). No test was deleted or loosened; the five changed tests keep
+  their names, so every check of `acceptance/checks.json` still names its
+  test. Five checks added: `T2.1 most-joined-first` and `repeat-in-earnest`,
+  `T3.1 age-up-to-now` and `min-rows-per-value-recorded`, `T2.2
+  duplicate-both-ways`, one line each in the file's own style.
+- The cleanup after the suite was green, and the suite green after each
+  step: `errorMessage` exported and used where the structure test's map
+  allows (`cli.ts`, `doctor.ts`, `mcp.ts`; `model.ts`, `snapshot.ts` and
+  `write.ts` keep their lines, since adding `safety` to their lists is what
+  4.4 forbids); `profile` split in four, `tableFile` in three, the MCP
+  handlers in two functions; the ternaries replaced; `withDatabaseOptions`
+  and `withTunables` in `cli.ts`, with `--help` in the order it had;
+  `ReportRow` in `check.ts`. Two things the README test taught on the way: a
+  `return` of a template literal with two words in it needs a troubleshooting
+  row, so `confirmedHint` and the statistics statement build their text in
+  constants.
+- Docs: README (value visibility and the small-tables paragraph in place of
+  the known gap, how it works for all five changes, the troubleshooting row
+  for `not examined: <names>, and <n> more`, the note on the pasted 0.4.0
+  output, two bullets in "What it does not do"); the skill's dead-table
+  line; prompt A and B; CHANGELOG 0.4.3; NOTES 0.4.3; `package.json` and
+  `package-lock.json` at 0.4.3. The pasted fixture output is left as 0.4.0's
+  with a sentence that says so: regenerating it needs a key (T7.1, step 5).
+### Iteration 3: the sabotage check
+- Twelve breaks, each made in place with a script that copied the file
+  first, ran the tests named, put the copy back and compared it with `cmp`;
+  every restore matched. Each break failed at least one test with a message
+  naming the rule:
+  - the row-per-value condition replaced by `true`: "values must repeat in
+    earnest: at least categoricalMinRowsPerValue sampled rows per distinct
+    value on average";
+  - the value lists judged with an infinite non-null count: "a column shown
+    for its key, or revealed, lists its values only when they repeat as the
+    rule asks, by its own non-null count";
+  - `check`'s wider rule without the new setting: "check measures no
+    condition when the snapshot's settings would show more values than this
+    run's" on the `{ categoricalMinRowsPerValue: 1 }` edit;
+  - the `FILTER (WHERE col <= now())` dropped: both dead-table age tests;
+  - the dead-table hint dropped (`byAge = false`): "a dead table confirmed by
+    age alone says that no row is newer than that many days, and that this
+    shows it unchanged, not unused";
+  - prompt B's rule cut short: "write.md forbids calling a table confirmed
+    by age unused or removable";
+  - the second duplicate statement skipped: three `verify.test.ts` tests,
+    "and then the other way round" among them;
+  - the verdict on `overlap` alone: "duplicate_entity: confirmed when the
+    overlap either way reaches duplicateOverlap, rejected below it,
+    unverifiable with none";
+  - the summary line back to "(n on weak evidence)": "the fixture's inferred
+    quantity join is confirmed, and says it would also match its 5 other
+    dense keys";
+  - the weak-evidence branch of `joinLine` disabled: "a confirmed join whose
+    values other keys would fit is labelled inferred with the reason, never
+    stated as fact";
+  - `extract` back to catalog order: "extract profiles the relations most
+    joined first, so a budget too small for every relation still covers what
+    the schema declares, and lists them in catalog order";
+  - the `not examined:` line dropped: "every full run writes
+    context/snapshot.json, and it validates".
+### Iteration 4: the gates
+- `npm run verify` as root: typecheck clean; 350 tests, 343 pass, the 2 live
+  tests skipped, 5 fail, the five that need a non-root user (four write an
+  unreadable `.env`) or a server without SSL (the local one had `ssl = on`);
+  the run stops there, so build and the package smoke test were run on their
+  own: both pass, on `dbtruth-0.4.3.tgz` (`--version` 0.4.3, `doctor` 8
+  checks none failing, `mcp` measures orders.customer_id -> customers.id as
+  broken, `init --skill` byte for byte).
+- With `ssl = off` on the local server, as the fixture image has it, and as
+  a non-root user: `npm test` 350 tests, 348 pass, the 2 live tests skipped,
+  0 fail.
+- `npm run acceptance`, as the non-root user with `dist/` its own (a
+  `dist/` left by root fails the build step with EPERM, which caps every
+  task at 40): 100 for every task but T6.2, 0 with no checks as before;
+  overall 95 over 20 tasks, up from 93, since T7.1's four manual items were
+  given their evidence at 0.4.0's release. The five new checks pass. Nothing
+  was published: `npm publish` and the README's regenerated fixture output
+  are the maintainer's steps, as for 0.4.2.
