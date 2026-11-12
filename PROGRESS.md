@@ -6216,3 +6216,17 @@ of each lost point, in the format of section 4.7 of the plan.
   for dbtruth, or one whose owner, repository, workflow file or environment
   is not `FilipKalcic1`, `dbtruth`, `release.yml`, none. The maintainer
   checks it; the next run says which, if it fails again.
+
+### Iteration 7: the second release run, refused by npm: no trusted publisher matches
+- Run 43328666128 (on main at 20cd9e6, run twice by the maintainer): every
+  step up to `npm publish` passed again; the publish was refused, and the new
+  step printed why. GitHub gave the job its OIDC token
+  (`GET .../idtoken/...&audience=npm%3Aregistry.npmjs.org 200`); npm answered
+  the exchange with `POST 404 .../oidc/token/exchange/package/dbtruth` and
+  "OIDC token exchange error - package not found". Nothing was published or
+  tagged: `npm view dbtruth dist-tags` still says `latest` 0.4.2, and
+  `git ls-remote` finds no `v0.4.3`.
+- So the workflow side works and the refusal is npm's: it has no trusted
+  publisher on dbtruth that matches owner `FilipKalcic1`, repository
+  `dbtruth`, workflow `release.yml`, no environment. The fix is on
+  npmjs.com, by the maintainer.
