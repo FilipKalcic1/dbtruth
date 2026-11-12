@@ -3,7 +3,7 @@
 Changes since 0.1.8. What earlier releases changed, and why, is in
 `NOTES.md`.
 
-## 0.4.3 (2026-10-30)
+## 0.4.3 (2026-11-12)
 
 Five changes from a review of 0.4.2's code against what a user meets first,
 and a cleanup.

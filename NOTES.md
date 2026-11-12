@@ -2910,7 +2910,7 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   passes `check`; "What it does not do" says so. The fixes are planned:
   composite keys and partitions in BUILD_PLAN_0.5.md, the rest after it.
 
-## 0.4.3 (2026-10-30)
+## 0.4.3 (2026-11-12)
 
 - **A review of 0.4.2's code against what a user meets first.** The
   maintainer asked for a review scored by criteria (accuracy, structure,
