@@ -6157,3 +6157,35 @@ of each lost point, in the format of section 4.7 of the plan.
   given their evidence at 0.4.0's release. The five new checks pass. Nothing
   was published: `npm publish` and the README's regenerated fixture output
   are the maintainer's steps, as for 0.4.2.
+
+### Iteration 5: a release workflow, since `npm publish` cannot run here
+- Why: the maintainer asked for 0.4.3 to be published for them, from a
+  laptop with git and no npm. The cloud session cannot publish: its proxy
+  does not carry credentials to registry.npmjs.org, and a token pasted into
+  the session is not an option. Nor could it push the tag `v0.4.3` (three
+  pushes ended in "send-pack: unexpected disconnect").
+- `.github/workflows/release.yml`, started by hand on main with the version
+  typed again: checks it is package.json's, not on npm and not tagged, and
+  that CHANGELOG.md has its section; `npm ci`, typecheck, unit tests, build;
+  `npm publish` with npm 11.21.2 by trusted publishing (the job's OIDC token,
+  `id-token: write`; npm 11.21.2's `lib/utils/oidc.js` read for this, and it
+  turns provenance on itself for a public repository); then
+  `gh release create v<version>` with that section as the notes; then
+  `npx -y dbtruth@<version> --version` from an empty directory, retried for
+  the registry to catch up. No npm token is stored anywhere. The HUMAN step
+  of the release checklist (7, "npm publish (HUMAN, 2FA)") becomes linking
+  the package to this workflow on npmjs.com, behind the maintainer's 2FA, and
+  starting the run.
+- Test first, `test/ci.test.ts`: "the release workflow is started by hand on
+  main, publishes with npm's trusted publishing, and tags after"; red before
+  the file existed (ENOENT).
+- Sabotage, each red, then restored green: the main guard dropped; a `push`
+  trigger added; `id-token: write` dropped; `NODE_AUTH_TOKEN` from a secret
+  added; the version check dropped; `npm publish` moved after the tag; a
+  different `setup-node` pin.
+- The check step run here: 0.4.3 passes and writes 41 lines of notes;
+  0.4.2 and 0.4.4 fail ("package.json on main is not ..."); `npm view`
+  finds 0.4.2 and not 0.4.3; `git ls-remote` finds `v0.4.2` and not `v0.4.3`.
+- Gates, as root: typecheck clean; `npm run test:unit` 220 tests, 218 pass,
+  2 fail, the two that need a non-root user for an unreadable `.env`
+  (main without this change: 219, 217, the same 2).

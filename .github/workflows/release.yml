@@ -1,0 +1,59 @@
+# Publishes the version in package.json on main to npm, then tags it v<version> and makes the
+# GitHub release from its CHANGELOG.md section. Started by hand: Actions, release, Run workflow.
+# npm trusts this workflow by its file name (trusted publishing, set on npmjs.com under the
+# package's settings), so no npm token exists anywhere: npm exchanges the job's OIDC token for a
+# one-off publish token, and records provenance, since the repository is public.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version in package.json on main, typed again as a check"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency: release
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write # the tag and the GitHub release
+      id-token: write # npm's trusted publishing
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+      - name: The version typed is package.json's, and neither on npm nor tagged yet
+        run: |
+          test "$(node -p 'require("./package.json").version')" = "$VERSION" || { echo "package.json on main is not $VERSION"; exit 1; }
+          if [ -n "$(npm view "dbtruth@$VERSION" version 2>/dev/null)" ]; then echo "dbtruth@$VERSION is on npm already"; exit 1; fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then echo "v$VERSION is tagged already"; exit 1; fi
+          awk -v h="## $VERSION " 'index($0, h) == 1 { on = 1; next } /^## / { if (on) exit } on' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          test -s "$RUNNER_TEMP/notes.md" || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
+      - run: npm ci
+      # The full matrix ran on this commit in ci.yml; this is what needs no database.
+      - run: npm run typecheck && npm run test:unit && npm run build
+      # Trusted publishing needs npm 11.5.1 or newer; Node 22 comes with npm 10.
+      - run: npm install -g npm@11.21.2
+      - run: npm publish
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "dbtruth $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+      - name: The published package runs, from an empty directory
+        working-directory: ${{ runner.temp }}
+        run: |
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if out="$(npx -y "dbtruth@$VERSION" --version 2>&1)"; then echo "$out"; test "$out" = "$VERSION" && exit 0; fi
+            echo "attempt $attempt: $out"; sleep 15
+          done
+          exit 1
