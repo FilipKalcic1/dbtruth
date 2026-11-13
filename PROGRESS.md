@@ -6249,3 +6249,25 @@ of each lost point, in the format of section 4.7 of the plan.
   `--allow-stage-publish` ("run `npm stage`"), both false by default, at
   least one required. The entry on npmjs.com allows staging only; the
   workflow runs `npm publish`. The fix is to allow publish on that entry.
+
+### Iteration 9: 0.4.3 released (checklist steps 6 to 8)
+- The maintainer allowed `npm publish` on the trusted publisher and re-ran
+  run 43443359300 (attempt 3): published and tagged; the job is red only
+  for its last step, below.
+- Step 7: `npm view dbtruth dist-tags` gives `latest` 0.4.3;
+  `dist.attestations.provenance.predicateType` is
+  `https://slsa.dev/provenance/v1`.
+- Step 6: tag `v0.4.3` on 20cd9e6; GitHub release "dbtruth 0.4.3", notes
+  the CHANGELOG section, published 2026-11-13T14:47:59Z by
+  github-actions[bot].
+- Step 8, here, against the published package in an empty directory, with
+  the snapshot made by `scripts/make-fixture-snapshot.mjs` on the local
+  fixture (Postgres 16): `npx -y dbtruth@0.4.3 --version` 0.4.3; `doctor`
+  every check ok, exit 0; `check` "check fixture: 12 unchanged", exit 0.
+- The workflow's own smoke step failed: ten `npx -y dbtruth@0.4.3 --version`
+  attempts, 15 s apart, each `ETARGET No matching version found`, the
+  registry not yet serving the new version to readers; minutes later it
+  did. A false red, to fix by waiting longer and asking the registry afresh.
+- Step 9 (manual acceptance on Pagila, section 5.5) and step 5 (README
+  fixture output regenerated) need `ANTHROPIC_API_KEY`: not done, as for
+  0.4.2.
