@@ -6230,3 +6230,8 @@ of each lost point, in the format of section 4.7 of the plan.
   publisher on dbtruth that matches owner `FilipKalcic1`, repository
   `dbtruth`, workflow `release.yml`, no environment. The fix is on
   npmjs.com, by the maintainer.
+- Run 43442645265 (2026-11-13, after the maintainer logged in to npmjs.com):
+  the same refusal, `POST 404 .../oidc/token/exchange/package/dbtruth`,
+  "package not found". Logging in alone sets no trusted publisher; the entry
+  under the package's Settings, Trusted Publisher, is still to be added or
+  corrected.
