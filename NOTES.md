@@ -3022,6 +3022,69 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   says where checks 4 to 7 are. `check.ts`'s `Row` is `ReportRow`, since
   `safety.ts` has a `Row` that is a database row.
 
+## 0.5.0 (not released yet)
+
+- **The plan for 0.5.0 is Phase 8 of `BUILD_PLAN.md`.** The entry "After 0.4.2
+  was published" announced it as `BUILD_PLAN_0.5.md`. It lives in
+  `BUILD_PLAN.md` instead: `scripts/acceptance.mjs` scores the tasks of that
+  file's table, and `CLAUDE.md` says to work from it. Partitions, which that
+  entry also planned for, are not in it: the audit's finding about them is not
+  in the repository, so there is nothing to plan from yet.
+- **T8.1: nothing is set on the session.** `connect()` no longer runs
+  `SET default_transaction_read_only = on` and `SET statement_timeout`. Each
+  statement runs in a transaction of its own, opened in one round trip as
+  `BEGIN READ ONLY; SET LOCAL statement_timeout = <ms>` and always rolled
+  back, also after a failure; the read-only proof and `current_database()`
+  run the same way.
+  - **Why.** Behind a pooler in transaction mode a session is not a server
+    connection. Measured here with PgBouncer 1.22 in transaction mode in front
+    of the fixture, as 0.4.3 does it: after dbtruth connected, ran one
+    statement and closed, the next client of a one-connection pool read
+    `default_transaction_read_only` `on` and `statement_timeout` `7s` (the
+    audit: an application's INSERT failed with 25006 for about 30 s); with two
+    server connections, a statement of dbtruth's that got the one it had not
+    set up ran with `transaction_read_only` `off`. With the change: the
+    server's defaults for the next client, `on` and `7s` for dbtruth's
+    statement.
+  - **One transaction at a time.** Statements started together on one
+    connection, as two MCP tool calls can, would interleave their `BEGIN`,
+    statement and `ROLLBACK`. Measured: a failing statement's aborted
+    transaction failed the one started beside it, and a statement started
+    while another ran ran after that one's rollback, outside any transaction,
+    with `transaction_read_only` `off`. A turn per transaction (`inTurn` in
+    `safety.ts`) fixes both. `close()` does not wait for a turn: it ends the
+    connection at once, a transaction in flight with it, as before, so a
+    SIGTERM is not held for as long as a statement waits on a lock (a first
+    version waited, and "SIGTERM during a call ends the server and leaves no
+    session behind" failed: not ended within 5 s). Measured through the
+    one-connection PgBouncer: a statement cut off by `close()` ends its call
+    with "database connection lost", and the next client reads
+    `transaction_read_only` `off` and `statement_timeout` `0`.
+  - **The budget counts the statement alone.** Opening and ending a
+    transaction adds two round trips to every statement. One full run sends
+    32 statements on the fixture and 606 on `scale` (300 relations), counted
+    as rolled-back transactions in `pg_stat_database`: at 20 ms to the server
+    that is about 24 s more on `scale`, at 50 ms about 61 s. On this machine's
+    local server the database time did not move (0.0 s on the fixture, 0.5 s
+    on `scale`, before and after). Were the round trips in the 90 s budget, a
+    large schema on a distant server would get fewer measurements than under
+    0.4.3; they are not, so such a run takes longer and measures as much.
+  - **Deliberately not done.** Folding a statement's rollback into the next
+    one's `BEGIN`, one round trip fewer: that leaves a transaction open
+    between statements, so it needs a timer to end it before a model call or
+    an idle MCP session, and a pooler keeps a server connection for it. Worth
+    it only if the run time on a distant server is reported as a problem.
+    Detecting a pooler: there is no reliable sign, and with nothing set on the
+    session there is nothing to detect it for.
+  - **Tests.** `test/pooler.test.ts` starts `pgbouncer` itself, on a free
+    port, in front of the fixture, and as root with `-u nobody`, since
+    PgBouncer refuses to run as root. Without the binary it skips; under CI it
+    fails, and `ci.yml` installs `pgbouncer` from Ubuntu's archive.
+    `test/safety.test.ts` adds the session left untouched on a direct
+    connection, no transaction left open after a timeout, a value that fails
+    or a missing column (the connection rests `idle`), and the two ways
+    statements can start together.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values

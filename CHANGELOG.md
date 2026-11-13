@@ -3,6 +3,20 @@
 Changes since 0.1.8. What earlier releases changed, and why, is in
 `NOTES.md`.
 
+## 0.5.0 (not released yet)
+
+- A pooler in transaction mode is safe (Supabase's port 6543, a Neon host
+  ending in `-pooler`, PgBouncer with `pool_mode = transaction`). dbtruth sets
+  nothing on the session: each statement runs in a read-only transaction of
+  its own, with its timeout, and is rolled back at once. Up to 0.4.3 the
+  session's read-only mode and timeout stayed on the pooled server connection
+  for the next client, whose writes then failed with 25006, and dbtruth's own
+  statements could run on another server connection without them.
+  Statements started together on one connection, as two MCP tool calls can,
+  take turns. Every statement costs two round trips more; the budget counts
+  the statement alone, so a run on a distant server takes longer but measures
+  as much.
+
 ## 0.4.3 (2026-11-12)
 
 Five changes from a review of 0.4.2's code against what a user meets first,

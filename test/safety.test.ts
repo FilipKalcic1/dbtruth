@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import pg from "pg";
 import { connect, findDotEnv, isIntegerType, readDotEnv, resolveDatabaseUrl, sampleSource } from "../src/safety.js";
 import { config } from "../src/config.js";
 import { copyOfFixture } from "./copies.js";
@@ -100,6 +101,84 @@ test("a SQL error is a skipped measurement, not a crash", async () => {
     assert.equal(!bad.ok && bad.sqlState, "42703", "the SQLSTATE travels with the error so callers can tell a datatype problem from a missing column");
     const next = await db.query("SELECT 1 AS one");
     assert.equal(next.ok, true);
+  } finally {
+    await db.close();
+  }
+});
+
+test("every statement runs in a read-only transaction of its own, with the configured timeout, and nothing is set on the session", async () => {
+  const db = await connect(FIXTURE_URL, { ...config, statementTimeoutSeconds: 7 });
+  try {
+    const r = await db.query(
+      `SELECT current_setting('default_transaction_read_only') AS session_default,
+              current_setting('transaction_read_only') AS read_only,
+              current_setting('statement_timeout') AS timeout`,
+    );
+    assert.equal(r.ok, true);
+    const row = r.ok ? r.rows[0] : undefined;
+    assert.equal(row?.session_default, "off", "a setting on the session outlives dbtruth on a server connection a pooler hands on");
+    assert.equal(row?.read_only, "on", "the statement's own transaction is read-only");
+    assert.equal(row?.timeout, "7s", "and has the configured statement timeout");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a statement that timed out or failed leaves no transaction open: the connection rests idle and the next statement runs", async () => {
+  const db = await connect(FIXTURE_URL, { ...config, statementTimeoutSeconds: 0.2 });
+  const watcher = new pg.Client({ connectionString: FIXTURE_URL });
+  await watcher.connect();
+  try {
+    const own = await db.query("SELECT pg_backend_pid() AS pid");
+    const pid = own.ok ? Number(own.rows[0]?.pid) : NaN;
+    const stateOf = async () => (await watcher.query("SELECT state FROM pg_stat_activity WHERE pid = $1", [pid])).rows[0]?.state;
+    for (const [what, sql] of [
+      ["a timeout", "SELECT pg_sleep(2)"],
+      ["a value that fails", "SELECT 1 / (SELECT count(*) - count(*) FROM customers)"],
+      ["a missing column", "SELECT no_such_column FROM customers"],
+    ] as const) {
+      const failed = await db.query(sql);
+      assert.equal(failed.ok, false, what);
+      assert.equal(await stateOf(), "idle", `after ${what}, not idle in a transaction left open`);
+      const next = await db.query("SELECT 1 AS one");
+      assert.equal(next.ok && Number(next.rows[0]?.one), 1, `the statement after ${what} runs`);
+    }
+    assert.equal(await stateOf(), "idle", "and after a statement that succeeded");
+  } finally {
+    await watcher.end();
+    await db.close();
+  }
+});
+
+const PROBE = "SELECT current_setting('transaction_read_only') AS read_only, current_setting('statement_timeout') AS timeout";
+
+test("statements started together each run in a read-only transaction of their own, and one that fails fails alone", async () => {
+  const db = await connect(FIXTURE_URL, { ...config, statementTimeoutSeconds: 7 });
+  try {
+    const [failed, ...probes] = await Promise.all([
+      db.query("SELECT 1 / (SELECT count(*) - count(*) FROM customers)"),
+      db.query(PROBE),
+      db.query(PROBE),
+    ]);
+    assert.equal(!failed!.ok && failed!.sqlState, "22012", "the failing statement fails with its own error");
+    for (const probe of probes) {
+      assert.equal(probe.ok, true, "a statement started beside a failing one is not failed by its aborted transaction");
+      assert.deepEqual(probe.ok ? { ...probe.rows[0] } : undefined, { read_only: "on", timeout: "7s" });
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("a statement started while another runs still runs read-only with its timeout", async () => {
+  const db = await connect(FIXTURE_URL, { ...config, statementTimeoutSeconds: 7 });
+  try {
+    // As two MCP tool calls can: the second starts while the first's statement is on the server.
+    const slow = db.query("SELECT pg_sleep(0.3)");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const probe = await db.query(PROBE);
+    assert.equal((await slow).ok, true);
+    assert.deepEqual(probe.ok ? { ...probe.rows[0] } : undefined, { read_only: "on", timeout: "7s" }, "not run after the first one's rollback, outside any transaction");
   } finally {
     await db.close();
   }

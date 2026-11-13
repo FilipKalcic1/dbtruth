@@ -350,6 +350,10 @@ Overview:
 | T6.2 | License check in the Action | P2 |
 | T6.3 | Business setup | HUMAN |
 | T7.1 | Releases 0.2.0, 0.3.0, 0.4.0 | with each phase |
+| T8.1 | Statements that leave the session as they found it | P0 |
+| T8.2 | Composite foreign keys measured whole | P0 |
+| T8.3 | Row level security detected | P1 |
+| T8.4 | What 0.4.3 left behind | P1 |
 
 Order for today: T0.1, T0.2, T1.2, T1.1, T1.3, T1.5, T2.1, T3.1, T3.2, then the
 T6.1 text. Everything after that is P1 or later.
@@ -1396,6 +1400,173 @@ The agent prepares a checklist in `PROGRESS.md`; a person does these:
    `npx -y dbtruth@<version> --version`, `doctor` against the fixture, and from
    0.3.0 `check` against the committed fixture snapshot.
 9. Manual acceptance (section 5.5) recorded in NOTES.
+
+
+### Phase 8: release 0.5.0, what the audit after 0.4.2 found
+
+An audit of 0.4.2 on real measurements (`NOTES.md`, "After 0.4.2 was
+published") found three things a user can meet today. The README warns of
+each "until the next release", and 0.4.3 fixed none of them. They come before
+any new feature, T8.1 first: it is the only one that can harm a database whose
+use dbtruth does not own. `NOTES.md` announced this plan as
+`BUILD_PLAN_0.5.md`; it lives here because `scripts/acceptance.mjs` scores the
+tasks of this file.
+
+#### T8.1 Statements that leave the session as they found it (P0)
+
+**Why.** `connect()` sets `default_transaction_read_only` and
+`statement_timeout` on the session. Behind a pooler in transaction mode
+(PgBouncer with `pool_mode = transaction`, Supabase's port 6543, a Neon host
+ending in `-pooler`) a client session is not a server connection: the settings
+stay on the server connection the `SET` ran on, which the pooler then hands to
+the application, whose writes fail with 25006 (the audit: for about 30 s after
+one `doctor`), and dbtruth's own later statements can run on another server
+connection without them.
+
+**Build.**
+- Nothing is set on the session. Each statement runs in a transaction of its
+  own, opened in one round trip as `BEGIN READ ONLY; SET LOCAL
+  statement_timeout = <ms>` and always ended with `ROLLBACK`, also when the
+  statement failed. A pooler in transaction mode keeps one server connection
+  for a whole transaction, so the statement runs with both settings and
+  neither outlives it.
+- The read-only proof runs the same way: `BEGIN READ ONLY`, the
+  `transaction_read_only` read, the trivial write expected to be refused,
+  `ROLLBACK`.
+- A transaction that cannot be opened or ended is a lost connection
+  (guarantee 5 of `safety.ts`): the run stops, never "nothing found".
+- One transaction at a time on a connection: statements started together, as
+  two MCP tool calls can, would otherwise interleave, and one could run after
+  another's rollback, outside any transaction, or inside another's aborted
+  one.
+- The budget counts the statement alone, as before: the two round trips that
+  open and end its transaction lengthen a run on a distant server, but never
+  leave a measurement out.
+- R1 unchanged: the only write-shaped statement is the proof's.
+
+**Tests.**
+- Direct connection (`test/safety.test.ts`): through `query()`,
+  `current_setting('default_transaction_read_only')` is `off`,
+  `transaction_read_only` is `on`, and `statement_timeout` is the configured
+  one; after a statement that timed out and one that failed on a value, the
+  next statement runs.
+- A real PgBouncer in transaction mode with one server connection
+  (`test/pooler.test.ts`, which starts `pgbouncer` itself on a free port in
+  front of the fixture): after dbtruth connects, runs a statement and closes,
+  another client of the same pool reads `default_transaction_read_only` `off`
+  and `statement_timeout` `0`; dbtruth's statements through the pool read
+  `transaction_read_only` `on` and the configured timeout. Without the
+  `pgbouncer` binary the test skips, except when `CI` is set, where it fails;
+  CI installs it.
+- Statements started together, one of them failing, and a statement started
+  while another runs: each runs read-only with the timeout, and only the
+  failing one fails.
+- Sabotage: the session `SET`s back; no rollback after a failed statement; no
+  rollback after a good one; no turn-taking.
+
+**Acceptance.**
+- A1 Through `query()` on a direct connection, the session's default is
+  untouched, and the statement's transaction is read-only with the configured
+  timeout.
+- A2 Through PgBouncer in transaction mode, another client of the pool finds
+  the server connection's defaults after dbtruth has run.
+- A3 Through PgBouncer in transaction mode, dbtruth's statements run read-only
+  with the configured timeout.
+- A4 A statement that timed out or failed leaves no transaction open: the next
+  statement runs.
+- A5 CI installs `pgbouncer` and runs the pooler test.
+- A6 Statements started together, or one while another runs, each run in a
+  read-only transaction of their own, and one that fails fails alone.
+
+**Docs.** README: the "Use a direct connection" paragraph says a pooler in
+either mode is fine. The header of `safety.ts`, guarantee 1. NOTES entry;
+CHANGELOG.
+
+#### T8.2 Composite foreign keys measured whole (P0)
+
+**Why.** `listKeys` in `extract.ts` splits a foreign key over two or more
+columns into one entry per column, and a relationship is a pair of single
+columns throughout (`RelationshipSchema`, `relationshipId`, the measuring
+query, the snapshot, `check`, `measure_join`). A pair of values that no row of
+the referenced table holds, each value of which some row holds alone, is
+counted as matched: a broken two-column key passes `check`.
+
+**Build.**
+- A foreign key keeps its columns together, in the catalog's order: columns
+  on each side.
+- A relationship may name a list of columns on each side, of equal length.
+  The measuring query matches the whole tuple. A row with a null in any of
+  its key columns is not an orphan (`MATCH SIMPLE`, Postgres's default), as a
+  null single column is not today.
+- A single-column relationship keeps its id, query and numbers, so a
+  snapshot from 0.4.x still checks unchanged. A composite one gets an id that
+  lists its columns.
+- `measure_join` accepts column lists. Prompt A is given composite keys whole
+  and may claim a composite relationship.
+- R8: every column of a list is used only after it is found in the catalog.
+
+**Tests.** A fixture table whose two-column pairs are broken while each
+column alone matches: the relationship is measured broken, with the tuple's
+numbers. `check` on a snapshot made before the pairs broke reports the
+regression. A snapshot written by 0.4.3 checks with no change. Canary: no
+value of a key column appears in any output.
+
+**Acceptance.**
+- A1 A broken two-column relationship is measured broken, with its numbers and
+  a query a human can rerun (R7).
+- A2 `check` reports a two-column relationship that breaks after the snapshot.
+- A3 A single-column relationship's id, query and numbers are unchanged, and a
+  snapshot written by 0.4.3 checks.
+- A4 `measure_join` measures a column list, and refuses a list of unequal
+  lengths or a column not in the catalog.
+
+**Docs.** README "What it does not do": the composite-key line goes. NOTES
+entry; CHANGELOG.
+
+#### T8.3 Row level security detected (P1)
+
+**Why.** A role that row level security filters sees only the rows its
+policies allow: a full table comes out empty and a good join is rejected, and
+both are reported as findings about the data.
+
+**Build.**
+- From the catalog, for each relation with `relrowsecurity`: whether the
+  connected role bypasses it (a superuser, a role with `rolbypassrls`, or the
+  owner of a table without `relforcerowsecurity`).
+- `doctor`: one check that names how many relations row level security filters
+  for this role, and the fix (run as a role that bypasses it, on a copy).
+- A full run, `check` and `measure_join`: a measurement over a filtered
+  relation is `unverifiable` with the reason, never `confirmed`, `rejected` or
+  `broken`. The summary line says how many relations were filtered.
+
+**Tests.** A fixture table under a policy and a role it filters. As that role:
+`doctor` names it, and the measurement is `unverifiable`. As a role that
+bypasses it: nothing changes.
+
+**Acceptance.**
+- A1 `doctor` names the relations row level security filters for this role.
+- A2 A measurement over a filtered relation is `unverifiable`, with the
+  reason, in a full run, in `check` and in `measure_join`.
+- A3 A role that bypasses row level security gets the same results as before.
+
+**Docs.** README: the "Row level security" paragraph says what dbtruth now
+does. NOTES entry; CHANGELOG.
+
+#### T8.4 What 0.4.3 left behind (P1)
+
+**Build.**
+- README: each sentence that says "until the next release" is replaced when
+  its fix lands; none is left at 0.5.0.
+- `.github/workflows/release.yml`: the last step waits for the registry to
+  serve the new version (`npm view` with `--prefer-online`, retried for up to
+  ten minutes) before it runs `npx`. Release 0.4.3's run failed only there:
+  ten tries 15 s apart all answered `ETARGET`.
+
+**Acceptance.**
+- A1 No "until the next release" in the README of a release.
+- A2 `test/ci.test.ts` pins the wait before the smoke test.
+
+**Docs.** PROGRESS; CHANGELOG at release.
 
 ---
 

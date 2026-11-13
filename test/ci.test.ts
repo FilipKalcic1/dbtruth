@@ -51,3 +51,12 @@ test("the release workflow is started by hand on main, publishes with npm's trus
   const pins = (file: string) => [...read(file).matchAll(/uses: (\S+@[0-9a-f]{40})/g)].map((m) => m[1]).sort();
   assert.deepEqual(pins(".github/workflows/release.yml"), pins(".github/workflows/ci.yml"));
 });
+
+test("CI installs PgBouncer, so the pooler test runs on every matrix cell instead of skipping", () => {
+  const ci = read(".github/workflows/ci.yml");
+  const install = ci.indexOf("apt-get install -y -q pgbouncer");
+  assert.ok(install > 0, "ci.yml installs pgbouncer");
+  assert.ok(install < ci.indexOf("npm run verify"), "before the tests run");
+  assert.match(JSON.parse(read("package.json")).scripts["test:db"], /test\/pooler\.test\.ts/, "the pooler test is among the database tests");
+  assert.match(read("test/pooler.test.ts"), /if \(process\.env\.CI\) assert\.fail\(/, "and fails, rather than skips, under CI without pgbouncer");
+});

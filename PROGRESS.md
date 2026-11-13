@@ -6271,3 +6271,60 @@ of each lost point, in the format of section 4.7 of the plan.
 - Step 9 (manual acceptance on Pagila, section 5.5) and step 5 (README
   fixture output regenerated) need `ANTHROPIC_API_KEY`: not done, as for
   0.4.2.
+
+## Phase 8: release 0.5.0 (the maintainer's request: "what else should be added")
+- Planned in `BUILD_PLAN.md` as Phase 8, T8.1 to T8.4: the three things the
+  audit after 0.4.2 found and the README warns of "until the next release"
+  (a pooler in transaction mode, composite foreign keys, row level security),
+  and what 0.4.3 left behind (those sentences; the release workflow's smoke
+  step). T8.1 first: the only one that can harm a database dbtruth does not
+  own the use of.
+
+## T8.1 Statements that leave the session as they found it
+### Iteration 1: 100/100
+- Tests first. `test/pooler.test.ts` (new) starts PgBouncer 1.22, installed
+  here from Ubuntu's archive, in transaction mode in front of the fixture. On
+  0.4.3's `safety.ts` both its tests failed as the audit measured: after
+  dbtruth ran and closed, the next client of a one-connection pool read
+  `['on', '7s']` for `default_transaction_read_only` and `statement_timeout`
+  ("dbtruth's settings must not stay on the server connection for the next
+  client"); with two server connections, dbtruth's statement on the one it had
+  not set up read `transaction_read_only` `off`. In `test/safety.test.ts`,
+  "every statement runs in a read-only transaction of its own, with the
+  configured timeout, and nothing is set on the session" failed
+  (`session_default` `on`); "a statement that timed out or failed leaves no
+  transaction open" passed, as it guards the new mechanism, not the old one.
+- Implemented in `src/safety.ts`: no session `SET`; `inTransaction` opens
+  `BEGIN READ ONLY; SET LOCAL statement_timeout = <ms>` in one round trip and
+  always rolls back; the proof and `current_database()` run the same way.
+- A second look found statements started together interleaving on the one
+  connection. Two tests written first, both red on the first version: a
+  failing statement's aborted transaction failed the one beside it (`ok`
+  false), and a statement started while another ran ran outside any
+  transaction (`read_only` `off`). Fixed with `inTurn`, one transaction at a
+  time.
+- The budget: one full run sends 32 statements on the fixture and 606 on
+  `scale` (rolled-back transactions in `pg_stat_database`); two round trips
+  more each would cost about 24 s on `scale` at 20 ms, 61 s at 50 ms. The
+  budget counts the statement alone, so no measurement is left out; the local
+  database time did not move (0.0 s, 0.5 s).
+- `npm run verify` as a non-root user, first run: 2 failures. "SIGTERM during
+  a call ends the server and leaves no session behind": `close()` waited for
+  the turn of a statement waiting on a lock; fixed by ending the connection at
+  once, as before; a probe through the one-connection PgBouncer showed the
+  cut-off call ends with "database connection lost" and the next client reads
+  `off` and `0`. "as a command, the key check asks the API ...": a Node
+  warning that `/root/.ccr/ca-bundle.crt` (`NODE_EXTRA_CA_CERTS`, this
+  machine's) is unreadable to that user added a line; not this change, and
+  run without that variable it passes.
+- Gates: `npm run verify` as a non-root user without `NODE_EXTRA_CA_CERTS`:
+  358 tests, 356 pass, 2 skipped (live), 0 fail; build; package smoke test.
+- `npm run acceptance -- --task T8.1`: 100/100. Every other task unchanged
+  (100, T6.2 0 with no checks); T8.2 to T8.4 0 with no checks yet; overall 83
+  over 24 tasks.
+- Sabotage, each red, then restored byte for byte: the session `SET`s back
+  with a plain `BEGIN` (both pooler tests and the session test); no
+  `ROLLBACK` after a failed statement (four tests, the no-open-transaction
+  one among them); no `ROLLBACK` after a good one (twelve); `inTurn` running
+  work at once (both tests of statements started together).
+- Commit: T8.1: Statements that leave the session as they found it (score 100)

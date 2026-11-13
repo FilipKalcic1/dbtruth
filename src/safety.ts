@@ -1,10 +1,13 @@
 // safety.ts: the ONLY module that imports pg, and the only way to reach the database.
 //
 // Guarantees, in order of importance:
-//   1. The session is read-only (SET default_transaction_read_only = on). At connect time the
-//      server is asked to confirm the transaction mode it will enforce, and a trivial write is
-//      attempted inside a transaction that is always rolled back; any refusal is fine, only an
-//      accepted write disproves anything, and then the caller is warned loudly.
+//   1. Every statement runs in a transaction of its own, opened READ ONLY with its statement timeout set LOCAL, and
+//      always rolled back. Nothing is set on the session: behind a pooler in transaction mode a session is not a
+//      server connection, and a setting on it would stay on whichever server connection it ran on, for the next
+//      client of the pool, while dbtruth's own next statement ran on another without it. At connect time the server
+//      is asked to confirm the transaction mode it will enforce, and a trivial write is attempted inside such a
+//      transaction; any refusal is fine, only an accepted write disproves anything, and then the caller is warned
+//      loudly.
 //   2. Only SELECT / WITH statements are issued through query().
 //   3. Every statement has a timeout, and a timeout is a skipped measurement, not a crash. Connecting has the same limit.
 //   4. A wall-clock budget covers all sampling and measuring; once spent, query() skips instead of running.
@@ -190,13 +193,15 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
     throw new Error(connectFailure(e, opts.statementTimeoutSeconds));
   }
 
+  // One round trip opens the transaction every statement runs in. A pooler in transaction mode keeps one server
+  // connection for a whole transaction, so both settings hold for the statement, and neither outlives it.
+  const begin = `BEGIN READ ONLY; SET LOCAL statement_timeout = ${timeoutMs}`;
+
   let database: string;
   let proof: { proven: boolean; detail: string };
   try {
-    await client.query("SET default_transaction_read_only = on");
-    await client.query(`SET statement_timeout = ${timeoutMs}`);
-    database = String(((await client.query("SELECT current_database() AS db")).rows[0] as Row).db);
-    proof = await proveReadOnly(client);
+    proof = await proveReadOnly(client, begin);
+    database = String(((await inTransaction(client, begin, () => client.query("SELECT current_database() AS db"))).rows[0] as Row).db);
   } catch (e) {
     await client.end();
     const state = sqlState(e);
@@ -209,6 +214,20 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
   let budgetMs = opts.budgetSeconds * MS_PER_SECOND;
   let spentMs = 0;
 
+  // One transaction at a time. Two statements started together, as two MCP tool calls can, would otherwise interleave
+  // on the one connection: the second could run after the first's rollback, outside any transaction, or inside the
+  // first's after it failed and be refused for it.
+  let idle: Promise<unknown> = Promise.resolve();
+  function inTurn<T>(work: () => Promise<T>): Promise<T> {
+    const turn = idle.then(work);
+    // The next turn waits for this one to end, either way; its outcome, an error included, goes to its own caller.
+    idle = turn.then(
+      () => undefined,
+      () => undefined,
+    );
+    return turn;
+  }
+
   async function run(sql: string, params: unknown[], budgeted: boolean): Promise<QueryResult> {
     if (!isReadStatement(sql)) {
       return { ok: false, reason: "refused", message: "dbtruth only issues SELECT statements" };
@@ -217,9 +236,19 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
     if (budgeted && spentMs >= budgetMs) {
       return { ok: false, reason: "budget", message: "time budget exhausted" };
     }
-    const started = performance.now();
     try {
-      const result = await client.query(sql, params);
+      const result = await inTurn(() =>
+        inTransaction(client, begin, async () => {
+          // The budget counts the statement, as before every statement had a transaction of its own: the two round
+          // trips that open and end it lengthen a run on a distant server, but never leave a measurement out.
+          const started = performance.now();
+          try {
+            return await client.query(sql, params);
+          } finally {
+            if (budgeted) spentMs += performance.now() - started;
+          }
+        }),
+      );
       return { ok: true, rows: result.rows as Row[] };
     } catch (e) {
       const state = sqlState(e);
@@ -229,8 +258,6 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
       const quotesData = state?.startsWith(DATA_EXCEPTION_CLASS) || state?.startsWith(PLPGSQL_ERROR_CLASS);
       const message = quotesData ? `a value could not be read (SQLSTATE ${state})` : errorMessage(e);
       return { ok: false, reason: "error", message, ...(state ? { sqlState: state } : {}) };
-    } finally {
-      if (budgeted) spentMs += performance.now() - started;
     }
   }
 
@@ -248,6 +275,8 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
     },
     // A function, not a getter, so that a copy made with a spread still reads the connection.
     lost: () => lost,
+    // At once, a transaction in flight with it: the server rolls back what a closed connection left open. Waiting for
+    // the turn would hold a SIGTERM for as long as a statement waits on a lock.
     async close() {
       await client.end();
     },
@@ -255,15 +284,31 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
 }
 
 /**
- * Two proofs inside one transaction that is always rolled back. First the server states the
- * transaction mode it will enforce. Then a trivial write is attempted: the one write-shaped
- * statement this tool ever sends, expected to be refused. Any refusal is fine; a role without
- * CREATE privilege refuses it with 42501 and is read-only all the same. Only an accepted write
- * disproves anything.
+ * Runs work in a transaction opened by begin, and rolls it back whatever happened. A failed statement has aborted the
+ * transaction, and only the rollback ends it: without one the next BEGIN would run inside it. A rollback that fails
+ * throws, and the caller takes that for the lost connection it is.
  */
-async function proveReadOnly(client: pg.Client): Promise<{ proven: boolean; detail: string }> {
-  await client.query("BEGIN");
+async function inTransaction<T>(client: pg.Client, begin: string, work: () => Promise<T>): Promise<T> {
+  await client.query(begin);
+  let result: T;
   try {
+    result = await work();
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  }
+  await client.query("ROLLBACK");
+  return result;
+}
+
+/**
+ * Two proofs inside one transaction, opened as every statement's is and always rolled back. First the server states
+ * the transaction mode it will enforce. Then a trivial write is attempted: the one write-shaped statement this tool
+ * ever sends, expected to be refused. Any refusal is fine; a role without CREATE privilege refuses it with 42501 and
+ * is read-only all the same. Only an accepted write disproves anything.
+ */
+async function proveReadOnly(client: pg.Client, begin: string): Promise<{ proven: boolean; detail: string }> {
+  return inTransaction(client, begin, async () => {
     const mode = String((await client.query("SELECT current_setting('transaction_read_only') AS mode")).rows[0]?.mode);
     try {
       await client.query("CREATE TABLE dbtruth_preflight_must_fail (x int)");
@@ -274,9 +319,7 @@ async function proveReadOnly(client: pg.Client): Promise<{ proven: boolean; deta
       if (state === READ_ONLY_SQL_TRANSACTION) return { proven: true, detail: "the write was refused as a read-only transaction" };
       return { proven: false, detail: `transaction_read_only is ${mode} and the write was refused only with SQLSTATE ${state}` };
     }
-  } finally {
-    await client.query("ROLLBACK");
-  }
+  });
 }
 
 /**

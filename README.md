@@ -116,13 +116,14 @@ DATABASE_URL=postgres://user:password@host:5432/dbname
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-**Use a direct connection.** Point `DATABASE_URL` at the database itself, or
-at a pooler in session mode, never at a pooler in transaction mode (Supabase's
-port 6543, a Neon host ending in `-pooler`, PgBouncer with
-`pool_mode = transaction`). Until the next release, dbtruth makes its session
-read-only and sets a timeout on it, and such a pooler can hand that server
-connection to your application afterwards, whose writes then fail for a
-while, while dbtruth's own statements run without the setting.
+**A pooler is fine, in either mode.** `DATABASE_URL` can point at the
+database itself or at a pooler, in transaction mode too (Supabase's port 6543,
+a Neon host ending in `-pooler`, PgBouncer with `pool_mode = transaction`).
+dbtruth sets nothing on the session: each statement runs in a read-only
+transaction of its own, with its timeout, and is rolled back at once, so
+nothing it did stays on a pooled server connection for your application.
+0.4.3 and earlier set both on the session: never point those at a pooler in
+transaction mode, where your application's writes then failed for a while.
 
 **Row level security.** A role that row level security filters sees only its
 own rows, so a full table can come out empty and a good join rejected. Until
