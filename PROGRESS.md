@@ -6328,3 +6328,68 @@ of each lost point, in the format of section 4.7 of the plan.
   one among them); no `ROLLBACK` after a good one (twelve); `inTurn` running
   work at once (both tests of statements started together).
 - Commit: T8.1: Statements that leave the session as they found it (score 100)
+
+## Efficiency review (the maintainer's request: "is this project coded efficiently")
+### Iteration 1: the review, measured; nothing in `src/` changed
+- Scope: where a run's time, its model tokens and its memory go, how each
+  grows with the schema, and what the repository costs to work in. Measured,
+  not read off the code. No model was called; nothing was published.
+- How: a local Postgres 16; full offline runs with
+  `scripts/make-fixture-snapshot.mjs`; a TCP proxy written for the purpose
+  that delays every chunk 10 ms each way (a 20 ms round trip); the fixture
+  (11 relations), `scale` (300), and two throwaway databases, dropped
+  afterwards: one with 3,000 empty 15-column tables and `big` (2 million
+  rows, 30 columns, 1.16 GB), one with an English ICU collation and `big` at
+  500,000 rows.
+- Found, by what it costs a user:
+  1. Round trips to a distant server, and T8.1 tripled them. A full run on
+     `scale` at a 20 ms round trip: 14.1 s with 0.4.3's `safety.ts` (1,237
+     chunks through the proxy), 39.6 s with T8.1's (3,655 chunks), for the
+     same 607 statements and the same 13.2 s of budgeted database time. A
+     transaction in one message, `BEGIN READ ONLY; SET LOCAL
+     statement_timeout = <ms>; SELECT ...; ROLLBACK`, was tried with psql on
+     Postgres 16: the timeout cancels the SELECT and the session is left
+     untouched. Only the two catalog reads over `$1::oid[]` and a conditional
+     claim carry bind parameters, which that form cannot. Not tried on
+     Postgres 12, where the timer of a message of several statements starts
+     differently.
+  2. A third to a half of what the model is sent says nothing. Every sample
+     row repeats `"column":"[hidden]"` for every hidden column: 270 of 615
+     cells on the fixture, 13,500 of 22,500 on `scale`. Left out of the rows,
+     the payload shrinks 30% on the fixture (20,119 characters) and 48% on
+     `scale` (598,778 characters, about 150,000 tokens of the 200,000 ceiling
+     for 300 tables); as one header and arrays of values, 42% and 55%. The
+     columns already say `visible: false`. `nullRate` at four decimals saves
+     nothing.
+  3. `fitToContext` is quadratic: it serializes the whole extract once per
+     table it drops. On 3,001 relations: 21.9 s to keep 442, of a 24.3 s run
+     whose database time was 2.9 s. Sizing each table once gave the same 442
+     in 26 ms. It also drops from the end of the catalog's order (`t3000`,
+     `t2999`, ...), not the least joined first, as the budget has since 0.4.3.
+  4. The statistics statement is 85% of a large table's profile, and most of
+     that is `count(DISTINCT col::text)` sorting under the database's
+     collation: 840 ms on `big`, 541 ms with `COLLATE "C"`, the same numbers
+     (954 ms and 584 ms under ICU en-US); 119 ms without the distinct counts.
+     The extract's share of the budget is 54 s, so this decides how many large
+     tables a run examines. A column whose own collation is nondeterministic
+     would count differently.
+  5. Each relation's sample is read twice, once for the statistics and once
+     for the value lists and rows: 864 ms and 158 ms on `big`. One statement
+     would halve the statements of a run, and needs the visibility rule in
+     SQL, in the code that keeps hidden values in the database.
+  6. Every MCP tool call reads the whole catalog: 17 ms on 300 relations,
+     548 ms of a 582 ms `describe_table` on 3,001, and 2.7 MB of it.
+  7. CI runs twice for every commit of a pull request (`on: push` and
+     `pull_request`): 16 jobs for 8 cells.
+- Found to be fine: `--version` in 214 ms (Node alone 35 ms; every SDK is
+  imported whatever the command, about 130 ms of it); a cold install of
+  0.4.3 in 2.0 s, 34 MB, 25 packages, 5 runtime dependencies; `check` on
+  `scale` in 309 ms; a full run on 3,001 relations peaks at 204 MB; the
+  suite's 358 tests in about 30 s. Every sample is bounded at 50,000 rows and
+  every statistic is computed in the database.
+- The repository: 3,790 lines of `src/`, 7,063 of tests, and 12,865 of plan,
+  notes, progress and checks (`acceptance/checks.json` is 184 kB of pinned
+  sentences), so a documentation change costs more than the code change it
+  describes.
+- Not done: no fix. Findings 1 to 4 are proposed for T8.x, 1 before
+  `FilipKalcic1/dbtruth#26` is merged.
