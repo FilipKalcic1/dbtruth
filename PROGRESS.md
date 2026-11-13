@@ -6235,3 +6235,17 @@ of each lost point, in the format of section 4.7 of the plan.
   "package not found". Logging in alone sets no trusted publisher; the entry
   under the package's Settings, Trusted Publisher, is still to be added or
   corrected.
+
+### Iteration 8: the fourth release run: npm trusts the workflow, but not to publish
+- Run 43443359300 (2026-11-13, after the maintainer added the trusted
+  publisher): the exchange succeeded (`POST 201 .../oidc/token/exchange/
+  package/dbtruth`, "Successfully retrieved and set token"), provenance was
+  enabled and signed (sigstore log index 3855927365), and the upload was
+  refused: `E403 ... PUT https://registry.npmjs.org/dbtruth - OIDC permission
+  denied for this action`. Nothing was published: `latest` is 0.4.2, no
+  `v0.4.3` tag.
+- npm 11.21.2's `docs/content/commands/npm-trust.md`: a trusted publisher
+  carries two permissions, `--allow-publish` ("run `npm publish`") and
+  `--allow-stage-publish` ("run `npm stage`"), both false by default, at
+  least one required. The entry on npmjs.com allows staging only; the
+  workflow runs `npm publish`. The fix is to allow publish on that entry.
