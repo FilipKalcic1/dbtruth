@@ -58,9 +58,12 @@ jobs:
         run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "dbtruth $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
       - name: The published package runs, from an empty directory
         working-directory: ${{ runner.temp }}
+        # The registry serves a new version some time after it takes it, and npm's cache keeps a package's list of
+        # versions for five minutes: a try made too early left the tries after it reading that same list, which is
+        # how release 0.4.3's run failed here with the package published. Each try asks the registry afresh.
         run: |
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if out="$(npx -y "dbtruth@$VERSION" --version 2>&1)"; then echo "$out"; test "$out" = "$VERSION" && exit 0; fi
+          for attempt in $(seq 1 40); do
+            if out="$(npx -y --prefer-online "dbtruth@$VERSION" --version 2>&1)"; then echo "$out"; test "$out" = "$VERSION" && exit 0; fi
             echo "attempt $attempt: $out"; sleep 15
           done
           exit 1

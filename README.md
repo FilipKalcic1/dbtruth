@@ -128,9 +128,10 @@ failed for a while. A pooler in statement mode allows no transaction, and
 dbtruth reads nothing outside one, so there it stops before reading.
 
 **Row level security.** A role that row level security filters sees only its
-own rows, so a full table can come out empty and a good join rejected. Until
-the next release, run dbtruth on a copy, as a role that bypasses it (the
-tables' owner, or a role with `BYPASSRLS`).
+own rows, so a full table can come out empty and a good join rejected, and
+dbtruth does not tell that from the data yet (planned for 0.5.0). Until it
+does, run dbtruth on a copy, as a role that bypasses it (the tables' owner, or
+a role with `BYPASSRLS`).
 
 No key yet? Leave its line out: `doctor` checks everything else without one.
 A third line, `ANTHROPIC_MODEL=<model id>`, picks the model; any Claude model
@@ -831,8 +832,8 @@ of its own, 20 seconds by default (`--mcp-call-budget-seconds`), in place of
   the history.
 - Postgres only.
 - Composite (multi-column) foreign keys are measured one column at a time,
-  which is wrong: a broken two-column key can pass `check`. The next release
-  measures them whole.
+  which is wrong: a broken two-column key can pass `check`. Measuring them
+  whole is planned for 0.5.0.
 - It cannot tell an unused table from one that never changes. A `dead_table`
   confirmed by age alone says that no row is newer than that many days, and
   nothing more; whether anything reads the table is not measured.

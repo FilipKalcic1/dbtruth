@@ -3022,14 +3022,19 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   says where checks 4 to 7 are. `check.ts`'s `Row` is `ReportRow`, since
   `safety.ts` has a `Row` that is a database row.
 
-## 0.5.0 (not released yet)
+## 0.4.4 (2026-11-14)
 
-- **The plan for 0.5.0 is Phase 8 of `BUILD_PLAN.md`.** The entry "After 0.4.2
-  was published" announced it as `BUILD_PLAN_0.5.md`. It lives in
-  `BUILD_PLAN.md` instead: `scripts/acceptance.mjs` scores the tasks of that
-  file's table, and `CLAUDE.md` says to work from it. Partitions, which that
-  entry also planned for, are not in it: the audit's finding about them is not
-  in the repository, so there is nothing to plan from yet.
+- **Phase 8 of `BUILD_PLAN.md` plans this release and 0.5.0.** The entry
+  "After 0.4.2 was published" announced the plan as `BUILD_PLAN_0.5.md`. It
+  lives in `BUILD_PLAN.md` instead: `scripts/acceptance.mjs` scores the tasks
+  of that file's table, and `CLAUDE.md` says to work from it. Partitions,
+  which that entry also planned for, are not in it: the audit's finding about
+  them is not in the repository, so there is nothing to plan from yet.
+- **0.4.4 is T8.1 alone, with T8.4.** The maintainer asked for the pooler fix
+  to go out at once and by itself, a piece small enough to review whole: of
+  the three things the audit found, it is the one that can harm a database
+  whose use dbtruth does not own. Composite foreign keys (T8.2) and row level
+  security (T8.3) follow as 0.5.0, and the README says so by that name.
 - **T8.1: nothing is set on the session.** `connect()` no longer runs
   `SET default_transaction_read_only = on` and `SET statement_timeout`. Each
   statement runs in a transaction of its own, opened in one round trip as
@@ -3066,8 +3071,9 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     run on `scale` (300 relations, 606 statements): 14.1 s with 0.4.3's
     `safety.ts`, 39.6 s with that version. Now the transaction travels whole,
     `BEGIN READ ONLY; SET LOCAL statement_timeout = <ms>; <statement>;
-    ROLLBACK`, one message and one round trip: 14.3 s to 14.5 s over three
-    runs, against 14.4 s for 0.4.3 run beside them. Without a network a
+    ROLLBACK`, one message and one round trip: 14.5 s to 14.8 s over three
+    runs of the final code, against 14.5 s to 14.6 s for 0.4.3 run beside
+    them. Without a network a
     statement costs 0.19 ms, 0.13 ms in 0.4.3. The server skips what follows
     a failed statement, the rollback with it, so that one is sent after: two
     round trips for a statement that fails or times out.
@@ -3145,6 +3151,31 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     Sync, so that how TCP cuts the stream does not change the count; the
     tests of the semicolon run on a copy of the fixture, where a guard gone
     would write.
+
+- **T8.4: what 0.4.3 left behind.**
+  - **The README names the release it promises for.** Three sentences said
+    "until the next release", and 0.4.3 was that release and fixed none of
+    what they named. The pooler's is gone with its fix; the two on row level
+    security and composite foreign keys now say "planned for 0.5.0", and a
+    test refuses "next release" anywhere in the README.
+  - **The release workflow's last step asked npm's cache, not the registry.**
+    Release 0.4.3's run published, tagged, and then failed: ten tries of
+    `npx -y dbtruth@0.4.3 --version`, 15 s apart, each `ETARGET`. Tried here
+    with an empty cache: `npx` reads a package's list of versions three
+    times, and from the second run on two of the three are answered by the
+    cache without a request ("cache hit"; the registry sends
+    `cache-control: max-age=300`). So a first try made before the registry
+    served the new version left every try of the next five minutes reading
+    that list, and the tries ended after two and a half. With
+    `--prefer-online` all three reads go to the registry ("cache
+    revalidated"), and the step now tries for ten minutes. Its script, run
+    here: exit 0 for 0.4.3, exit 1 after its tries for a version that does
+    not exist.
+  - **CI ran twice for every commit of a pull request**, once for the push and
+    once for the pull request: 16 jobs for 8 cells. A push now runs it on
+    `main` only. A branch without a pull request gets no run.
+  - **Deliberately not done.** Fetching the tarball by its URL in place of
+    `npx`: the step is there to run the package as a user gets it.
 
 ## Where string matching does appear, and why it is syntax, not meaning
 
