@@ -6510,3 +6510,40 @@ of each lost point, in the format of section 4.7 of the plan.
   on Pagila) need `ANTHROPIC_API_KEY`: not done, as for 0.4.2 and 0.4.3. The
   README says its pasted output is 0.4.0's.
 - Steps 6 to 8 are the release workflow's, which the maintainer starts.
+- CI on 7a9f7fe: 8 jobs, where a commit of a pull request had 16; all green.
+  Merged as `FilipKalcic1/dbtruth#27` (688bf10). `main` is at 0.4.4; the
+  maintainer starts the release workflow.
+
+## T8.5 The fit to the model's input: sized once, least joined dropped first
+### Iteration 1: 100/100
+- The efficiency review's third finding, as a piece of its own after 0.4.4.
+- Tests first, in `test/extract.test.ts`, on the old loop: the order test
+  red (`c`, joined to `b`, was dropped where `a`, joined to nothing, should
+  go); the serialization test red ("serialized 26082852 characters to fit an
+  extract of 133578: 195.3 times its size"); the fit test green, as it
+  guards the new arithmetic, after one mistake of its own was fixed (it
+  compared tables by identity, which the tiers' copies never have).
+- Implemented: `mostJoinedFirst` takes any relations with a name and foreign
+  keys; `fitToContext` sizes each table once and sums.
+- Measured, the extract of `scale` copied to 3,000 and to 12,000 tables:
+  97 ms keeping 1,101 and 275 ms keeping 964, against 7,316 ms and
+  133,744 ms; what is kept is 199,927 and 199,892 tokens of 200,000.
+- Sabotage, five, each red and restored byte for byte: see
+  `acceptance/manual.json`.
+- On the fixture, with the ceiling at 55% of its bare schema: dropped, in
+  order, `shipped_orders`, `products_legacy`, `order_totals`, `events`,
+  `cars`, `audit_log`, the six relations no foreign key touches; kept, in
+  catalog order, `customers`, `order_items`, `orders`, `products`,
+  `vehicles`. From the end of the list, as before, `vehicles`, `products`
+  and `orders` would have gone and `audit_log` and `cars` stayed.
+- Gates as a non-root user: `npm run verify` 369 tests, 367 pass, 2 skipped
+  (live), 0 fail. `npm run acceptance`: T8.5 100/100 (14 checks), T8.1 and
+  T8.4 100, every earlier task 100; overall 88 over 25 tasks.
+- Score by this piece's criteria, each 0 or 1: (1) the cost no longer grows
+  with the tables dropped, by a test that counts what is serialized; (2)
+  measured on 3,000 and 12,000 tables; (3) the cut is exact: it fits, and
+  the last table dropped would not have; (4) the least joined go first,
+  shown on the fixture; (5) what is kept stays in catalog order; (6) a
+  schema without foreign keys loses what it lost before; (7) five sabotages
+  red; (8) verify green, T8.5 at 100; (9) README, NOTES, CHANGELOG say it;
+  (10) CI green on the matrix. 9 of 10 until CI runs.

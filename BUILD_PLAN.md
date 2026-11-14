@@ -354,6 +354,7 @@ Overview:
 | T8.2 | Composite foreign keys measured whole | P0 |
 | T8.3 | Row level security detected | P1 |
 | T8.4 | What 0.4.3 left behind | P1 |
+| T8.5 | The fit to the model's input: sized once, least joined dropped first | P1 |
 
 Order for today: T0.1, T0.2, T1.2, T1.1, T1.3, T1.5, T2.1, T3.1, T3.2, then the
 T6.1 text. Everything after that is P1 or later.
@@ -1612,6 +1613,43 @@ that add up to ten minutes, and the two triggers. Sabotage: each undone.
 - A3 CI runs once for a commit: on a push to `main`, and on a pull request.
 
 **Docs.** NOTES entry; PROGRESS.
+
+#### T8.5 The fit to the model's input: sized once, least joined dropped first (P1)
+
+**Why.** The efficiency review, measured. `fitToContext` drops tables until the
+extract fits the model's input, and serializes the whole extract again for
+every table it drops: on 3,001 relations, 21.9 s to keep 442, of a run whose
+database time was 2.9 s. And it drops them from the end of the catalog's
+order, so a schema too large for the model loses the end of the alphabet
+whatever joins it, which 0.4.3 fixed for the time budget and left here.
+
+**Build.**
+- Each table is sized once; the size of what is kept is their sum, the commas
+  between and the rest of the extract, with no serialization per table
+  dropped. What is kept is what the loop kept: it fits, and one table more
+  would not.
+- Tables go least joined first: by how many foreign keys each declares or is
+  pointed at by, among the tables of the extract, and among equals the last
+  in catalog order first, as before. What is kept stays in catalog order.
+
+**Tests.** Unit, `test/extract.test.ts`: the order of the drop on tables with
+and without keys; that what is kept fits and one table more would not; that
+the characters serialized stay within a few times the extract's size however
+many tables are dropped. Sabotage: the loop that serializes per drop back;
+the drop from the end back; a comma miscounted.
+
+**Acceptance.**
+- A1 Dropping tables serializes a bounded multiple of the extract's size,
+  however many go.
+- A2 What is kept fits the ceiling, and adding back the last table dropped
+  would not.
+- A3 The least joined tables go first, and what is kept stays in catalog
+  order.
+- A4 On 3,000 tables the fit takes under a second where it took 7 s (manual:
+  the measurement in `PROGRESS.md`).
+
+**Docs.** README: the row for "tables dropped to fit the model's input limit"
+says which go first. NOTES entry; CHANGELOG.
 
 ---
 

@@ -3177,6 +3177,37 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   - **Deliberately not done.** Fetching the tarball by its URL in place of
     `npx`: the step is there to run the package as a user gets it.
 
+## 0.4.5 (not released yet)
+
+- **What follows 0.4.4 in small pieces.** The efficiency review of
+  2026-11-13 (`PROGRESS.md`) measured where a run's time and tokens go. Its
+  first finding went into 0.4.4 with the pooler fix; the others are T8.5
+  onward, each a pull request small enough to read whole, at the
+  maintainer's word.
+- **T8.5: the fit to the model's input is sized once, and drops the least
+  joined first.** `fitToContext` dropped tables from the end of the catalog's
+  order until the extract fit, serializing all of it again for each one.
+  - **Why.** Measured on 3,001 relations: 21.9 s to keep 442, in a run whose
+    database time was 2.9 s. On an extract of `scale` copied to 3,000 tables,
+    7.3 s; to 12,000, 134 s. Now each table is serialized once, and the size
+    of what is kept is the sum, the commas between and the rest: 97 ms and
+    275 ms, and what is kept is 199,927 and 199,892 tokens of the 200,000
+    allowed, so the cut is as tight as before.
+  - **The order.** 0.4.3 made the time budget cover the most joined relations
+    first and left this ("a `Table` carries no degree"). It carries its
+    foreign keys, which give one: tables go by how many keys each declares or
+    is pointed at by among the tables of the extract, fewest first, and among
+    equals the last in catalog order, as before. What is kept stays in
+    catalog order. A schema with no foreign keys loses what it lost before.
+  - **Deliberately not done.** Choosing by size as well as by keys, to keep
+    more tables: the model is better served by the tables the keys tie
+    together than by more of them. Dropping one table's sample rows at a
+    time, where all go at once: a tier is easier to say in the one line that
+    reports it.
+  - **Tests.** The characters `JSON.stringify` returns during the fit are
+    counted: at most six times the extract's size for 400 tables of which 300
+    go, where the old loop serialized 195 times its size.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values
