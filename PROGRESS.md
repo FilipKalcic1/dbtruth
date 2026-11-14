@@ -6587,3 +6587,19 @@ of each lost point, in the format of section 4.7 of the plan.
   matrix; (7) four sabotages red; (8) verify green, T8.6 at 100; (9) NOTES
   and CHANGELOG say it; (10) the diff read again, nothing open. 8 of 10
   until CI shows (5) and (6).
+
+## Release 0.4.4: published (T7.1's checklist, steps 6 to 8)
+- Run 43635782987 of `release.yml`, started by the maintainer on `main` at
+  688bf10: success, the last step included, on its first attempt.
+- Step 7: `npm view dbtruth dist-tags` gives `latest` 0.4.4; its
+  provenance is `https://slsa.dev/provenance/v1`.
+- Step 6: tag `v0.4.4` on 688bf10.
+- Step 8, here, against the published package in an empty directory, with
+  the snapshot made by `scripts/make-fixture-snapshot.mjs` on the local
+  fixture (Postgres 16): `npx -y --prefer-online dbtruth@0.4.4 --version`
+  0.4.4; `doctor` every check ok, exit 0; `check` "check fixture: 12
+  unchanged", exit 0. And through PgBouncer 1.22 in transaction mode with one
+  server connection: `doctor` connected and proved the session read-only,
+  and the next client of the pool read `default_transaction_read_only` off
+  and `statement_timeout` 0.
+- Steps 5 and 9 need `ANTHROPIC_API_KEY`: not done, as for 0.4.3.
