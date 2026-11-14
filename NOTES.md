@@ -3208,6 +3208,38 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
     counted: at most six times the extract's size for 400 tables of which 300
     go, where the old loop serialized 195 times its size.
 
+- **T8.6: distinct values are counted under `COLLATE "C"`.** The statistics
+  statement's `count(DISTINCT col::text)` is now
+  `count(DISTINCT col::text COLLATE "C")`.
+  - **Why.** Counting distinct values sorts them, and that is most of the
+    statement, which is most of a large table's profile (864 ms of 1,023 ms
+    on a 2-million-row, 30-column table). Under the database's collation the
+    sort compares by a language's rules; under "C", by bytes. Measured on a
+    500,000-row table of 30 columns, the statement inside `extract`, best of
+    three warm runs: 668 ms to 470 ms in a `C.UTF-8` database, 797 ms to
+    508 ms in one whose collation is ICU `en-US`. The 30 distinct counts are
+    the same before and after, in both. The extract's share of the budget is
+    54 s, so a run now reaches about half again as many large tables.
+  - **The same counts.** A deterministic collation calls two values equal
+    only when their bytes are, so the count does not depend on it. A column
+    whose own collation is nondeterministic (one made case-insensitive with
+    ICU, say) is the exception: there `'Active'` and `'active'` are one
+    value. Such a column keeps its collation, so its count is what it was,
+    and agrees with its list of values, which is drawn under it. The catalog
+    says which they are (`pg_collation.collisdeterministic`, Postgres 12 and
+    later). The mark travels from `readCatalog` to the statement inside
+    `extract.ts` and is in nothing either returns to the rest of the code:
+    not in a `Table`, the model's input, the snapshot or its fingerprint.
+  - **Deliberately not done.** The list of values keeps the column's
+    collation everywhere: it orders the list, and a list ordered by bytes
+    would rewrite every `context/tables/` file of a database whose collation
+    is not "C". The other sorts of the statement's kind, in `verify.ts`
+    (`inconsistent_values`, the duplicate's `INTERSECT`), run once per claim,
+    not once per relation, and were not measured as a cost. Reading each
+    relation's sample once where two statements read it: that needs the
+    visibility rule in SQL, in the code that keeps hidden values in the
+    database, for a sixth of the time.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values

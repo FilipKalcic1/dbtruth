@@ -9,6 +9,12 @@ Changes since 0.1.8. What earlier releases changed, and why, is in
   first, by how many foreign keys each declares or is pointed at by, where it
   lost the end of the alphabet. Choosing them took 21.9 s on 3,000 relations
   and now takes a tenth of a second.
+- Sampling a large table is about a third faster: distinct values are counted
+  byte by byte, not under the database's collation, which gives the same
+  counts (a 500,000-row table of 30 columns: 668 ms to 470 ms, and 797 ms to
+  508 ms under an English ICU collation). More large tables fit a time
+  budget. A column whose own collation is nondeterministic is counted as
+  before.
 
 ## 0.4.4 (2026-11-14)
 

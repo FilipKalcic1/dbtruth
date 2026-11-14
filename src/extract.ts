@@ -40,8 +40,11 @@ export type ExtractOptions = {
 
 export const HIDDEN = "[hidden]";
 
-/** The relations dbtruth describes, each with what the catalog says of its size, which extract turns into a row estimate. */
-export type Catalog = (CatalogRelation & { size: Size & { leaves?: Size[] } })[];
+/**
+ * The relations dbtruth describes, each with what the catalog says of its size, which extract turns into a row estimate,
+ * and with the columns whose collation is nondeterministic, if it has any: extract's own, in nothing it returns.
+ */
+export type Catalog = (CatalogRelation & { size: Size & { leaves?: Size[] }; nondeterministic?: string[] })[];
 
 /** Every relation dbtruth describes, partitions folded into their parent: the three catalog statements, outside the budget. */
 export async function readCatalog(db: Db): Promise<Catalog> {
@@ -53,6 +56,8 @@ export async function readCatalog(db: Db): Promise<Catalog> {
     .filter((rel) => !rel.isPartition)
     .map((rel) => {
       const partitions = partitionsByParent.get(rel.oid);
+      const columns = columnsByOid.get(rel.oid) ?? [];
+      const nondeterministic = columns.filter((c) => c.nondeterministic).map((c) => c.name);
       return {
         name: displayName(rel.schema, rel.table),
         schema: rel.schema,
@@ -63,8 +68,9 @@ export async function readCatalog(db: Db): Promise<Catalog> {
         ...(partitions ? { partitions } : {}),
         primaryKey: keysByOid.get(rel.oid)?.primaryKey ?? null,
         foreignKeys: keysByOid.get(rel.oid)?.foreignKeys ?? [],
-        columns: (columnsByOid.get(rel.oid) ?? []).map(({ attnum: _attnum, ...c }) => c),
+        columns: columns.map(({ attnum: _attnum, nondeterministic: _nondeterministic, ...c }) => c),
         size: { estimate: rel.estimate, pages: rel.pages, ...(rel.leaves ? { leaves: rel.leaves } : {}) },
+        ...(nondeterministic.length > 0 ? { nondeterministic } : {}),
       };
     });
 }
@@ -76,7 +82,7 @@ export async function extract(db: Db, cfg: Config, catalog: Catalog, opts: Extra
 
   for (const entry of mostJoinedFirst(catalog)) {
     if (db.budget().spentMs >= extractBudgetMs) continue;
-    const { size, columns, ...relation } = entry;
+    const { size, columns, nondeterministic, ...relation } = entry;
     const estimate = await estimateRows(size, cfg.pilotPages, pilot(db, cfg, relation));
     const base: Table = {
       ...relation,
@@ -84,7 +90,7 @@ export async function extract(db: Db, cfg: Config, catalog: Catalog, opts: Extra
       columns: columns.map((c) => ({ ...c, nullRate: 0, distinct: 0, maxLength: 0, visible: false })),
       samples: [],
     };
-    profiled.set(entry, await profile(db, cfg, opts, base, matchedReveal));
+    profiled.set(entry, await profile(db, cfg, opts, base, matchedReveal, new Set(nondeterministic)));
   }
 
   // In catalog order, whatever order they were read in: the model, the files and the snapshot see the one order.
@@ -300,7 +306,8 @@ export async function integerKeys(db: Db, cfg: Config, catalog: Catalog): Promis
   return keys;
 }
 
-type ColumnBase = Pick<Column, "name" | "type" | "nullable" | "comment"> & { attnum: number };
+/** A column as the catalog lists it, and whether its collation calls values equal that differ byte for byte (Postgres 12 and later). */
+type ColumnBase = Pick<Column, "name" | "type" | "nullable" | "comment"> & { attnum: number; nondeterministic: boolean };
 
 /**
  * The relations listRelations lists, as a subquery of their oids. The columns and the keys are read of these, not of a
@@ -313,7 +320,8 @@ async function listColumns(db: Db): Promise<Map<number, ColumnBase[]>> {
   const r = await db.catalog(
     `SELECT a.attrelid::bigint AS oid, a.attnum::int AS attnum, a.attname AS name,
             format_type(a.atttypid, a.atttypmod) AS type, NOT a.attnotnull AS nullable,
-            col_description(a.attrelid, a.attnum) AS comment
+            col_description(a.attrelid, a.attnum) AS comment,
+            coalesce((SELECT NOT o.collisdeterministic FROM pg_collation o WHERE o.oid = a.attcollation), false) AS nondeterministic
        FROM pg_attribute a
       WHERE a.attrelid IN ${DESCRIBED_OIDS} AND a.attnum > 0 AND NOT a.attisdropped
       ORDER BY a.attrelid, a.attnum`,
@@ -328,6 +336,7 @@ async function listColumns(db: Db): Promise<Map<number, ColumnBase[]>> {
       type: String(row.type),
       nullable: Boolean(row.nullable),
       ...(row.comment ? { comment: String(row.comment) } : {}),
+      nondeterministic: Boolean(row.nondeterministic),
     });
     out.set(Number(row.oid), list);
   }
@@ -401,7 +410,7 @@ export function isCategorical(s: ColumnStats, cfg: Pick<Config, "categoricalMaxD
   );
 }
 
-async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, matchedReveal: Set<string>): Promise<Table> {
+async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, matchedReveal: Set<string>, nondeterministic: Set<string>): Promise<Table> {
   const cols = table.columns;
   if (cols.length === 0) return table;
   const shownRegardless = shownWhateverTheValues(table, opts.reveal, matchedReveal);
@@ -410,7 +419,7 @@ async function profile(db: Db, cfg: Config, opts: ExtractOptions, table: Table, 
   // A materialized view that was never refreshed cannot be read at all: schema only, nothing shown.
   if (table.populated === false) return { ...keysOnly(), rowEstimate: 0, unmeasured: "a materialized view that has never been refreshed cannot be read" };
 
-  const { source, stats } = await statistics(db, cfg, table);
+  const { source, stats } = await statistics(db, cfg, table, nondeterministic);
   // Statistics unavailable: keep the schema, show only declared keys, sample nothing, and say why. The estimate stands,
   // except a 0 that nothing confirmed, which becomes unknown and so has no source.
   if (!stats.ok) {
@@ -459,11 +468,17 @@ function shownWhateverTheValues(table: Table, reveal: Set<string>, matchedReveal
  * Null rate, distinct count, longest value, and for dates the year range, inside the database over the bounded sample:
  * one statement, and the source it ran over. A random page sample can come back empty on a table whose estimate is
  * stale; the plain form then settles it.
+ *
+ * Counting distinct values sorts them, and is most of the statement's time; under the database's collation the sort
+ * compares by a language's rules, under "C" by bytes, a third faster on a large table. The count is the same: a
+ * deterministic collation calls two values equal only when their bytes are. A column whose own collation is
+ * nondeterministic keeps it, since there the collation decides what is one value, and its value list is drawn so too.
  */
-async function statistics(db: Db, cfg: Config, table: Table): Promise<{ source: string; stats: QueryResult }> {
+async function statistics(db: Db, cfg: Config, table: Table, nondeterministic: Set<string>): Promise<{ source: string; stats: QueryResult }> {
   const aggregates = table.columns
     .map((c, i) => {
-      const base = `count(${q(c.name)}) AS nn${i}, count(DISTINCT ${q(c.name)}::text) AS d${i}, max(length(${q(c.name)}::text)) AS l${i}`;
+      const byBytes = nondeterministic.has(c.name) ? "" : ' COLLATE "C"';
+      const base = `count(${q(c.name)}) AS nn${i}, count(DISTINCT ${q(c.name)}::text${byBytes}) AS d${i}, max(length(${q(c.name)}::text)) AS l${i}`;
       const years = `, date_part('year', min(${q(c.name)}))::float8 AS y0${i}, date_part('year', max(${q(c.name)}))::float8 AS y1${i}`;
       return typeFamily(c.type) === "time" ? base + years : base;
     })

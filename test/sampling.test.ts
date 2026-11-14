@@ -9,8 +9,10 @@ import { doctor } from "../src/doctor.js";
 import { extract, readCatalog } from "../src/extract.js";
 import { connect, DESCRIBED_RELATIONS, sampleSource } from "../src/safety.js";
 import type { Extract, Table } from "../src/schemas.js";
+import { schemaOf } from "../src/snapshot.js";
 import { assemble } from "../src/verdict.js";
 import { tableFile } from "../src/write.js";
+import { copyOfFixture } from "./copies.js";
 
 const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
 const SAMPLING_URL = FIXTURE_URL.replace(/\/[^/]+$/, "/sampling");
@@ -162,5 +164,49 @@ test("a temporary table is not the user's schema: neither the extract nor doctor
     assert.equal(own.rowCount, 0, "the session that created it does not list it either");
   } finally {
     await other.end();
+  }
+});
+
+test("distinct values are counted under COLLATE \"C\", which changes no count, except in a column whose collation is nondeterministic", { timeout: 60_000 }, async (t) => {
+  const copy = await copyOfFixture(t);
+  // Under ci, 'Active', 'active' and 'ACTIVE' are one value; byte for byte they are three.
+  await copy.sql("CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)");
+  await copy.sql("CREATE TABLE tickets (id int PRIMARY KEY, state text COLLATE ci, kind text, opened date)");
+  await copy.sql(
+    `INSERT INTO tickets SELECT g, (ARRAY['Active', 'active', 'ACTIVE', 'done'])[1 + g % 4], (ARRAY['Bug', 'bug', 'task'])[1 + g % 3], date '2024-01-01' + g FROM generate_series(1, 400) g`,
+  );
+  const db = await connect(copy.url, config);
+  try {
+    const sent: string[] = [];
+    const spy = { ...db, query: (sql: string, params?: unknown[]) => (sent.push(sql), db.query(sql, params)) };
+    const catalog = (await readCatalog(db)).filter((r) => r.name === "tickets");
+    const { tables } = await extract(spy, config, catalog, { samples: true, reveal: new Set() });
+    const tickets = tables[0]!;
+    const column = (name: string) => tickets.columns.find((c) => c.name === name)!;
+
+    const statistics = sent.find((sql) => sql.includes("count(DISTINCT"))!;
+    assert.match(statistics, /count\(DISTINCT "kind"::text COLLATE "C"\)/, "a plain text column");
+    assert.match(statistics, /count\(DISTINCT "id"::text COLLATE "C"\)/, "a number, sorted as text all the same");
+    assert.match(statistics, /count\(DISTINCT "opened"::text COLLATE "C"\)/, "a date");
+    assert.match(statistics, /count\(DISTINCT "state"::text\) AS/, "the column whose collation decides what is one value keeps it");
+
+    assert.equal(column("state").distinct, 2, "'Active', 'active' and 'ACTIVE' are one value under the column's collation, as they were");
+    assert.equal(column("state").values?.length, 2, "and the list of values is drawn the same way, so the two agree");
+    assert.equal(column("kind").distinct, 3, "a plain column tells 'Bug' from 'bug', under any collation");
+    assert.deepEqual([...(column("kind").values ?? [])].sort(), ["Bug", "bug", "task"], "and lists all three");
+    const counted = await db.query(`SELECT count(DISTINCT id::text) AS id, count(DISTINCT kind::text) AS kind, count(DISTINCT opened::text) AS opened FROM tickets`);
+    assert.deepEqual(
+      { id: column("id").distinct, kind: column("kind").distinct, opened: column("opened").distinct },
+      counted.ok ? { id: Number(counted.rows[0]?.id), kind: Number(counted.rows[0]?.kind), opened: Number(counted.rows[0]?.opened) } : undefined,
+      "the counts are the ones the database's own collation gives",
+    );
+
+    // The mark is extract's own: in nothing it returns, and not in the schema the snapshot's fingerprint is taken over.
+    assert.doesNotMatch(JSON.stringify(tables), /nondeterministic|collat/i);
+    const withMark = schemaOf(catalog);
+    const without = schemaOf(catalog.map(({ ...r }) => r).map((r) => JSON.parse(JSON.stringify(r, (key, value) => (key === "nondeterministic" ? undefined : value)))));
+    assert.equal(withMark.fingerprint, without.fingerprint, "the fingerprint is taken over the schema, which the mark is not part of");
+  } finally {
+    await db.close();
   }
 });

@@ -6547,3 +6547,43 @@ of each lost point, in the format of section 4.7 of the plan.
   schema without foreign keys loses what it lost before; (7) five sabotages
   red; (8) verify green, T8.5 at 100; (9) README, NOTES, CHANGELOG say it;
   (10) CI green on the matrix. 9 of 10 until CI runs.
+- CI on d695051 (`FilipKalcic1/dbtruth#28`): 8 jobs green. 10 of 10. The
+  pull request stays unmerged until 0.4.4 is published: the release workflow
+  publishes what `main` holds when it is started, and this belongs to 0.4.5.
+
+## T8.6 Distinct values counted without the database's collation
+### Iteration 1: 100/100
+- The efficiency review's fourth finding. Kept as a commit of its own on top
+  of T8.5, not pushed while that pull request is open.
+- Test first, `test/sampling.test.ts`, on a copy of the fixture with a table
+  that has a column under a nondeterministic ICU collation: red on the old
+  statement ("a plain text column": no `COLLATE "C"`). One mistake of the
+  test's own: it took the pilot's `SELECT count(*) AS n ...` for the
+  statistics statement; it now looks for `count(DISTINCT`.
+- Implemented in `src/extract.ts`: the catalog's column read marks a column
+  whose collation is nondeterministic; `readCatalog` keeps the names beside
+  the relation and off its columns; `extract` takes them off the relation
+  before it becomes a `Table`; `statistics` leaves those columns their
+  collation and counts the others under "C".
+- Measured, a 500,000-row table of 30 columns, the statement inside
+  `extract`, best of three warm runs, old `extract.ts` against new: 668 ms to
+  470 ms in a `C.UTF-8` database, 797 ms to 508 ms under ICU `en-US`; the 30
+  distinct counts identical before and after, in both. The throwaway
+  databases were dropped.
+- Sabotage, four, each red and restored byte for byte: see
+  `acceptance/manual.json`.
+- Gates as a non-root user: `npm run verify` 370 tests, 368 pass, 2 skipped
+  (live), 0 fail. `npm run acceptance`: T8.6 100/100 (11 checks), T8.1, T8.4
+  and T8.5 100, every earlier task 100; overall 88 over 26 tasks.
+- Pushed onto the branch of `FilipKalcic1/dbtruth#28` as a commit of its own,
+  not held back: an unpushed commit does not outlive this machine. The pull
+  request now carries the pieces of 0.4.5 one commit each.
+- Score by this piece's criteria, each 0 or 1: (1) about a third less time,
+  measured on the final code under two collations; (2) the same counts on
+  the large table and on the fixture; (3) a column under a nondeterministic
+  collation counts and lists as before, and the two agree; (4) the mark in
+  no output, the fingerprint unmoved; (5) the catalog read works on
+  Postgres 12; (6) the test's ICU collation exists on every image of CI's
+  matrix; (7) four sabotages red; (8) verify green, T8.6 at 100; (9) NOTES
+  and CHANGELOG say it; (10) the diff read again, nothing open. 8 of 10
+  until CI shows (5) and (6).
