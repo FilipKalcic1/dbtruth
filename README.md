@@ -116,13 +116,16 @@ DATABASE_URL=postgres://user:password@host:5432/dbname
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-**Use a direct connection.** Point `DATABASE_URL` at the database itself, or
-at a pooler in session mode, never at a pooler in transaction mode (Supabase's
-port 6543, a Neon host ending in `-pooler`, PgBouncer with
-`pool_mode = transaction`). Until the next release, dbtruth makes its session
-read-only and sets a timeout on it, and such a pooler can hand that server
-connection to your application afterwards, whose writes then fail for a
-while, while dbtruth's own statements run without the setting.
+**A pooler is fine, in session or transaction mode.** `DATABASE_URL` can
+point at the database itself or at a pooler, in transaction mode too
+(Supabase's port 6543, a Neon host ending in `-pooler`, PgBouncer with
+`pool_mode = transaction`). dbtruth sets nothing on the session: each
+statement runs in a read-only transaction of its own, with its timeout, and
+is rolled back at once, so nothing it did stays on a pooled server connection
+for your application. 0.4.3 and earlier set both on the session: never point
+those at a pooler in transaction mode, where your application's writes then
+failed for a while. A pooler in statement mode allows no transaction, and
+dbtruth reads nothing outside one, so there it stops before reading.
 
 **Row level security.** A role that row level security filters sees only its
 own rows, so a full table can come out empty and a good join rejected. Until
@@ -227,10 +230,12 @@ in its own words.
 | `could not connect to the database: the database named in the URL does not exist on that server` | The name after the last `/` of the URL is not a database on that server. Check the name, and that the URL points at the right server. |
 | `could not connect to the database: the server did not answer within <n>s; check the host and port in the URL, and any firewall on the way` | Nothing answered within the statement timeout, which bounds connecting too: a firewall that drops packets, a wrong address, or a server slow or far away. Check the host, the port and the network; for a slow server, raise `--statement-timeout-seconds`. |
 | `could not connect to the database (<code>)`<br>`could not connect to the database` | A failure without a sentence of its own, named by its code or by none. `DEPTH_ZERO_SELF_SIGNED_CERT`, `SELF_SIGNED_CERT_IN_CHAIN` or another certificate code: the server's certificate cannot be verified; add `sslrootcert=<file>` with the server's CA certificate to the URL, or `sslmode=no-verify` to encrypt without verifying. `ERR_INVALID_URL`: the URL cannot be parsed, for example because of a `#` in the password. `ENOENT`: a file named by `sslrootcert`, `sslcert` or `sslkey` does not exist. No code: the server asks for a password the URL does not give, or `sslmode` is set for a server without SSL. |
-| `the server accepted the connection but refused to set up a read-only session (<code>)` | The server would not take `SET default_transaction_read_only = on` or the statement timeout; the code is its SQLSTATE, and `42704` means it does not know the setting. A server that speaks the Postgres protocol without being Postgres can do this. dbtruth disconnects: it reads nothing without a read-only session. Point it at Postgres itself, 12 or newer. |
+| `the server accepted the connection but refused to set up a read-only session (<code>)` | The server would not open a read-only transaction with a statement timeout (`BEGIN READ ONLY`, then `SET LOCAL statement_timeout`); the code is its SQLSTATE, and `42704` means it does not know the setting. A server that speaks the Postgres protocol without being Postgres can do this. So can a pooler in statement mode (PgBouncer with `pool_mode = statement`), which allows no transaction and closes the connection, so that no code follows. dbtruth disconnects: it reads nothing outside a read-only transaction. Point it at Postgres itself, 12 or newer, or at a pooler in session or transaction mode. |
 | `WARNING: the session asked for read-only mode but could not prove it: <detail>. dbtruth still issues only SELECT statements.` | The server accepted a `CREATE TABLE` inside what should have been a read-only transaction (dbtruth rolled it back at once), or did not report the transaction as read-only; the detail says which. A full run goes on, since it sends only `SELECT`; `doctor` counts it as a failure. Connect as a role that can only read (`GRANT SELECT` and nothing more), so the database refuses writes whatever the session says. |
 | `database connection lost: <message>` | The server or the network closed the connection in the middle of a run: a restart, an administrator ending the session, a dropped network, or a server that ends idle sessions while the model answers. The run stops rather than report what it could not measure as nothing found. Run it again. From `mcp`, the call that lost it fails with this line and the next connects again; a connection closed while no call ran is replaced without a word. |
 | `could not list relations: <message>`<br>`could not list columns: <message>`<br>`could not list constraints: <message>`<br>`could not read the server version: <message>`<br>`could not read the catalog: <message>` | Reading the schema from the catalog failed; the server's words follow the colon. On a server older than Postgres 12 a catalog column the query reads does not exist; otherwise the statement timeout is shorter than the catalog read. `npx dbtruth doctor` prints the server's version; raise `--statement-timeout-seconds` for a slow server. |
+| `dbtruth sends one statement at a time, and this text holds a semicolon` | A table or a column has a semicolon in its name, so no statement that names it is sent: dbtruth sends no text with a semicolon in it, which is what keeps a statement from ending the read-only transaction it runs in. The relation is described from the catalog and reported unmeasured, a join over it unverifiable, and the rest of the run is as ever. Rename it, or read that one by hand. |
+| `the driver answered one statement with something other than one result` | A fault in dbtruth or in the database driver it uses, not in your database: nothing was written, and the run stops. Report it with the dbtruth version and the Postgres version. |
 | `a value could not be read (SQLSTATE <code>)` | A statement over a relation failed on a value, so nothing was measured there: most often a view whose expression fails on some row, such as a cast of text to a number or a date, or a function it calls that raises an error; else a condition's value the server cannot take, such as one holding a NUL byte (`22021`). It follows `not measured: ` in `context/tables/`, is the reason in `check`'s report, and from `mcp` is a relation's `unmeasured` or a verdict's `skipped`. The code is the server's SQLSTATE: class `22` for a value that does not fit its type, `P0` for an error a function raised. The server's own message is left out, since it quotes the value. To read it, run the verdict's query, or select from the relation, as a user who may see the data; then fix the row or the expression. |
 | `no API key found. Set ANTHROPIC_API_KEY ...` | `ANTHROPIC_API_KEY` is in neither the environment nor the `.env` that was read: add it to the `.env`. `doctor` reports a missing key on a `note` line, not as a failure, because only a full run needs one: `doctor` and `check` do not. |
 | `could not send a request to the Anthropic API: <reason>. Check the key in ANTHROPIC_API_KEY.` | Node refused to build the request. `Cannot convert argument to a ByteString` means the key holds a character an HTTP header cannot carry, such as a curly quote pasted with it: copy the key again. `Invalid URL` means `ANTHROPIC_BASE_URL` in the environment is not a URL. |
@@ -603,14 +608,17 @@ repositories for free.
 ## What it sends, and what it never does
 
 **Database.** `DATABASE_URL` comes from the environment, `.env`, or `--url`; it
-is never printed and never written anywhere. On connect the session is set to
-`default_transaction_read_only = on` with a statement timeout, which bounds
-connecting too. Before doing anything else, dbtruth attempts a trivial write
-inside a transaction and checks that the server refuses it; if the server does
-not, it warns loudly and continues. Every query goes through one module,
-`safety.ts`, which only issues `SELECT`, enforces a time budget and a
-per-query timeout, and turns a timeout into a skipped measurement rather than
-a crash. A statement that fails on a value in the data, such as a view's cast,
+is never printed and never written anywhere. Nothing is set on the session:
+every statement runs in a transaction of its own, opened read-only with a
+statement timeout and rolled back at once, so nothing dbtruth does stays on a
+connection a pooler shares. The timeout bounds connecting too. Before doing
+anything else, dbtruth attempts a trivial write inside such a transaction and
+checks that the server refuses it; if the server does not, it warns loudly
+and continues. Every query goes through one module, `safety.ts`, which only
+issues `SELECT`, one statement at a time (a text with a semicolon in it is
+never sent, so no statement can end the transaction it runs in), enforces a
+time budget and a per-query timeout, and turns a timeout into a skipped
+measurement rather than a crash. A statement that fails on a value in the data, such as a view's cast,
 is reported by its SQLSTATE alone, since the server's message would quote the
 value. Nothing else in the code can reach the database.
 

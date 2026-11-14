@@ -1,11 +1,17 @@
 // safety.ts: the ONLY module that imports pg, and the only way to reach the database.
 //
 // Guarantees, in order of importance:
-//   1. The session is read-only (SET default_transaction_read_only = on). At connect time the
-//      server is asked to confirm the transaction mode it will enforce, and a trivial write is
-//      attempted inside a transaction that is always rolled back; any refusal is fine, only an
-//      accepted write disproves anything, and then the caller is warned loudly.
-//   2. Only SELECT / WITH statements are issued through query().
+//   1. Every statement runs in a transaction of its own, opened READ ONLY with its statement timeout set LOCAL, and
+//      always rolled back. Nothing is set on the session: behind a pooler in transaction mode a session is not a
+//      server connection, and a setting on it would stay on whichever server connection it ran on, for the next
+//      client of the pool, while dbtruth's own next statement ran on another without it. The transaction is one
+//      message, and so one round trip, where the server times each statement of a message on its own (Postgres 13
+//      and later) and the statement has no bind parameters; otherwise three. At connect time the server is asked to
+//      confirm the transaction mode it will enforce, and a trivial write is attempted inside such a transaction; any
+//      refusal is fine, only an accepted write disproves anything, and then the caller is warned loudly.
+//   2. Only SELECT / WITH statements are issued through query(), one to a call. A text with a semicolon in it is
+//      never sent: no statement dbtruth builds holds one, and without one a text is a single statement, which cannot
+//      end the read-only transaction it runs in. So even a text built wrongly can read, and cannot write.
 //   3. Every statement has a timeout, and a timeout is a skipped measurement, not a crash. Connecting has the same limit.
 //   4. A wall-clock budget covers all sampling and measuring; once spent, query() skips instead of running.
 //   5. A lost connection is an error that stops the run: it is never reported as "nothing found". One lost while idle is
@@ -73,6 +79,23 @@ const PG_CONNECT_TIMEOUT = "timeout expired";
 export const DATATYPE_MISMATCH_STATES: readonly string[] = ["42804", "42883", "42846"];
 
 const MS_PER_SECOND = 1000;
+
+/** server_version_num of Postgres 13.0, the first to time each statement of a message that holds several on its own. */
+const TIMES_EACH_STATEMENT_SINCE = 130000;
+/** Where the statement's answer stands among those of a transaction sent whole: BEGIN, SET LOCAL, the statement, ROLLBACK. */
+const STATEMENT_RESULT = 2;
+/** What separates the statements of one text. */
+const STATEMENT_SEPARATOR = ";";
+
+/**
+ * Whether a transaction can travel whole, in one message: open it, set its timeout, run the statement, roll back.
+ * Before Postgres 13 the timer a message's first statement started ran on over the rest, so a timeout set by one
+ * statement of a message did not bound the next: under a session whose own timeout is longer, the statement would run
+ * past dbtruth's. There the transaction is opened in a message of its own, and the statement's timer starts with it.
+ */
+export function wholeTransactionInOneMessage(serverVersionNum: number): boolean {
+  return serverVersionNum >= TIMES_EACH_STATEMENT_SINCE;
+}
 
 /** KEY=value pairs from a .env file in cwd, or {} when there is none or it cannot be read. Values are never printed. */
 export function readDotEnv(cwd: string): Record<string, string> {
@@ -190,13 +213,13 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
     throw new Error(connectFailure(e, opts.statementTimeoutSeconds));
   }
 
-  let database: string;
-  let proof: { proven: boolean; detail: string };
+  // What opens the transaction every statement runs in. A pooler in transaction mode keeps one server connection for
+  // a whole transaction, so both settings hold for the statement, and neither outlives it.
+  const begin = `BEGIN READ ONLY; SET LOCAL statement_timeout = ${timeoutMs}`;
+
+  let proof: Awaited<ReturnType<typeof proveReadOnly>>;
   try {
-    await client.query("SET default_transaction_read_only = on");
-    await client.query(`SET statement_timeout = ${timeoutMs}`);
-    database = String(((await client.query("SELECT current_database() AS db")).rows[0] as Row).db);
-    proof = await proveReadOnly(client);
+    proof = await proveReadOnly(client, begin);
   } catch (e) {
     await client.end();
     const state = sqlState(e);
@@ -209,18 +232,66 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
   let budgetMs = opts.budgetSeconds * MS_PER_SECOND;
   let spentMs = 0;
 
+  const oneMessage = wholeTransactionInOneMessage(proof.serverVersionNum);
+
+  // One transaction at a time. Two statements started together, as two MCP tool calls can, would otherwise interleave
+  // on the one connection: the second could run after the first's rollback, outside any transaction, or inside the
+  // first's after it failed and be refused for it.
+  let idle: Promise<unknown> = Promise.resolve();
+  function inTurn<T>(work: () => Promise<T>): Promise<T> {
+    const turn = idle.then(work);
+    // The next turn waits for this one to end, either way; its outcome, an error included, goes to its own caller.
+    idle = turn.then(
+      () => undefined,
+      () => undefined,
+    );
+    return turn;
+  }
+
+  /**
+   * The statement in a transaction of its own, and what the server answered for it. The budget is charged the round
+   * trip that carries the statement, as it was when a statement had no transaction of its own: the round trips that
+   * only open or end one lengthen a run on a distant server, but never leave a measurement out.
+   */
+  async function inOwnTransaction(sql: string, params: unknown[], budgeted: boolean): Promise<unknown> {
+    const charged = async <T>(roundTrip: () => Promise<T>): Promise<T> => {
+      const started = performance.now();
+      try {
+        return await roundTrip();
+      } finally {
+        if (budgeted) spentMs += performance.now() - started;
+      }
+    };
+    if (!oneMessage || params.length > 0) return inTransaction(client, begin, () => charged(() => client.query(sql, params)));
+    let results: unknown;
+    try {
+      // The statement on lines of its own: one that ends in a line comment would comment the rollback out.
+      results = await charged(() => client.query(`${begin};\n${sql}\n; ROLLBACK`));
+    } catch (e) {
+      // The server skips what follows a failed statement, the rollback with it, and the transaction stays open.
+      await client.query("ROLLBACK");
+      throw e;
+    }
+    return Array.isArray(results) ? results[STATEMENT_RESULT] : results;
+  }
+
   async function run(sql: string, params: unknown[], budgeted: boolean): Promise<QueryResult> {
     if (!isReadStatement(sql)) {
       return { ok: false, reason: "refused", message: "dbtruth only issues SELECT statements" };
+    }
+    // Checked here and not by the server, which without bind parameters runs every statement a text holds: after a
+    // COMMIT among them, the rest would run outside the read-only transaction. No lexing, so nothing to get wrong: a
+    // semicolon inside a quoted name is refused too, and that relation is reported unmeasured.
+    if (sql.includes(STATEMENT_SEPARATOR)) {
+      return { ok: false, reason: "refused", message: "dbtruth sends one statement at a time, and this text holds a semicolon" };
     }
     if (lost !== undefined) throw new Error(`database connection lost: ${lost}`);
     if (budgeted && spentMs >= budgetMs) {
       return { ok: false, reason: "budget", message: "time budget exhausted" };
     }
-    const started = performance.now();
+    let result: unknown;
     try {
-      const result = await client.query(sql, params);
-      return { ok: true, rows: result.rows as Row[] };
+      result = await inTurn(() => inOwnTransaction(sql, params, budgeted));
     } catch (e) {
       const state = sqlState(e);
       if (isConnectionLoss(state)) throw new Error(`database connection lost: ${errorMessage(e)}`);
@@ -229,13 +300,14 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
       const quotesData = state?.startsWith(DATA_EXCEPTION_CLASS) || state?.startsWith(PLPGSQL_ERROR_CLASS);
       const message = quotesData ? `a value could not be read (SQLSTATE ${state})` : errorMessage(e);
       return { ok: false, reason: "error", message, ...(state ? { sqlState: state } : {}) };
-    } finally {
-      if (budgeted) spentMs += performance.now() - started;
     }
+    // One statement was sent, so one result comes back; anything else is the driver's doing, and stops the run.
+    if (!isOneResult(result)) throw new Error("the driver answered one statement with something other than one result");
+    return { ok: true, rows: result.rows };
   }
 
   return {
-    database,
+    database: proof.database,
     readOnlyProven: proof.proven,
     query: (sql, params = []) => run(sql, params, true),
     catalog: (sql, params = []) => run(sql, params, false),
@@ -248,6 +320,8 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
     },
     // A function, not a getter, so that a copy made with a spread still reads the connection.
     lost: () => lost,
+    // At once, a transaction in flight with it: the server rolls back what a closed connection left open. Waiting for
+    // the turn would hold a SIGTERM for as long as a statement waits on a lock.
     async close() {
       await client.end();
     },
@@ -255,28 +329,54 @@ export async function connect(url: string, opts: SafetyOptions): Promise<Connect
 }
 
 /**
- * Two proofs inside one transaction that is always rolled back. First the server states the
- * transaction mode it will enforce. Then a trivial write is attempted: the one write-shaped
- * statement this tool ever sends, expected to be refused. Any refusal is fine; a role without
- * CREATE privilege refuses it with 42501 and is read-only all the same. Only an accepted write
- * disproves anything.
+ * Runs work in a transaction opened by begin, in a message of its own, and rolls it back whatever happened. A failed
+ * statement has aborted the transaction, and only the rollback ends it: without one the next BEGIN would run inside
+ * it. That holds for begin itself, whose second statement can fail after its first opened the transaction. A rollback
+ * that fails throws, and the caller takes that for the lost connection it is.
  */
-async function proveReadOnly(client: pg.Client): Promise<{ proven: boolean; detail: string }> {
-  await client.query("BEGIN");
+async function inTransaction<T>(client: pg.Client, begin: string, work: () => Promise<T>): Promise<T> {
+  let result: T;
   try {
-    const mode = String((await client.query("SELECT current_setting('transaction_read_only') AS mode")).rows[0]?.mode);
+    await client.query(begin);
+    result = await work();
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  }
+  await client.query("ROLLBACK");
+  return result;
+}
+
+/**
+ * Two proofs inside one transaction, opened as every statement's is and always rolled back. First the server states
+ * the transaction mode it will enforce. Then a trivial write is attempted: the one write-shaped statement this tool
+ * ever sends, expected to be refused. Any refusal is fine; a role without CREATE privilege refuses it with 42501 and
+ * is read-only all the same. Only an accepted write disproves anything.
+ */
+async function proveReadOnly(client: pg.Client, begin: string): Promise<{ proven: boolean; detail: string; database: string; serverVersionNum: number }> {
+  return inTransaction(client, begin, async () => {
+    // The same read names the database and the server's version, which connect needs, at no round trip of their own.
+    const read = await client.query(
+      "SELECT current_setting('transaction_read_only') AS mode, current_database() AS db, current_setting('server_version_num')::int AS version",
+    );
+    const row = read.rows[0] as Row;
+    const mode = String(row.mode);
+    const server = { database: String(row.db), serverVersionNum: Number(row.version) };
     try {
       await client.query("CREATE TABLE dbtruth_preflight_must_fail (x int)");
-      return { proven: false, detail: "the server accepted a CREATE TABLE inside what should be a read-only transaction" };
+      return { ...server, proven: false, detail: "the server accepted a CREATE TABLE inside what should be a read-only transaction" };
     } catch (e) {
       const state = sqlState(e) ?? "unknown";
-      if (mode === "on") return { proven: true, detail: `transaction_read_only is on; the write was refused with SQLSTATE ${state}` };
-      if (state === READ_ONLY_SQL_TRANSACTION) return { proven: true, detail: "the write was refused as a read-only transaction" };
-      return { proven: false, detail: `transaction_read_only is ${mode} and the write was refused only with SQLSTATE ${state}` };
+      if (mode === "on") return { ...server, proven: true, detail: `transaction_read_only is on; the write was refused with SQLSTATE ${state}` };
+      if (state === READ_ONLY_SQL_TRANSACTION) return { ...server, proven: true, detail: "the write was refused as a read-only transaction" };
+      return { ...server, proven: false, detail: `transaction_read_only is ${mode} and the write was refused only with SQLSTATE ${state}` };
     }
-  } finally {
-    await client.query("ROLLBACK");
-  }
+  });
+}
+
+/** One statement's answer, as the driver gives it: an object with its rows. Several statements' answers come as a list. */
+function isOneResult(result: unknown): result is { rows: Row[] } {
+  return typeof result === "object" && result !== null && !Array.isArray(result) && "rows" in result && Array.isArray(result.rows);
 }
 
 /**

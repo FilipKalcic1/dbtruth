@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { connect, findDotEnv, isIntegerType, readDotEnv, resolveDatabaseUrl, sampleSource } from "../src/safety.js";
+import { performance } from "node:perf_hooks";
+import pg from "pg";
+import { connect, findDotEnv, isIntegerType, readDotEnv, resolveDatabaseUrl, sampleSource, wholeTransactionInOneMessage } from "../src/safety.js";
 import { config } from "../src/config.js";
+import { extract, readCatalog } from "../src/extract.js";
 import { copyOfFixture } from "./copies.js";
 import { writeUnreadable } from "./unreadable.js";
+import { countingProxy } from "./wire.js";
 
 export const FIXTURE_URL = process.env.DATABASE_URL ?? "postgres://dbtruth:dbtruth@localhost:54329/fixture";
 
@@ -100,6 +104,201 @@ test("a SQL error is a skipped measurement, not a crash", async () => {
     assert.equal(!bad.ok && bad.sqlState, "42703", "the SQLSTATE travels with the error so callers can tell a datatype problem from a missing column");
     const next = await db.query("SELECT 1 AS one");
     assert.equal(next.ok, true);
+  } finally {
+    await db.close();
+  }
+});
+
+test("every statement runs in a read-only transaction of its own, with the configured timeout, and nothing is set on the session", async () => {
+  const db = await connect(FIXTURE_URL, { ...config, statementTimeoutSeconds: 7 });
+  try {
+    const r = await db.query(
+      `SELECT current_setting('default_transaction_read_only') AS session_default,
+              current_setting('transaction_read_only') AS read_only,
+              current_setting('statement_timeout') AS timeout`,
+    );
+    assert.equal(r.ok, true);
+    const row = r.ok ? r.rows[0] : undefined;
+    assert.equal(row?.session_default, "off", "a setting on the session outlives dbtruth on a server connection a pooler hands on");
+    assert.equal(row?.read_only, "on", "the statement's own transaction is read-only");
+    assert.equal(row?.timeout, "7s", "and has the configured statement timeout");
+  } finally {
+    await db.close();
+  }
+});
+
+test("a statement that timed out or failed leaves no transaction open: the connection rests idle and the next statement runs", async () => {
+  const db = await connect(FIXTURE_URL, { ...config, statementTimeoutSeconds: 0.2 });
+  const watcher = new pg.Client({ connectionString: FIXTURE_URL });
+  await watcher.connect();
+  try {
+    const own = await db.query("SELECT pg_backend_pid() AS pid");
+    const pid = own.ok ? Number(own.rows[0]?.pid) : NaN;
+    const stateOf = async () => (await watcher.query("SELECT state FROM pg_stat_activity WHERE pid = $1", [pid])).rows[0]?.state;
+    // With bind parameters a statement's transaction is opened and ended in messages of their own, on every version.
+    for (const [what, sql, params] of [
+      ["a timeout", "SELECT pg_sleep(2)", []],
+      ["a value that fails", "SELECT 1 / (SELECT count(*) - count(*) FROM customers)", []],
+      ["a missing column", "SELECT no_such_column FROM customers", []],
+      ["a timeout with a bind parameter", "SELECT pg_sleep($1)", [2]],
+      ["a bound value that fails", "SELECT 1 / ($1::int - 1)", [1]],
+    ] as const) {
+      const failed = await db.query(sql, [...params]);
+      assert.equal(failed.ok, false, what);
+      assert.equal(await stateOf(), "idle", `after ${what}, not idle in a transaction left open`);
+      const next = await db.query("SELECT 1 AS one");
+      assert.equal(next.ok && Number(next.rows[0]?.one), 1, `the statement after ${what} runs`);
+    }
+    assert.equal(await stateOf(), "idle", "and after a statement that succeeded");
+    const bound = await db.query("SELECT $1::int AS n", [7]);
+    assert.equal(bound.ok && Number(bound.rows[0]?.n), 7);
+    assert.equal(await stateOf(), "idle", "and after one with a bind parameter that succeeded");
+  } finally {
+    await watcher.end();
+    await db.close();
+  }
+});
+
+const PROBE = "SELECT current_setting('transaction_read_only') AS read_only, current_setting('statement_timeout') AS timeout";
+
+test("statements started together each run in a read-only transaction of their own, and one that fails fails alone", async () => {
+  const db = await connect(FIXTURE_URL, { ...config, statementTimeoutSeconds: 7 });
+  try {
+    const [failed, ...probes] = await Promise.all([
+      db.query("SELECT 1 / (SELECT count(*) - count(*) FROM customers)"),
+      db.query(PROBE),
+      db.query(PROBE),
+    ]);
+    assert.equal(!failed!.ok && failed!.sqlState, "22012", "the failing statement fails with its own error");
+    for (const probe of probes) {
+      assert.equal(probe.ok, true, "a statement started beside a failing one is not failed by its aborted transaction");
+      assert.deepEqual(probe.ok ? { ...probe.rows[0] } : undefined, { read_only: "on", timeout: "7s" });
+    }
+  } finally {
+    await db.close();
+  }
+});
+
+test("a statement started while another runs still runs read-only with its timeout", async () => {
+  const db = await connect(FIXTURE_URL, { ...config, statementTimeoutSeconds: 7 });
+  try {
+    // As two MCP tool calls can: the second starts while the first's statement is on the server.
+    const slow = db.query("SELECT pg_sleep(0.3)");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const probe = await db.query(PROBE);
+    assert.equal((await slow).ok, true);
+    assert.deepEqual(probe.ok ? { ...probe.rows[0] } : undefined, { read_only: "on", timeout: "7s" }, "not run after the first one's rollback, outside any transaction");
+  } finally {
+    await db.close();
+  }
+});
+
+test("the whole transaction goes in one message from Postgres 13, which times each statement of a message on its own, and not before", () => {
+  assert.equal(wholeTransactionInOneMessage(120022), false, "Postgres 12 runs a message's statements under the timer of its first");
+  assert.equal(wholeTransactionInOneMessage(130000), true);
+  assert.equal(wholeTransactionInOneMessage(180001), true);
+});
+
+test("a statement costs one round trip from Postgres 13 and three before; with bind parameters three; a failed one the rollback more; connecting four", async (t) => {
+  const wire = await countingProxy(t, FIXTURE_URL);
+  const db = await connect(wire.url, config);
+  try {
+    assert.equal(wire.roundTrips(), 4, "connecting: the transaction opened, the mode read, the write refused, the rollback");
+    const cost = async (statement: () => Promise<unknown>) => {
+      const before = wire.roundTrips();
+      await statement();
+      return wire.roundTrips() - before;
+    };
+    const version = await db.catalog("SELECT current_setting('server_version_num')::int AS num");
+    const oneMessage = wholeTransactionInOneMessage(version.ok ? Number(version.rows[0]?.num) : NaN);
+    assert.equal(await cost(() => db.query("SELECT count(*) AS n FROM customers")), oneMessage ? 1 : 3, "a statement: its transaction opened, run and rolled back");
+    assert.equal(await cost(() => db.catalog("SELECT 1 AS one")), oneMessage ? 1 : 3, "a catalog read costs the same");
+    assert.equal(await cost(() => db.query("SELECT $1::int AS n", [1])), 3, "bind parameters go by the extended protocol, one statement to a message");
+    assert.equal(await cost(() => db.query("SELECT no_such_column FROM customers")), oneMessage ? 2 : 3, "the server skips what follows a failed statement, so its rollback is sent after");
+    assert.equal(await cost(() => db.query("DELETE FROM customers")), 0, "a statement refused here is never sent");
+    assert.equal(await cost(() => readCatalog(db)), oneMessage ? 3 : 9, "the catalog is three reads, none with bind parameters: every MCP tool call makes them");
+  } finally {
+    await db.close();
+  }
+});
+
+test("dbtruth's timeout bounds a statement whatever timeout the session came with, longer or shorter", async () => {
+  const withSessionTimeout = (ms: number) => {
+    const url = new URL(FIXTURE_URL);
+    url.searchParams.set("options", `-c statement_timeout=${ms}`);
+    return url.toString();
+  };
+  const longer = await connect(withSessionTimeout(30_000), { ...config, statementTimeoutSeconds: 0.3 });
+  try {
+    const began = performance.now();
+    const slow = await longer.query("SELECT pg_sleep(3)");
+    assert.equal(!slow.ok && slow.reason, "timeout", "stopped at dbtruth's 0.3 s, not left to the session's 30 s");
+    assert.ok(performance.now() - began < 2_000, "and stopped then, not when the sleep ended");
+    const session = await longer.query("SELECT current_setting('statement_timeout') AS inside, (SELECT setting FROM pg_settings WHERE name = 'statement_timeout') AS same");
+    assert.equal(session.ok && session.rows[0]?.inside, "300ms");
+  } finally {
+    await longer.close();
+  }
+  const shorter = await connect(withSessionTimeout(100), { ...config, statementTimeoutSeconds: 5 });
+  try {
+    const ran = await shorter.query("SELECT pg_sleep(0.5)");
+    assert.equal(ran.ok, true, "run under dbtruth's 5 s, not cut at the session's 100 ms");
+  } finally {
+    await shorter.close();
+  }
+});
+
+test("a text with a semicolon in it is never sent, so nothing in a statement can end the read-only transaction it runs in", async (t) => {
+  // A copy: were the guard gone, the second text would create its table.
+  const copy = await copyOfFixture(t);
+  const wire = await countingProxy(t, copy.url);
+  const db = await connect(wire.url, config);
+  const watcher = new pg.Client({ connectionString: copy.url });
+  await watcher.connect();
+  try {
+    const sent = wire.roundTrips();
+    for (const text of [
+      "SELECT 1 AS a; SELECT 2 AS b",
+      "SELECT 1; COMMIT; CREATE TABLE smuggled (x int)",
+      "WITH w AS (SELECT 1) SELECT * FROM w; CREATE TABLE smuggled (x int)",
+      "SELECT 1;",
+    ]) {
+      const refused = await db.query(text);
+      assert.equal(refused.ok, false, text);
+      assert.equal(!refused.ok && refused.reason, "refused", text);
+      assert.equal(!refused.ok && refused.message, "dbtruth sends one statement at a time, and this text holds a semicolon", text);
+      const asCatalog = await db.catalog(text);
+      assert.equal(!asCatalog.ok && asCatalog.reason, "refused", `as a catalog read: ${text}`);
+    }
+    assert.equal(wire.roundTrips(), sent, "refused here, before anything is sent");
+    assert.equal((await watcher.query("SELECT to_regclass('smuggled') AS t")).rows[0]?.t, null, "and so nothing was written");
+
+    const own = await db.query("SELECT pg_backend_pid() AS pid");
+    const commented = await db.query("SELECT 1 AS one -- how many");
+    assert.equal(commented.ok && Number(commented.rows[0]?.one), 1, "a statement that ends in a line comment runs");
+    // Looked at before another statement, whose own rollback would end a transaction this one left open.
+    const state = await watcher.query("SELECT state FROM pg_stat_activity WHERE pid = $1", [own.ok ? Number(own.rows[0]?.pid) : NaN]);
+    assert.equal(state.rows[0]?.state, "idle", "and its comment did not comment out the rollback that follows it");
+  } finally {
+    await watcher.end();
+    await db.close();
+  }
+});
+
+test("a relation whose name holds a semicolon is described from the catalog and reported unmeasured, with the reason", async (t) => {
+  const copy = await copyOfFixture(t);
+  await copy.sql('CREATE TABLE "odd;name" (id int PRIMARY KEY, label text)');
+  await copy.sql(`INSERT INTO "odd;name" SELECT g, 'x' FROM generate_series(1, 20) g`);
+  const db = await connect(copy.url, config);
+  try {
+    const catalog = (await readCatalog(db)).filter((r) => r.name === "odd;name" || r.name === "customers");
+    const { tables, skipped } = await extract(db, config, catalog, { samples: true, reveal: new Set() });
+    assert.deepEqual(skipped, []);
+    const odd = tables.find((x) => x.name === "odd;name");
+    assert.deepEqual(odd?.columns.map((c) => c.name), ["id", "label"], "its schema comes from the catalog, by oid");
+    assert.equal(odd?.unmeasured, "dbtruth sends one statement at a time, and this text holds a semicolon");
+    assert.deepEqual(odd?.samples, []);
+    assert.equal(tables.find((x) => x.name === "customers")?.unmeasured, undefined, "the others are measured as ever");
   } finally {
     await db.close();
   }

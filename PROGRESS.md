@@ -6216,3 +6216,261 @@ of each lost point, in the format of section 4.7 of the plan.
   for dbtruth, or one whose owner, repository, workflow file or environment
   is not `FilipKalcic1`, `dbtruth`, `release.yml`, none. The maintainer
   checks it; the next run says which, if it fails again.
+
+### Iteration 7: the second release run, refused by npm: no trusted publisher matches
+- Run 43328666128 (on main at 20cd9e6, run twice by the maintainer): every
+  step up to `npm publish` passed again; the publish was refused, and the new
+  step printed why. GitHub gave the job its OIDC token
+  (`GET .../idtoken/...&audience=npm%3Aregistry.npmjs.org 200`); npm answered
+  the exchange with `POST 404 .../oidc/token/exchange/package/dbtruth` and
+  "OIDC token exchange error - package not found". Nothing was published or
+  tagged: `npm view dbtruth dist-tags` still says `latest` 0.4.2, and
+  `git ls-remote` finds no `v0.4.3`.
+- So the workflow side works and the refusal is npm's: it has no trusted
+  publisher on dbtruth that matches owner `FilipKalcic1`, repository
+  `dbtruth`, workflow `release.yml`, no environment. The fix is on
+  npmjs.com, by the maintainer.
+- Run 43442645265 (2026-11-13, after the maintainer logged in to npmjs.com):
+  the same refusal, `POST 404 .../oidc/token/exchange/package/dbtruth`,
+  "package not found". Logging in alone sets no trusted publisher; the entry
+  under the package's Settings, Trusted Publisher, is still to be added or
+  corrected.
+
+### Iteration 8: the fourth release run: npm trusts the workflow, but not to publish
+- Run 43443359300 (2026-11-13, after the maintainer added the trusted
+  publisher): the exchange succeeded (`POST 201 .../oidc/token/exchange/
+  package/dbtruth`, "Successfully retrieved and set token"), provenance was
+  enabled and signed (sigstore log index 3855927365), and the upload was
+  refused: `E403 ... PUT https://registry.npmjs.org/dbtruth - OIDC permission
+  denied for this action`. Nothing was published: `latest` is 0.4.2, no
+  `v0.4.3` tag.
+- npm 11.21.2's `docs/content/commands/npm-trust.md`: a trusted publisher
+  carries two permissions, `--allow-publish` ("run `npm publish`") and
+  `--allow-stage-publish` ("run `npm stage`"), both false by default, at
+  least one required. The entry on npmjs.com allows staging only; the
+  workflow runs `npm publish`. The fix is to allow publish on that entry.
+
+### Iteration 9: 0.4.3 released (checklist steps 6 to 8)
+- The maintainer allowed `npm publish` on the trusted publisher and re-ran
+  run 43443359300 (attempt 3): published and tagged; the job is red only
+  for its last step, below.
+- Step 7: `npm view dbtruth dist-tags` gives `latest` 0.4.3;
+  `dist.attestations.provenance.predicateType` is
+  `https://slsa.dev/provenance/v1`.
+- Step 6: tag `v0.4.3` on 20cd9e6; GitHub release "dbtruth 0.4.3", notes
+  the CHANGELOG section, published 2026-11-13T14:47:59Z by
+  github-actions[bot].
+- Step 8, here, against the published package in an empty directory, with
+  the snapshot made by `scripts/make-fixture-snapshot.mjs` on the local
+  fixture (Postgres 16): `npx -y dbtruth@0.4.3 --version` 0.4.3; `doctor`
+  every check ok, exit 0; `check` "check fixture: 12 unchanged", exit 0.
+- The workflow's own smoke step failed: ten `npx -y dbtruth@0.4.3 --version`
+  attempts, 15 s apart, each `ETARGET No matching version found`, the
+  registry not yet serving the new version to readers; minutes later it
+  did. A false red, to fix by waiting longer and asking the registry afresh.
+- Step 9 (manual acceptance on Pagila, section 5.5) and step 5 (README
+  fixture output regenerated) need `ANTHROPIC_API_KEY`: not done, as for
+  0.4.2.
+
+## Phase 8: release 0.5.0 (the maintainer's request: "what else should be added")
+- Planned in `BUILD_PLAN.md` as Phase 8, T8.1 to T8.4: the three things the
+  audit after 0.4.2 found and the README warns of "until the next release"
+  (a pooler in transaction mode, composite foreign keys, row level security),
+  and what 0.4.3 left behind (those sentences; the release workflow's smoke
+  step). T8.1 first: the only one that can harm a database dbtruth does not
+  own the use of.
+
+## T8.1 Statements that leave the session as they found it
+### Iteration 1: 100/100
+- Tests first. `test/pooler.test.ts` (new) starts PgBouncer 1.22, installed
+  here from Ubuntu's archive, in transaction mode in front of the fixture. On
+  0.4.3's `safety.ts` both its tests failed as the audit measured: after
+  dbtruth ran and closed, the next client of a one-connection pool read
+  `['on', '7s']` for `default_transaction_read_only` and `statement_timeout`
+  ("dbtruth's settings must not stay on the server connection for the next
+  client"); with two server connections, dbtruth's statement on the one it had
+  not set up read `transaction_read_only` `off`. In `test/safety.test.ts`,
+  "every statement runs in a read-only transaction of its own, with the
+  configured timeout, and nothing is set on the session" failed
+  (`session_default` `on`); "a statement that timed out or failed leaves no
+  transaction open" passed, as it guards the new mechanism, not the old one.
+- Implemented in `src/safety.ts`: no session `SET`; `inTransaction` opens
+  `BEGIN READ ONLY; SET LOCAL statement_timeout = <ms>` in one round trip and
+  always rolls back; the proof and `current_database()` run the same way.
+- A second look found statements started together interleaving on the one
+  connection. Two tests written first, both red on the first version: a
+  failing statement's aborted transaction failed the one beside it (`ok`
+  false), and a statement started while another ran ran outside any
+  transaction (`read_only` `off`). Fixed with `inTurn`, one transaction at a
+  time.
+- The budget: one full run sends 32 statements on the fixture and 606 on
+  `scale` (rolled-back transactions in `pg_stat_database`); two round trips
+  more each would cost about 24 s on `scale` at 20 ms, 61 s at 50 ms. The
+  budget counts the statement alone, so no measurement is left out; the local
+  database time did not move (0.0 s, 0.5 s).
+- `npm run verify` as a non-root user, first run: 2 failures. "SIGTERM during
+  a call ends the server and leaves no session behind": `close()` waited for
+  the turn of a statement waiting on a lock; fixed by ending the connection at
+  once, as before; a probe through the one-connection PgBouncer showed the
+  cut-off call ends with "database connection lost" and the next client reads
+  `off` and `0`. "as a command, the key check asks the API ...": a Node
+  warning that `/root/.ccr/ca-bundle.crt` (`NODE_EXTRA_CA_CERTS`, this
+  machine's) is unreadable to that user added a line; not this change, and
+  run without that variable it passes.
+- Gates: `npm run verify` as a non-root user without `NODE_EXTRA_CA_CERTS`:
+  358 tests, 356 pass, 2 skipped (live), 0 fail; build; package smoke test.
+- `npm run acceptance -- --task T8.1`: 100/100. Every other task unchanged
+  (100, T6.2 0 with no checks); T8.2 to T8.4 0 with no checks yet; overall 83
+  over 24 tasks.
+- Sabotage, each red, then restored byte for byte: the session `SET`s back
+  with a plain `BEGIN` (both pooler tests and the session test); no
+  `ROLLBACK` after a failed statement (four tests, the no-open-transaction
+  one among them); no `ROLLBACK` after a good one (twelve); `inTurn` running
+  work at once (both tests of statements started together).
+- Commit: T8.1: Statements that leave the session as they found it (score 100)
+
+## Efficiency review (the maintainer's request: "is this project coded efficiently")
+### Iteration 1: the review, measured; nothing in `src/` changed
+- Scope: where a run's time, its model tokens and its memory go, how each
+  grows with the schema, and what the repository costs to work in. Measured,
+  not read off the code. No model was called; nothing was published.
+- How: a local Postgres 16; full offline runs with
+  `scripts/make-fixture-snapshot.mjs`; a TCP proxy written for the purpose
+  that delays every chunk 10 ms each way (a 20 ms round trip); the fixture
+  (11 relations), `scale` (300), and two throwaway databases, dropped
+  afterwards: one with 3,000 empty 15-column tables and `big` (2 million
+  rows, 30 columns, 1.16 GB), one with an English ICU collation and `big` at
+  500,000 rows.
+- Found, by what it costs a user:
+  1. Round trips to a distant server, and T8.1 tripled them. A full run on
+     `scale` at a 20 ms round trip: 14.1 s with 0.4.3's `safety.ts` (1,237
+     chunks through the proxy), 39.6 s with T8.1's (3,655 chunks), for the
+     same 607 statements and the same 13.2 s of budgeted database time. A
+     transaction in one message, `BEGIN READ ONLY; SET LOCAL
+     statement_timeout = <ms>; SELECT ...; ROLLBACK`, was tried with psql on
+     Postgres 16: the timeout cancels the SELECT and the session is left
+     untouched. Only the two catalog reads over `$1::oid[]` and a conditional
+     claim carry bind parameters, which that form cannot. Not tried on
+     Postgres 12, where the timer of a message of several statements starts
+     differently.
+  2. A third to a half of what the model is sent says nothing. Every sample
+     row repeats `"column":"[hidden]"` for every hidden column: 270 of 615
+     cells on the fixture, 13,500 of 22,500 on `scale`. Left out of the rows,
+     the payload shrinks 30% on the fixture (20,119 characters) and 48% on
+     `scale` (598,778 characters, about 150,000 tokens of the 200,000 ceiling
+     for 300 tables); as one header and arrays of values, 42% and 55%. The
+     columns already say `visible: false`. `nullRate` at four decimals saves
+     nothing.
+  3. `fitToContext` is quadratic: it serializes the whole extract once per
+     table it drops. On 3,001 relations: 21.9 s to keep 442, of a 24.3 s run
+     whose database time was 2.9 s. Sizing each table once gave the same 442
+     in 26 ms. It also drops from the end of the catalog's order (`t3000`,
+     `t2999`, ...), not the least joined first, as the budget has since 0.4.3.
+  4. The statistics statement is 85% of a large table's profile, and most of
+     that is `count(DISTINCT col::text)` sorting under the database's
+     collation: 840 ms on `big`, 541 ms with `COLLATE "C"`, the same numbers
+     (954 ms and 584 ms under ICU en-US); 119 ms without the distinct counts.
+     The extract's share of the budget is 54 s, so this decides how many large
+     tables a run examines. A column whose own collation is nondeterministic
+     would count differently.
+  5. Each relation's sample is read twice, once for the statistics and once
+     for the value lists and rows: 864 ms and 158 ms on `big`. One statement
+     would halve the statements of a run, and needs the visibility rule in
+     SQL, in the code that keeps hidden values in the database.
+  6. Every MCP tool call reads the whole catalog: 17 ms on 300 relations,
+     548 ms of a 582 ms `describe_table` on 3,001, and 2.7 MB of it.
+  7. CI runs twice for every commit of a pull request (`on: push` and
+     `pull_request`): 16 jobs for 8 cells.
+- Found to be fine: `--version` in 214 ms (Node alone 35 ms; every SDK is
+  imported whatever the command, about 130 ms of it); a cold install of
+  0.4.3 in 2.0 s, 34 MB, 25 packages, 5 runtime dependencies; `check` on
+  `scale` in 309 ms; a full run on 3,001 relations peaks at 204 MB; the
+  suite's 358 tests in about 30 s. Every sample is bounded at 50,000 rows and
+  every statistic is computed in the database.
+- The repository: 3,790 lines of `src/`, 7,063 of tests, and 12,865 of plan,
+  notes, progress and checks (`acceptance/checks.json` is 184 kB of pinned
+  sentences), so a documentation change costs more than the code change it
+  describes.
+- Not done: no fix. Findings 1 to 4 are proposed for T8.x, 1 before
+  `FilipKalcic1/dbtruth#26` is merged.
+
+## T8.1 Statements that leave the session as they found it (continued)
+### Iteration 2: one round trip, and no text with a semicolon; 100/100
+- Why: the efficiency review's first finding, and the maintainer's "fix it,
+  score it 1 to 10, and nothing below 10 is accepted; release it at once, in
+  pieces small enough to review". This piece: the pooler fix with its speed
+  given back, for 0.4.4.
+- Tests first, red on iteration 1's code: connecting cost 7 round trips where
+  4 are needed; `wholeTransactionInOneMessage` did not exist; two statements
+  in one text were answered `ok` (with `rows` of a list: a crash for the
+  caller). The timeout test under a session's own timeout passed already, as
+  it guards the new path. `test/wire.ts` counts round trips by reading the
+  protocol's frontend messages.
+- Implemented: the whole transaction in one message from Postgres 13 where
+  the statement has no bind parameters; the rollback after a statement that
+  failed in a message; `inTransaction` rolls back when its opening failed
+  too; the proof's read also names the database and the version; the
+  catalog's two reads select the relations by condition (`DESCRIBED_OIDS`)
+  where they took `$1::oid[]`.
+- The driver, asked first: four statements in one text answer with a list of
+  four results; a failure rejects with its code, and the next statement gets
+  25P02 until a `ROLLBACK`; a line comment or a semicolon at the end of the
+  statement changes neither.
+- Measured through the proxy that delays every chunk 10 ms each way, full
+  offline runs on `scale`: 14.96 s, 14.45 s, 14.30 s, against 14.32 s,
+  14.39 s, 14.39 s for 0.4.3's `safety.ts` run beside them, and 39.6 s for
+  iteration 1; 1,237 chunks against 1,240 and 3,655. On the fixture: 1.65 s,
+  against 1.44 s for 0.4.3 and 2.75 s for iteration 1 (its statements with
+  bind parameters and its failed ones weigh more among 32). Without a
+  network: 0.192 ms a statement, 0.128 ms in 0.4.3; with a bind parameter
+  0.302 ms, 0.202 ms.
+- The catalog read by the new statements is byte for byte the old one
+  (sha256 of its JSON) on fixture, scale, sampling, polymorph, clean, probe.
+- The review of the diff found what no test asked for: a text of several
+  statements could `COMMIT` and write after it, outside the read-only
+  transaction, where 0.4.3's session setting still refused a plain second
+  statement. No statement dbtruth builds holds a semicolon (every SQL
+  template in `src/` read for one; the two that hold one are queries reported
+  for a person to rerun). Tests first, on a copy of the fixture, red: the two
+  statements were sent. Then the check in `run()`, before anything is sent.
+- `npm run verify` as a non-root user, first run: 1 failure, "every error the
+  CLI can print has a row in the README's troubleshooting table", for the new
+  internal error; two rows added, for it and for the semicolon message.
+- Sabotage, eleven, each red and restored byte for byte; see
+  `acceptance/manual.json`. One stayed green at first: with the rollback on
+  the statement's line, a statement ending in a line comment commented it
+  out, and the test looked at the connection only after another statement,
+  whose own rollback had ended the transaction left open. The test now looks
+  before; the repeated sabotage failed it. The no-open-transaction test now
+  also covers statements with bind parameters, the three-message path on
+  every version, and the pooler test a failed statement before the next
+  client.
+- Not tried here: Postgres 12, where the transaction takes three round
+  trips. This machine has 16; CI's matrix has 12, 14, 16 and 18, and the
+  round-trip test expects three there and one from 13.
+- A last read of the whole diff against `main` found three passages of the
+  README still describing a session set read-only ("What it sends", the row
+  for "refused to set up a read-only session", and "in either mode" for
+  poolers, which a pooler in statement mode is not: tried with PgBouncer
+  1.22, it closes the connection at `BEGIN` and dbtruth stops with that
+  message and no code, as 0.4.3 did). Rewritten; NOTES says so.
+- Measured again on the final `src/`, three runs each on `scale` through
+  the 20 ms proxy: 14.54 s, 14.76 s, 14.51 s, against 14.62 s, 14.53 s,
+  14.59 s for 0.4.3's `safety.ts` and `extract.ts`; 1,232 to 1,233 chunks
+  against 1,236 to 1,238. On the fixture 1.62 s and 75 chunks against 1.56 s
+  and 81.
+- Gates as a non-root user without `NODE_EXTRA_CA_CERTS`: `npm run verify`
+  363 tests, 361 pass, 2 skipped (live), 0 fail; build; package smoke test.
+  `npm run acceptance`: T8.1 100/100 (30 checks), every earlier task 100,
+  T6.2 and T8.2 to T8.4 0 with no checks; overall 83 over 24 tasks.
+- Score by the criteria written for this piece, each 0 or 1: (1) one round
+  trip a statement from Postgres 13, counted on the wire; (2) a run on a
+  distant server no slower than 0.4.3, measured; (3) both pooler failures of
+  0.4.3 gone, on a real PgBouncer; (4) dbtruth's timeout holds whatever the
+  session's, on every supported version (12 by the three-message path; CI);
+  (5) no transaction left open by any failure, with and without bind
+  parameters; (6) no text can leave the read-only transaction; (7) every
+  sabotage red; (8) verify green and T8.1 at 100; (9) README, NOTES and
+  CHANGELOG say what the code does; (10) the whole diff read again after
+  the last change, nothing open. 9 of 10 here; (4) on Postgres 12 is CI's to
+  show.

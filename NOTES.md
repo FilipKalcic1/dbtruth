@@ -3022,6 +3022,130 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   says where checks 4 to 7 are. `check.ts`'s `Row` is `ReportRow`, since
   `safety.ts` has a `Row` that is a database row.
 
+## 0.5.0 (not released yet)
+
+- **The plan for 0.5.0 is Phase 8 of `BUILD_PLAN.md`.** The entry "After 0.4.2
+  was published" announced it as `BUILD_PLAN_0.5.md`. It lives in
+  `BUILD_PLAN.md` instead: `scripts/acceptance.mjs` scores the tasks of that
+  file's table, and `CLAUDE.md` says to work from it. Partitions, which that
+  entry also planned for, are not in it: the audit's finding about them is not
+  in the repository, so there is nothing to plan from yet.
+- **T8.1: nothing is set on the session.** `connect()` no longer runs
+  `SET default_transaction_read_only = on` and `SET statement_timeout`. Each
+  statement runs in a transaction of its own, opened in one round trip as
+  `BEGIN READ ONLY; SET LOCAL statement_timeout = <ms>` and always rolled
+  back, also after a failure; the read-only proof and `current_database()`
+  run the same way.
+  - **Why.** Behind a pooler in transaction mode a session is not a server
+    connection. Measured here with PgBouncer 1.22 in transaction mode in front
+    of the fixture, as 0.4.3 does it: after dbtruth connected, ran one
+    statement and closed, the next client of a one-connection pool read
+    `default_transaction_read_only` `on` and `statement_timeout` `7s` (the
+    audit: an application's INSERT failed with 25006 for about 30 s); with two
+    server connections, a statement of dbtruth's that got the one it had not
+    set up ran with `transaction_read_only` `off`. With the change: the
+    server's defaults for the next client, `on` and `7s` for dbtruth's
+    statement.
+  - **One transaction at a time.** Statements started together on one
+    connection, as two MCP tool calls can, would interleave their `BEGIN`,
+    statement and `ROLLBACK`. Measured: a failing statement's aborted
+    transaction failed the one started beside it, and a statement started
+    while another ran ran after that one's rollback, outside any transaction,
+    with `transaction_read_only` `off`. A turn per transaction (`inTurn` in
+    `safety.ts`) fixes both. `close()` does not wait for a turn: it ends the
+    connection at once, a transaction in flight with it, as before, so a
+    SIGTERM is not held for as long as a statement waits on a lock (a first
+    version waited, and "SIGTERM during a call ends the server and leaves no
+    session behind" failed: not ended within 5 s). Measured through the
+    one-connection PgBouncer: a statement cut off by `close()` ends its call
+    with "database connection lost", and the next client reads
+    `transaction_read_only` `off` and `statement_timeout` `0`.
+  - **One message, where the server allows it.** The first version opened
+    the transaction, ran the statement and rolled back in three round trips.
+    Measured through a proxy that delays every chunk 10 ms each way, a full
+    run on `scale` (300 relations, 606 statements): 14.1 s with 0.4.3's
+    `safety.ts`, 39.6 s with that version. Now the transaction travels whole,
+    `BEGIN READ ONLY; SET LOCAL statement_timeout = <ms>; <statement>;
+    ROLLBACK`, one message and one round trip: 14.3 s to 14.5 s over three
+    runs, against 14.4 s for 0.4.3 run beside them. Without a network a
+    statement costs 0.19 ms, 0.13 ms in 0.4.3. The server skips what follows
+    a failed statement, the rollback with it, so that one is sent after: two
+    round trips for a statement that fails or times out.
+  - **Not before Postgres 13, and not with bind parameters.** Postgres 13
+    times each statement of a message that holds several on its own; before
+    it, the timer the first one started ran on, so under a session whose own
+    timeout is longer than dbtruth's the statement would run past dbtruth's.
+    On 12 the transaction still takes three round trips
+    (`wholeTransactionInOneMessage`), as it does everywhere for a statement
+    with bind parameters, which go by the extended protocol, one statement to
+    a message: a conditional claim's value, and a comparison of two views'
+    definitions. The catalog's two reads over `$1::oid[]` took the list of
+    oids the first read returned; they now select the same relations by the
+    same condition (`DESCRIBED_OIDS`), with no parameter: three round trips
+    for the catalog where the first version took seven, since every MCP tool
+    call reads it. The catalog read this way is byte for byte the one read
+    before, on the fixture, `scale`, `sampling`, `polymorph`, `clean` and a
+    sixth local database. Connecting takes four round trips, seven in 0.4.3:
+    the read that states the transaction mode also names the database and the
+    server's version.
+  - **A text with a semicolon in it is never sent.** Found reviewing the
+    above. Without bind parameters the server runs every statement a text
+    holds. A text of two statements, which no code path builds, got the first
+    one's rows for an answer in 0.4.3 (and crashed on `rows` of a list); and
+    once every statement had a transaction of its own, a `COMMIT` in such a
+    text ended it, and what followed ran outside it and could write, where
+    0.4.3's session setting still refused a plain second statement. A text
+    reaches the server only as a rule is broken (R8), but R1 should not lean
+    on R8. No statement dbtruth builds holds a semicolon, and a text without
+    one is one statement, which cannot end the transaction it runs in: so the
+    text is refused here, before anything is sent ("dbtruth sends one
+    statement at a time, and this text holds a semicolon"), with no lexing to
+    get wrong. The price: a relation or a column with a semicolon in its name
+    is described from the catalog and reported unmeasured.
+  - **The budget counts the round trip that carries the statement**, as it
+    did when a statement had no transaction of its own: the whole message
+    where there is one, the statement's message where there are three. Round
+    trips that only open or end a transaction lengthen a run on a distant
+    server, but never leave a measurement out.
+  - **What a server's log shows.** Each statement now arrives between
+    `BEGIN READ ONLY` and `ROLLBACK`, in one logged line where it travels in
+    one message, and `pg_stat_statements` with `track_utility` counts those
+    two and the `SET LOCAL` once per statement.
+  - **Deliberately not done.** Sending the transaction as one batch of the
+    extended protocol (Parse, Bind and Execute for each of its four
+    statements, one Sync): one round trip on every version and with bind
+    parameters, and the server itself refuses a second statement. It needs
+    about a hundred lines against the driver's internal interface, in the
+    module that guards the database; the semicolon check gives the same
+    guarantee in two. Folding a statement's rollback into the next one's
+    `BEGIN`: that leaves a transaction open between statements. Detecting a
+    pooler: there is no reliable sign, and with nothing set on the session
+    there is nothing to detect it for. Asking the server whether a failed
+    message left a transaction open before rolling back: the rollback of none
+    is a warning in the server's log, and only a text that does not parse
+    leaves none. Rewording "read-only session" in doctor's line and in the
+    warning: every transaction of dbtruth's session is read-only, which is
+    what the words tell a user.
+  - **A pooler in statement mode.** It allows no transaction: PgBouncer 1.22
+    with `pool_mode = statement` closes the connection at `BEGIN`
+    ("transaction blocks not allowed in statement pooling mode"), and dbtruth
+    stops with "refused to set up a read-only session", with no code. 0.4.3
+    stopped there too, at the proof's `BEGIN`. The README's row for that
+    message and its paragraph on poolers say so, and its "What it sends" no
+    longer says that the session is set read-only.
+  - **Tests.** `test/pooler.test.ts` starts `pgbouncer` itself, on a free
+    port, in front of the fixture, and as root with `-u nobody`, since
+    PgBouncer refuses to run as root. Without the binary it skips; under CI it
+    fails, and `ci.yml` installs `pgbouncer` from Ubuntu's archive.
+    `test/safety.test.ts` adds the session left untouched on a direct
+    connection, no transaction left open after a timeout, a value that fails
+    or a missing column (the connection rests `idle`), and the two ways
+    statements can start together. `test/wire.ts` is a proxy that counts round
+    trips by reading the protocol's frontend messages, a simple Query or a
+    Sync, so that how TCP cuts the stream does not change the count; the
+    tests of the semicolon run on a copy of the fixture, where a guard gone
+    would write.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values
