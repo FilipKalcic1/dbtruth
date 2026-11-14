@@ -60,3 +60,23 @@ test("CI installs PgBouncer, so the pooler test runs on every matrix cell instea
   assert.match(JSON.parse(read("package.json")).scripts["test:db"], /test\/pooler\.test\.ts/, "the pooler test is among the database tests");
   assert.match(read("test/pooler.test.ts"), /if \(process\.env\.CI\) assert\.fail\(/, "and fails, rather than skips, under CI without pgbouncer");
 });
+
+test("the release's last step asks the registry afresh on every try, for up to ten minutes", () => {
+  const release = read(".github/workflows/release.yml");
+  const step = /- name: The published package runs, from an empty directory\n([\s\S]*)$/.exec(release)?.[1] ?? "";
+  // npx installs from npm's cache, which holds a package's list of versions for five minutes: a first try made before
+  // the registry served the new version left every later try reading the same list. Release 0.4.3's run failed so.
+  assert.match(step, /npx -y --prefer-online "dbtruth@\$VERSION" --version/, "each try revalidates what the cache holds");
+  assert.doesNotMatch(step.replace(/npx -y --prefer-online /g, ""), /\bnpx\b/, "and no try goes without");
+  const tries = Number(/for attempt in \$\(seq 1 (\d+)\)/.exec(step)?.[1]);
+  const pause = Number(/sleep (\d+)/.exec(step)?.[1]);
+  assert.ok(tries * pause >= 600, `${tries} tries ${pause} s apart wait ${tries * pause} s; the registry can take minutes to serve a new version`);
+});
+
+test("CI runs once for a commit: on a push to main, and on a pull request", () => {
+  const ci = read(".github/workflows/ci.yml");
+  const on = /^on:\n((?:[ \t].*\n|\n)*)/m.exec(ci)?.[1] ?? "";
+  // A bare push ran every commit of a pull request twice: once for the push, once for the pull request.
+  assert.match(on, /^  push:\n    branches: \[main\]\n/m, "a push runs it on main only");
+  assert.match(on, /^  pull_request:\n/m, "a pull request runs it for its commits");
+});

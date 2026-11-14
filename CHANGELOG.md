@@ -3,7 +3,9 @@
 Changes since 0.1.8. What earlier releases changed, and why, is in
 `NOTES.md`.
 
-## 0.5.0 (not released yet)
+## 0.4.4 (2026-11-14)
+
+One fix, released alone: dbtruth is safe behind a pooler in transaction mode.
 
 - A pooler in transaction mode is safe (Supabase's port 6543, a Neon host
   ending in `-pooler`, PgBouncer with `pool_mode = transaction`). dbtruth sets
@@ -15,9 +17,10 @@ Changes since 0.1.8. What earlier releases changed, and why, is in
   Statements started together on one connection, as two MCP tool calls can,
   take turns. From Postgres 13 the transaction travels with its statement in
   one message, so a run on a distant server takes as long as before (300
-  relations at a 20 ms round trip: 14.4 s, as with 0.4.3); on Postgres 12,
-  and for the few statements with bind parameters, it takes three round
-  trips. Connecting takes four round trips, down from seven.
+  relations at a 20 ms round trip: 14.5 to 14.8 s, against 14.5 to 14.6 s
+  with 0.4.3); on Postgres 12, and for the few statements with bind
+  parameters, it takes three round trips. Connecting takes four round trips,
+  down from seven.
 - A statement's text with a semicolon in it is never sent, so no text can end
   the read-only transaction it runs in and write after it. No statement
   dbtruth builds holds one; a table or column with a semicolon in its name is

@@ -125,3 +125,8 @@ test("How it works says that a duplicate between two views is decided by their d
     "How it works says what measures a duplicate between two views or materialized views",
   );
 });
+
+test("the README promises nothing for a release it does not name", () => {
+  // "Until the next release" outlived the release it meant: 0.4.3 shipped with three of them and fixed none.
+  assert.doesNotMatch(read("README.md"), /\bnext\s+release\b/i);
+});

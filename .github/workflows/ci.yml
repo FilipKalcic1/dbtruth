@@ -1,8 +1,10 @@
 # Every Postgres the README promises, on both supported Node majors.
 name: ci
 
+# Once for a commit: a bare push ran every commit of a pull request twice.
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:

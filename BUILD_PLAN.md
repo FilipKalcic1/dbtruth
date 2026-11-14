@@ -1402,13 +1402,14 @@ The agent prepares a checklist in `PROGRESS.md`; a person does these:
 9. Manual acceptance (section 5.5) recorded in NOTES.
 
 
-### Phase 8: release 0.5.0, what the audit after 0.4.2 found
+### Phase 8: releases 0.4.4 and 0.5.0, what the audit after 0.4.2 found
 
 An audit of 0.4.2 on real measurements (`NOTES.md`, "After 0.4.2 was
 published") found three things a user can meet today. The README warns of
 each "until the next release", and 0.4.3 fixed none of them. They come before
 any new feature, T8.1 first: it is the only one that can harm a database whose
-use dbtruth does not own. `NOTES.md` announced this plan as
+use dbtruth does not own. T8.1 and T8.4 are released at once, as 0.4.4, a
+piece small enough to review whole; T8.2 and T8.3 follow as 0.5.0. `NOTES.md` announced this plan as
 `BUILD_PLAN_0.5.md`; it lives here because `scripts/acceptance.mjs` scores the
 tasks of this file.
 
@@ -1590,18 +1591,27 @@ does. NOTES entry; CHANGELOG.
 #### T8.4 What 0.4.3 left behind (P1)
 
 **Build.**
-- README: each sentence that says "until the next release" is replaced when
-  its fix lands; none is left at 0.5.0.
-- `.github/workflows/release.yml`: the last step waits for the registry to
-  serve the new version (`npm view` with `--prefer-online`, retried for up to
-  ten minutes) before it runs `npx`. Release 0.4.3's run failed only there:
-  ten tries 15 s apart all answered `ETARGET`.
+- README: no sentence promises for "the next release". One whose fix has
+  landed goes; one whose fix is planned names the release it is planned for.
+- `.github/workflows/release.yml`: the last step asks the registry afresh on
+  every try (`npx --prefer-online`) and tries for ten minutes. Release
+  0.4.3's run failed only there: ten tries 15 s apart all answered `ETARGET`,
+  from npm's cache, which keeps a package's list of versions for five
+  minutes.
+- `.github/workflows/ci.yml`: once for a commit. A bare `push` ran every
+  commit of a pull request twice; a push now runs CI on `main` only.
+
+**Tests.** `test/readme.test.ts` refuses "next release" in the README.
+`test/ci.test.ts` pins `--prefer-online` on every `npx` of the step, tries
+that add up to ten minutes, and the two triggers. Sabotage: each undone.
 
 **Acceptance.**
-- A1 No "until the next release" in the README of a release.
-- A2 `test/ci.test.ts` pins the wait before the smoke test.
+- A1 No "next release" in the README.
+- A2 Every try of the release's last step asks the registry afresh, and the
+  tries add up to at least ten minutes.
+- A3 CI runs once for a commit: on a push to `main`, and on a pull request.
 
-**Docs.** PROGRESS; CHANGELOG at release.
+**Docs.** NOTES entry; PROGRESS.
 
 ---
 

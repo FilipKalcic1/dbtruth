@@ -6474,3 +6474,39 @@ of each lost point, in the format of section 4.7 of the plan.
   CHANGELOG say what the code does; (10) the whole diff read again after
   the last change, nothing open. 9 of 10 here; (4) on Postgres 12 is CI's to
   show.
+- CI on 9a7b66a, the commit of iteration 2: 16 jobs green. The Postgres 12
+  job ran on 12.22, and its server log shows the statements arriving alone,
+  each in a message of its own, as the three-message path sends them: a
+  timed-out statement is logged as `SELECT count(*) AS n, ...` with no
+  `BEGIN` before it. With that, the tenth criterion: 10 of 10.
+- Merged as `FilipKalcic1/dbtruth#26` (901abad), at the maintainer's word
+  to release it at once.
+
+## T8.4 What 0.4.3 left behind
+### Iteration 1: 100/100
+- Tests first, red: `release.yml`'s last step ran `npx` without
+  `--prefer-online` and for ten tries; `ci.yml` had a bare `push`; the README
+  held "the next release" twice (row level security, composite keys).
+- The cause of release 0.4.3's false red, tried with an empty npm cache: of
+  the three reads `npx` makes of a package's list of versions, from the
+  second run on one is "cache revalidated" and two are "cache hit", with no
+  request; the registry sends `cache-control: public, max-age=300`. With
+  `--prefer-online` all three are "cache revalidated".
+- Implemented: `npx -y --prefer-online` and forty tries 15 s apart;
+  `push: branches: [main]`; the two README sentences name 0.5.0.
+- The step's script, taken from the YAML and run here: exit 0 and `0.4.3`
+  for 0.4.3; for 9.9.9, `ETARGET` on each try and exit 1.
+- Sabotage, four, each red and restored: see `acceptance/manual.json`.
+
+## Release 0.4.4 (T7.1's checklist)
+- Contains T8.1 and T8.4. `package.json` and `package-lock.json` at 0.4.4;
+  CHANGELOG and NOTES sections dated 2026-11-14.
+- Step 3: `npm pack --dry-run` lists 21 files under `dist/`, `skills/`,
+  `README.md`, `LICENSE`, `NOTICE`, `package.json`, nothing from `src/`,
+  `test/` or `context/`.
+- Step 4: the notes the workflow cuts from CHANGELOG.md for 0.4.4 read here:
+  the pooler entry and the semicolon entry.
+- Steps 5 and 9 (the README's fixture output regenerated; manual acceptance
+  on Pagila) need `ANTHROPIC_API_KEY`: not done, as for 0.4.2 and 0.4.3. The
+  README says its pasted output is 0.4.0's.
+- Steps 6 to 8 are the release workflow's, which the maintainer starts.
