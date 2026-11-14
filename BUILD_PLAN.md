@@ -1425,11 +1425,26 @@ connection without them.
 
 **Build.**
 - Nothing is set on the session. Each statement runs in a transaction of its
-  own, opened in one round trip as `BEGIN READ ONLY; SET LOCAL
-  statement_timeout = <ms>` and always ended with `ROLLBACK`, also when the
-  statement failed. A pooler in transaction mode keeps one server connection
-  for a whole transaction, so the statement runs with both settings and
-  neither outlives it.
+  own, opened as `BEGIN READ ONLY; SET LOCAL statement_timeout = <ms>` and
+  always ended with `ROLLBACK`, also when the statement failed. A pooler in
+  transaction mode keeps one server connection for a whole transaction, so
+  the statement runs with both settings and neither outlives it.
+- A transaction must not cost a run on a distant server its speed: a full
+  run on 300 relations at a 20 ms round trip took 14.1 s with 0.4.3 and
+  39.6 s with a transaction of three round trips. The whole transaction
+  travels in one message, `BEGIN READ ONLY; SET LOCAL ...; <statement>;
+  ROLLBACK`, where the server times each statement of a message on its own
+  (Postgres 13 and later) and the statement has no bind parameters; elsewhere
+  it takes three. The server skips what follows a failed statement, so its
+  rollback is sent after. The catalog's reads carry no bind parameters, since
+  every MCP tool call makes them, and connecting reads the database's name and
+  the server's version with the transaction mode.
+- A text with a semicolon in it is never sent. No statement dbtruth builds
+  holds one; without one a text is a single statement, which cannot end the
+  read-only transaction it runs in, so a text built wrongly can read and
+  cannot write. Without the check a text of several statements could `COMMIT`
+  and write after it, which 0.4.3's session setting made harder. A relation
+  whose name holds a semicolon is reported unmeasured.
 - The read-only proof runs the same way: `BEGIN READ ONLY`, the
   `transaction_read_only` read, the trivial write expected to be refused,
   `ROLLBACK`.
@@ -1461,8 +1476,17 @@ connection without them.
 - Statements started together, one of them failing, and a statement started
   while another runs: each runs read-only with the timeout, and only the
   failing one fails.
+- Round trips counted by a proxy that reads the protocol's messages
+  (`test/wire.ts`): a statement, one with bind parameters, one that fails, the
+  catalog, connecting. dbtruth's timeout under a session whose own is longer,
+  and shorter. Texts with a semicolon, a write behind a `COMMIT` among them,
+  on a copy of the fixture: not sent, nothing written. A relation with a
+  semicolon in its name.
 - Sabotage: the session `SET`s back; no rollback after a failed statement; no
-  rollback after a good one; no turn-taking.
+  rollback after a good one; no turn-taking; three round trips whatever the
+  version; one message whatever the version; no rollback after a statement
+  that failed in a message; the rollback on the statement's line; the
+  semicolon check gone; bind parameters back on a catalog read.
 
 **Acceptance.**
 - A1 Through `query()` on a direct connection, the session's default is
@@ -1477,6 +1501,17 @@ connection without them.
 - A5 CI installs `pgbouncer` and runs the pooler test.
 - A6 Statements started together, or one while another runs, each run in a
   read-only transaction of their own, and one that fails fails alone.
+- A7 From Postgres 13 a statement without bind parameters costs one round
+  trip, one that failed two, the catalog three and connecting four; before
+  13, and with bind parameters, a statement costs three.
+- A8 dbtruth's timeout bounds a statement whatever timeout the session came
+  with, longer or shorter.
+- A9 A text with a semicolon in it is refused before anything is sent, a write
+  behind a `COMMIT` included; a relation with a semicolon in its name is
+  reported unmeasured, with the reason.
+- A10 A full run on `scale` at a 20 ms round trip takes no longer than with
+  0.4.3's `safety.ts`, within the spread of repeated runs (manual: the
+  measurement in `PROGRESS.md`).
 
 **Docs.** README: the "Use a direct connection" paragraph says a pooler in
 either mode is fine. The header of `safety.ts`, guarantee 1. NOTES entry;

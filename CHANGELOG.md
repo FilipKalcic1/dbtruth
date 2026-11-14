@@ -13,9 +13,15 @@ Changes since 0.1.8. What earlier releases changed, and why, is in
   for the next client, whose writes then failed with 25006, and dbtruth's own
   statements could run on another server connection without them.
   Statements started together on one connection, as two MCP tool calls can,
-  take turns. Every statement costs two round trips more; the budget counts
-  the statement alone, so a run on a distant server takes longer but measures
-  as much.
+  take turns. From Postgres 13 the transaction travels with its statement in
+  one message, so a run on a distant server takes as long as before (300
+  relations at a 20 ms round trip: 14.4 s, as with 0.4.3); on Postgres 12,
+  and for the few statements with bind parameters, it takes three round
+  trips. Connecting takes four round trips, down from seven.
+- A statement's text with a semicolon in it is never sent, so no text can end
+  the read-only transaction it runs in and write after it. No statement
+  dbtruth builds holds one; a table or column with a semicolon in its name is
+  described from the catalog and reported unmeasured.
 
 ## 0.4.3 (2026-11-12)
 

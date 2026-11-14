@@ -6393,3 +6393,84 @@ of each lost point, in the format of section 4.7 of the plan.
   describes.
 - Not done: no fix. Findings 1 to 4 are proposed for T8.x, 1 before
   `FilipKalcic1/dbtruth#26` is merged.
+
+## T8.1 Statements that leave the session as they found it (continued)
+### Iteration 2: one round trip, and no text with a semicolon; 100/100
+- Why: the efficiency review's first finding, and the maintainer's "fix it,
+  score it 1 to 10, and nothing below 10 is accepted; release it at once, in
+  pieces small enough to review". This piece: the pooler fix with its speed
+  given back, for 0.4.4.
+- Tests first, red on iteration 1's code: connecting cost 7 round trips where
+  4 are needed; `wholeTransactionInOneMessage` did not exist; two statements
+  in one text were answered `ok` (with `rows` of a list: a crash for the
+  caller). The timeout test under a session's own timeout passed already, as
+  it guards the new path. `test/wire.ts` counts round trips by reading the
+  protocol's frontend messages.
+- Implemented: the whole transaction in one message from Postgres 13 where
+  the statement has no bind parameters; the rollback after a statement that
+  failed in a message; `inTransaction` rolls back when its opening failed
+  too; the proof's read also names the database and the version; the
+  catalog's two reads select the relations by condition (`DESCRIBED_OIDS`)
+  where they took `$1::oid[]`.
+- The driver, asked first: four statements in one text answer with a list of
+  four results; a failure rejects with its code, and the next statement gets
+  25P02 until a `ROLLBACK`; a line comment or a semicolon at the end of the
+  statement changes neither.
+- Measured through the proxy that delays every chunk 10 ms each way, full
+  offline runs on `scale`: 14.96 s, 14.45 s, 14.30 s, against 14.32 s,
+  14.39 s, 14.39 s for 0.4.3's `safety.ts` run beside them, and 39.6 s for
+  iteration 1; 1,237 chunks against 1,240 and 3,655. On the fixture: 1.65 s,
+  against 1.44 s for 0.4.3 and 2.75 s for iteration 1 (its statements with
+  bind parameters and its failed ones weigh more among 32). Without a
+  network: 0.192 ms a statement, 0.128 ms in 0.4.3; with a bind parameter
+  0.302 ms, 0.202 ms.
+- The catalog read by the new statements is byte for byte the old one
+  (sha256 of its JSON) on fixture, scale, sampling, polymorph, clean, probe.
+- The review of the diff found what no test asked for: a text of several
+  statements could `COMMIT` and write after it, outside the read-only
+  transaction, where 0.4.3's session setting still refused a plain second
+  statement. No statement dbtruth builds holds a semicolon (every SQL
+  template in `src/` read for one; the two that hold one are queries reported
+  for a person to rerun). Tests first, on a copy of the fixture, red: the two
+  statements were sent. Then the check in `run()`, before anything is sent.
+- `npm run verify` as a non-root user, first run: 1 failure, "every error the
+  CLI can print has a row in the README's troubleshooting table", for the new
+  internal error; two rows added, for it and for the semicolon message.
+- Sabotage, eleven, each red and restored byte for byte; see
+  `acceptance/manual.json`. One stayed green at first: with the rollback on
+  the statement's line, a statement ending in a line comment commented it
+  out, and the test looked at the connection only after another statement,
+  whose own rollback had ended the transaction left open. The test now looks
+  before; the repeated sabotage failed it. The no-open-transaction test now
+  also covers statements with bind parameters, the three-message path on
+  every version, and the pooler test a failed statement before the next
+  client.
+- Not tried here: Postgres 12, where the transaction takes three round
+  trips. This machine has 16; CI's matrix has 12, 14, 16 and 18, and the
+  round-trip test expects three there and one from 13.
+- A last read of the whole diff against `main` found three passages of the
+  README still describing a session set read-only ("What it sends", the row
+  for "refused to set up a read-only session", and "in either mode" for
+  poolers, which a pooler in statement mode is not: tried with PgBouncer
+  1.22, it closes the connection at `BEGIN` and dbtruth stops with that
+  message and no code, as 0.4.3 did). Rewritten; NOTES says so.
+- Measured again on the final `src/`, three runs each on `scale` through
+  the 20 ms proxy: 14.54 s, 14.76 s, 14.51 s, against 14.62 s, 14.53 s,
+  14.59 s for 0.4.3's `safety.ts` and `extract.ts`; 1,232 to 1,233 chunks
+  against 1,236 to 1,238. On the fixture 1.62 s and 75 chunks against 1.56 s
+  and 81.
+- Gates as a non-root user without `NODE_EXTRA_CA_CERTS`: `npm run verify`
+  363 tests, 361 pass, 2 skipped (live), 0 fail; build; package smoke test.
+  `npm run acceptance`: T8.1 100/100 (30 checks), every earlier task 100,
+  T6.2 and T8.2 to T8.4 0 with no checks; overall 83 over 24 tasks.
+- Score by the criteria written for this piece, each 0 or 1: (1) one round
+  trip a statement from Postgres 13, counted on the wire; (2) a run on a
+  distant server no slower than 0.4.3, measured; (3) both pooler failures of
+  0.4.3 gone, on a real PgBouncer; (4) dbtruth's timeout holds whatever the
+  session's, on every supported version (12 by the three-message path; CI);
+  (5) no transaction left open by any failure, with and without bind
+  parameters; (6) no text can leave the read-only transaction; (7) every
+  sabotage red; (8) verify green and T8.1 at 100; (9) README, NOTES and
+  CHANGELOG say what the code does; (10) the whole diff read again after
+  the last change, nothing open. 9 of 10 here; (4) on Postgres 12 is CI's to
+  show.

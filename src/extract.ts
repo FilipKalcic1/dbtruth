@@ -46,9 +46,8 @@ export type Catalog = (CatalogRelation & { size: Size & { leaves?: Size[] } })[]
 /** Every relation dbtruth describes, partitions folded into their parent: the three catalog statements, outside the budget. */
 export async function readCatalog(db: Db): Promise<Catalog> {
   const all = await listRelations(db);
-  const oids = all.map((r) => r.oid);
-  const columnsByOid = await listColumns(db, oids);
-  const keysByOid = await listKeys(db, oids, all, columnsByOid);
+  const columnsByOid = await listColumns(db);
+  const keysByOid = await listKeys(db, all, columnsByOid);
   const partitionsByParent = summarizePartitions(all, keysByOid);
   return all
     .filter((rel) => !rel.isPartition)
@@ -284,15 +283,21 @@ export async function integerKeys(db: Db, cfg: Config, catalog: Catalog): Promis
 
 type ColumnBase = Pick<Column, "name" | "type" | "nullable" | "comment"> & { attnum: number };
 
-async function listColumns(db: Db, oids: number[]): Promise<Map<number, ColumnBase[]>> {
+/**
+ * The relations listRelations lists, as a subquery of their oids. The columns and the keys are read of these, not of a
+ * list of oids handed back to the server: a statement without bind parameters travels with its transaction in one
+ * round trip, and the catalog is read again by every MCP tool call.
+ */
+const DESCRIBED_OIDS = `(SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE ${DESCRIBED_RELATIONS})`;
+
+async function listColumns(db: Db): Promise<Map<number, ColumnBase[]>> {
   const r = await db.catalog(
     `SELECT a.attrelid::bigint AS oid, a.attnum::int AS attnum, a.attname AS name,
             format_type(a.atttypid, a.atttypmod) AS type, NOT a.attnotnull AS nullable,
             col_description(a.attrelid, a.attnum) AS comment
        FROM pg_attribute a
-      WHERE a.attrelid = ANY($1::oid[]) AND a.attnum > 0 AND NOT a.attisdropped
+      WHERE a.attrelid IN ${DESCRIBED_OIDS} AND a.attnum > 0 AND NOT a.attisdropped
       ORDER BY a.attrelid, a.attnum`,
-    [oids],
   );
   if (!r.ok) throw new Error(`could not list columns: ${r.message}`);
   const out = new Map<number, ColumnBase[]>();
@@ -312,15 +317,14 @@ async function listColumns(db: Db, oids: number[]): Promise<Map<number, ColumnBa
 
 type Keys = { primaryKey: string[] | null; foreignKeys: Table["foreignKeys"]; localForeignKeys: number };
 
-async function listKeys(db: Db, oids: number[], relations: Relation[], columnsByOid: Map<number, ColumnBase[]>): Promise<Map<number, Keys>> {
+async function listKeys(db: Db, relations: Relation[], columnsByOid: Map<number, ColumnBase[]>): Promise<Map<number, Keys>> {
   // By name, not in the order the rows lie in, which a key dropped and added again changes: the snapshot's fingerprint reads the keys.
   const r = await db.catalog(
     `SELECT conrelid::bigint AS oid, contype::text AS contype, conkey, confrelid::bigint AS refoid, confkey,
             (conparentid = 0) AS local
        FROM pg_constraint
-      WHERE contype IN ('p', 'f') AND conrelid = ANY($1::oid[])
+      WHERE contype IN ('p', 'f') AND conrelid IN ${DESCRIBED_OIDS}
       ORDER BY conrelid, conname`,
-    [oids],
   );
   if (!r.ok) throw new Error(`could not list constraints: ${r.message}`);
   const nameByOid = new Map(relations.map((rel) => [rel.oid, displayName(rel.schema, rel.table)]));

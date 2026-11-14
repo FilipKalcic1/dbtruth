@@ -107,6 +107,9 @@ test("through PgBouncer in transaction mode, a client after dbtruth finds the se
   assert.equal(db.readOnlyProven, true);
   const ran = await db.query("SELECT count(*) AS n FROM customers");
   assert.equal(ran.ok, true);
+  // A failed statement aborts its transaction: left open, it would stay on the server connection for the next client.
+  const failed = await db.query("SELECT no_such_column FROM customers");
+  assert.equal(failed.ok, false);
   await db.close();
 
   // One server connection: the application gets the one dbtruth used. The audit's application then failed with 25006.
