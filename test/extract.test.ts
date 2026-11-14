@@ -161,6 +161,75 @@ test("fitToContext drops sample rows, then value lists, then tables, until the e
   assert.equal(fewer.extract.tables.length, 2);
 });
 
+/** A table of two columns and no rows shown, joined to the tables named by a foreign key to each. */
+function plain(name: string, references: string[] = []): Table {
+  return {
+    ...table(name, 100, [{ name: "id", type: "integer" }, { name: "ref", type: "integer" }]),
+    foreignKeys: references.map((refTable) => ({ column: "ref", refTable, refColumn: "id" })),
+  };
+}
+
+/** An extract of the tables, and a ceiling of tokens that holds it less the given number of characters. */
+function over(tables: Table[], by: number): { extract: Extract; cfg: typeof config } {
+  const extract: Extract = { database: "d", tables, skipped: ["budget"], schemaTokens: 100, unmatchedReveal: [] };
+  return { extract, cfg: { ...config, charsPerToken: 1, modelMaxInputTokens: JSON.stringify(extract).length - by } };
+}
+
+test("fitToContext drops the least joined tables first, the last in catalog order among equals, and keeps catalog order", () => {
+  // b and c are joined; a, d and e are not, and e is the last of them.
+  const tables = [plain("a"), plain("b", ["c"]), plain("c"), plain("d"), plain("e")];
+  const one = JSON.stringify(plain("a")).length;
+  const { extract, cfg } = over(tables, one * 2);
+  const fit = fitToContext(extract, cfg);
+  assert.deepEqual(fit.extract.skipped, ["budget", "e", "d", "a"], "after what the budget skipped: the unjoined, from the end");
+  assert.deepEqual(fit.extract.tables.map((t) => t.name), ["b", "c"], "the joined pair is what the model still sees");
+  assert.match(fit.reduced!, /3 tables dropped/);
+
+  // One more goes only when it must, and then the one a single key touches before the one two do.
+  const chain = [plain("m", ["n"]), plain("n", ["o"]), plain("o")];
+  // Over by ten characters: one table less is enough, whichever it is.
+  const less = fitToContext(...Object.values(over(chain, 10)) as [Extract, typeof config]);
+  assert.deepEqual(less.extract.tables.map((t) => t.name), ["m", "n"], "n is touched by two keys, m and o by one each: o, the last, goes");
+});
+
+test("what fitToContext keeps fits the ceiling, and the last table it dropped would not have", () => {
+  const tables = Array.from({ length: 40 }, (_, i) => plain(`t${String(i).padStart(2, "0")}_${"x".repeat(i % 7)}`, i % 3 === 0 && i > 0 ? [`t${String(i - 1).padStart(2, "0")}_${"x".repeat((i - 1) % 7)}`] : []));
+  for (const by of [1, 250, 1_000, 3_333, 6_000]) {
+    const { extract, cfg } = over(tables, by);
+    const fit = fitToContext(extract, cfg);
+    const size = (e: Extract) => JSON.stringify(e).length;
+    assert.ok(size(fit.extract) <= cfg.modelMaxInputTokens, `over by ${by}: what is kept is ${size(fit.extract)} characters, the ceiling ${cfg.modelMaxInputTokens}`);
+    const last = fit.extract.skipped.at(-1)!;
+    const kept = new Set(fit.extract.tables.map((t) => t.name));
+    assert.deepEqual(fit.extract.tables, tables.filter((t) => kept.has(t.name)), "these tables have no rows or value lists to lose, so what is kept is as it was");
+    const back: Extract = { ...fit.extract, tables: tables.filter((t) => t.name === last || kept.has(t.name)), skipped: fit.extract.skipped.slice(0, -1) };
+    assert.ok(size(back) > cfg.modelMaxInputTokens, `over by ${by}: with ${last} back it is ${size(back)} characters, so it had to go`);
+    assert.equal(fit.extract.tables.length + fit.extract.skipped.length - 1, tables.length, "every table is kept or named");
+  }
+});
+
+test("fitToContext serializes a few times the extract's size, however many tables it drops", () => {
+  const tables = Array.from({ length: 400 }, (_, i) => plain(`t${i}`));
+  const { extract, cfg } = over(tables, JSON.stringify(tables.slice(0, 300)).length);
+  const whole = JSON.stringify(extract).length;
+  const stringify = JSON.stringify;
+  let serialized = 0;
+  JSON.stringify = ((...args: Parameters<typeof stringify>) => {
+    const text = stringify(...args);
+    serialized += text?.length ?? 0;
+    return text;
+  }) as typeof stringify;
+  let fit: ReturnType<typeof fitToContext>;
+  try {
+    fit = fitToContext(extract, cfg);
+  } finally {
+    JSON.stringify = stringify;
+  }
+  assert.ok(fit.extract.skipped.length > 250, `the case: ${fit.extract.skipped.length - 1} of 400 tables dropped`);
+  // The three tiers serialize the whole three times and each table once more. Once per table dropped would be hundreds.
+  assert.ok(serialized <= whole * 6, `serialized ${serialized} characters to fit an extract of ${whole}: ${(serialized / whole).toFixed(1)} times its size`);
+});
+
 /** estimateRows at 100 pilot pages, with a pilot that counts n rows, or fails when n is undefined; and the percents it was asked for. */
 async function estimate(size: Size & { leaves?: Size[] }, n?: number) {
   const asked: number[] = [];

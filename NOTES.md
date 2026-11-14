@@ -3177,6 +3177,69 @@ Built from `BUILD_PLAN.md`, one task at a time; each task's iterations are in
   - **Deliberately not done.** Fetching the tarball by its URL in place of
     `npx`: the step is there to run the package as a user gets it.
 
+## 0.4.5 (not released yet)
+
+- **What follows 0.4.4 in small pieces.** The efficiency review of
+  2026-11-13 (`PROGRESS.md`) measured where a run's time and tokens go. Its
+  first finding went into 0.4.4 with the pooler fix; the others are T8.5
+  onward, each a pull request small enough to read whole, at the
+  maintainer's word.
+- **T8.5: the fit to the model's input is sized once, and drops the least
+  joined first.** `fitToContext` dropped tables from the end of the catalog's
+  order until the extract fit, serializing all of it again for each one.
+  - **Why.** Measured on 3,001 relations: 21.9 s to keep 442, in a run whose
+    database time was 2.9 s. On an extract of `scale` copied to 3,000 tables,
+    7.3 s; to 12,000, 134 s. Now each table is serialized once, and the size
+    of what is kept is the sum, the commas between and the rest: 97 ms and
+    275 ms, and what is kept is 199,927 and 199,892 tokens of the 200,000
+    allowed, so the cut is as tight as before.
+  - **The order.** 0.4.3 made the time budget cover the most joined relations
+    first and left this ("a `Table` carries no degree"). It carries its
+    foreign keys, which give one: tables go by how many keys each declares or
+    is pointed at by among the tables of the extract, fewest first, and among
+    equals the last in catalog order, as before. What is kept stays in
+    catalog order. A schema with no foreign keys loses what it lost before.
+  - **Deliberately not done.** Choosing by size as well as by keys, to keep
+    more tables: the model is better served by the tables the keys tie
+    together than by more of them. Dropping one table's sample rows at a
+    time, where all go at once: a tier is easier to say in the one line that
+    reports it.
+  - **Tests.** The characters `JSON.stringify` returns during the fit are
+    counted: at most six times the extract's size for 400 tables of which 300
+    go, where the old loop serialized 195 times its size.
+
+- **T8.6: distinct values are counted under `COLLATE "C"`.** The statistics
+  statement's `count(DISTINCT col::text)` is now
+  `count(DISTINCT col::text COLLATE "C")`.
+  - **Why.** Counting distinct values sorts them, and that is most of the
+    statement, which is most of a large table's profile (864 ms of 1,023 ms
+    on a 2-million-row, 30-column table). Under the database's collation the
+    sort compares by a language's rules; under "C", by bytes. Measured on a
+    500,000-row table of 30 columns, the statement inside `extract`, best of
+    three warm runs: 668 ms to 470 ms in a `C.UTF-8` database, 797 ms to
+    508 ms in one whose collation is ICU `en-US`. The 30 distinct counts are
+    the same before and after, in both. The extract's share of the budget is
+    54 s, so a run now reaches about half again as many large tables.
+  - **The same counts.** A deterministic collation calls two values equal
+    only when their bytes are, so the count does not depend on it. A column
+    whose own collation is nondeterministic (one made case-insensitive with
+    ICU, say) is the exception: there `'Active'` and `'active'` are one
+    value. Such a column keeps its collation, so its count is what it was,
+    and agrees with its list of values, which is drawn under it. The catalog
+    says which they are (`pg_collation.collisdeterministic`, Postgres 12 and
+    later). The mark travels from `readCatalog` to the statement inside
+    `extract.ts` and is in nothing either returns to the rest of the code:
+    not in a `Table`, the model's input, the snapshot or its fingerprint.
+  - **Deliberately not done.** The list of values keeps the column's
+    collation everywhere: it orders the list, and a list ordered by bytes
+    would rewrite every `context/tables/` file of a database whose collation
+    is not "C". The other sorts of the statement's kind, in `verify.ts`
+    (`inconsistent_values`, the duplicate's `INTERSECT`), run once per claim,
+    not once per relation, and were not measured as a cost. Reading each
+    relation's sample once where two statements read it: that needs the
+    visibility rule in SQL, in the code that keeps hidden values in the
+    database, for a sixth of the time.
+
 ## Where string matching does appear, and why it is syntax, not meaning
 
 - `typeFamily` in `safety.ts` names the Postgres type families whose values
