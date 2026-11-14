@@ -102,26 +102,28 @@ export async function extract(db: Db, cfg: Config, catalog: Catalog, opts: Extra
 }
 
 /**
- * The catalog with the relations most joined first: by how many foreign keys each declares or is pointed at by, then in
- * catalog order. A budget too small for every relation is spent on the joins the schema declares, and a relation no key
- * touches is the first left out.
+ * The relations most joined first: by how many foreign keys each declares or is pointed at by, then in the order
+ * given, the catalog's. A budget too small for every relation is spent on the joins the schema declares, and a relation
+ * no key touches is the first left out; read from the end, it is the order tables are dropped in to fit the model.
  */
-function mostJoinedFirst(catalog: Catalog): Catalog {
+function mostJoinedFirst<R extends Pick<Table, "name" | "foreignKeys">>(relations: R[]): R[] {
   const joins = new Map<string, number>();
   const count = (name: string) => joins.set(name, (joins.get(name) ?? 0) + 1);
-  for (const r of catalog) {
+  for (const r of relations) {
     for (const k of r.foreignKeys) {
       count(r.name);
       count(k.refTable);
     }
   }
-  const degree = (r: Catalog[number]) => joins.get(r.name) ?? 0;
-  return catalog.map((r, i) => ({ r, i })).sort((x, y) => degree(y.r) - degree(x.r) || x.i - y.i).map(({ r }) => r);
+  const degree = (r: R) => joins.get(r.name) ?? 0;
+  return relations.map((r, i) => ({ r, i })).sort((x, y) => degree(y.r) - degree(x.r) || x.i - y.i).map(({ r }) => r);
 }
 
 /**
- * The extract, reduced until it fits the model's input ceiling: first sample rows go, then value
- * lists, then whole tables from the end of the list into `skipped`. The note says what was dropped.
+ * The extract, reduced until it fits the model's input ceiling: first sample rows go, then value lists, then whole
+ * tables into `skipped`, the least joined first and among equals the last in catalog order, so that what the model
+ * still sees is what the schema's keys tie together. What is kept stays in catalog order. The note says what was
+ * dropped.
  */
 export function fitToContext(extract: Extract, cfg: Config): { extract: Extract; reduced?: string } {
   const tokens = (e: Extract) => Math.ceil(JSON.stringify(e).length / cfg.charsPerToken);
@@ -133,11 +135,28 @@ export function fitToContext(extract: Extract, cfg: Config): { extract: Extract;
   e = { ...e, tables: e.tables.map((t) => ({ ...t, columns: t.columns.map(({ values: _values, ...c }) => c) })) };
   if (tokens(e) <= cfg.modelMaxInputTokens) return { extract: e, reduced: "sample rows and value lists dropped to fit the model's input limit" };
 
-  const kept = [...e.tables];
+  // Each table is sized once. Serializing what is left again for every table dropped took 21.9 s on 3,001 relations.
+  // The JSON of the whole is the rest of the extract, each list's items and the commas between them.
+  const size = (value: unknown) => JSON.stringify(value).length;
+  const between = (items: number) => Math.max(0, items - 1);
+  const rest = size({ ...e, tables: [], skipped: [] });
+  const kept = new Set(e.tables);
   const skipped = [...e.skipped];
-  while (kept.length > 1 && tokens({ ...e, tables: kept, skipped }) > cfg.modelMaxInputTokens) skipped.push(kept.pop()!.name);
+  let tableChars = e.tables.reduce((sum, t) => sum + size(t), 0);
+  let skippedChars = skipped.reduce((sum, name) => sum + size(name), 0);
+  const fits = () => Math.ceil((rest + tableChars + between(kept.size) + skippedChars + between(skipped.length)) / cfg.charsPerToken) <= cfg.modelMaxInputTokens;
+  for (const table of mostJoinedFirst(e.tables).reverse()) {
+    if (kept.size === 1 || fits()) break;
+    kept.delete(table);
+    skipped.push(table.name);
+    tableChars -= size(table);
+    skippedChars += size(table.name);
+  }
   const dropped = skipped.length - e.skipped.length;
-  return { extract: { ...e, tables: kept, skipped }, reduced: `sample rows, value lists and ${dropped} tables dropped to fit the model's input limit` };
+  return {
+    extract: { ...e, tables: e.tables.filter((t) => kept.has(t)), skipped },
+    reduced: `sample rows, value lists and ${dropped} tables dropped to fit the model's input limit`,
+  };
 }
 
 // ---------- catalog queries ----------
